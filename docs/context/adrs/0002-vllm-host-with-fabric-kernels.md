@@ -12,7 +12,7 @@ Fabric needs differentiated inference performance but should not spend the first
 
 Use vLLM as the initial serving host and scheduler. Integrate narrowly scoped Fabric kernels behind exact shape, dtype, model, and hardware dispatch with a standard fallback.
 
-Start with the Qwen3.5-2B single-token GatedDelta recurrence, then evaluate causal-convolution fusion and packed projections. Profile full-model execution before selecting later targets.
+Start with the private target profile's single-token gated-delta recurrence, then evaluate causal-convolution fusion and packed projections. Profile full-model execution before selecting later targets.
 
 Triton is the default implementation language. NCCL is reserved for optional two-A10 tensor-parallel research. Handwritten CUDA/PTX requires profiling evidence that Triton or established libraries cannot meet the target.
 

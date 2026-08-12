@@ -1,29 +1,21 @@
 # Fabric Runtime Design
 
 **Status:** Partially implemented  
-**Implemented:** One exact-shape Triton recurrence and local harness.  
-**Planned:** Model-host integration, additional kernels, target-GPU profiles, serving, and rollout controls.
+**Implemented:** One shape-generic Triton recurrence and configurable synthetic harness.  
+**Planned:** Model-host integration, private-profile dispatch, additional kernels, target-GPU profiles, serving, and rollout controls.
 
-## Qwen3.5-2B execution focus
+## Private target execution focus
 
-The initial runtime target is the text path of the official Qwen3.5-2B checkpoint. The following target dimensions were verified during the prior model analysis from that checkpoint's published configuration; they are external planning inputs, not defaults established by the vendored configuration class or by the kernel alone:
-
-- Text hidden size 2,048 and MLP intermediate size 6,144.
-- 24 text layers: 18 GatedDeltaNet linear-attention layers and 6 full-attention layers.
-- Full attention with 8 query heads, 2 KV heads, and head dimension 256.
-- GatedDelta with 16 key/value heads, key/value dimensions 128, causal-convolution width 4, and FP32 recurrent state.
-- Configured context length 262,144 tokens.
-
-The checkpoint is multimodal, but Fabric's initial optimization and serving scope is text decode only. GatedDelta decode is the first optimization target. Before integration, the runtime must pin and archive the exact checkpoint configuration so these assumptions become reproducible release inputs.
+The initial runtime target is a private, version-pinned text-generation profile. Model identity, checkpoint architecture, parameter scale, and identifying dimensions are intentionally omitted from project documentation. Release tooling must pin the exact private model and tokenizer revisions without exposing them through public metadata. The first optimization target is the single-token gated-delta recurrence.
 
 ## Implemented kernel
 
-`/runtime/kernels/qwen35_gated_delta.py` implements the single-token recurrence for exact dimensions `H=16`, `K=128`, and `V=128`.
+`/runtime/kernels/gated_delta_decode.py` implements a shape-generic single-token recurrence. Batch, head, key, and value dimensions are derived from inputs and validated structurally; the private launch profile is not hard-coded or exported. Model integration will enforce its private profile at a non-public dispatch boundary.
 
 For each batch/head pair it computes:
 
 ```text
-q = normalize(Q) / sqrt(128)
+q = normalize(Q) / sqrt(K)
 k = normalize(K)
 S_decay = exp(g) * S
 memory = k^T * S_decay
@@ -40,7 +32,7 @@ The Triton path normalizes Q/K in FP32. The eager reference preserves model-dtyp
 
 ### Current limitation
 
-The kernel is not connected to Qwen model execution or vLLM. It has no A10/T4 result committed. Its microbenchmark does not establish full-model benefit against optimized FLA/vLLM.
+The kernel is not connected to full target-model execution or vLLM. It has no A10/T4 result committed. Its microbenchmark does not establish full-model benefit against optimized FLA/vLLM.
 
 ## Planned runtime host
 
@@ -52,21 +44,21 @@ vLLM will initially provide:
 - Model loading and memory management.
 - Scheduler and sampling infrastructure.
 
-Fabric will add exact Qwen3.5 dispatch, kernels, benchmark evidence, hardware profiles, and fallback. A custom scheduler is deferred.
+Fabric will add exact private-profile dispatch, kernels, benchmark evidence, hardware profiles, and fallback. A custom scheduler is deferred.
 
 ## Kernel roadmap
 
-### K1: GatedDelta recurrence
+### K1: gated-delta recurrence
 
 Integrate the implemented recurrence behind exact model/shape/dtype/hardware checks and compare against optimized FLA.
 
 ### K2: Causal convolution update
 
-Fuse width-four convolution-state shift, depthwise convolution, SiLU, and Q/K/V output layout for the 6,144 projected channels used by GatedDelta decode.
+Evaluate a generic decode-time causal-convolution state update, activation, and layout fusion. Exact private profile width and channel metadata remain outside public documentation.
 
 ### K3: Packed input projections
 
-Pack QKV, Z, B, and A projections into one 2,048-to-8,224 operation at model load. Reuse existing optimized GEMM machinery first; compute beta and decay parameters in an epilogue where evidence supports it.
+Evaluate generic projection packing and epilogue fusion at model load without publishing private projection names or dimensions. Reuse existing optimized GEMM machinery first; compute beta and decay parameters in an epilogue where evidence supports it.
 
 ### K4: Profile-selected optimization
 

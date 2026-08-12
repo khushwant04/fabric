@@ -1,29 +1,34 @@
 # Security and Identity Design
 
-**Status:** Planned — no identity, token, API-key, or authorization implementation exists.
+**Status:** Implemented for the control plane — the human flow, API-key flow, Fabric JWT contract, and credential classes described here run in [`control-plane/`](../../control-plane/). Inference-token enforcement at a data plane, telemetry ingestion authorization, and cluster-side credential handling remain planned because those components do not exist yet.
 
 ## Trust model
 
-Auth0 authenticates humans. Fabric owns product identities, organizations/workspaces, service principals, API keys, scopes, resource authorization, and token audiences. Data planes trust short-lived Fabric tokens and local deployment configuration, not the availability of central services.
+Auth0 authenticates humans. Fabric owns accounts, account memberships, service principals, API keys, scopes, resource authorization, and token audiences. Data planes trust short-lived Fabric tokens and local deployment configuration, not the availability of central services.
 
 ## Human flow
 
 1. User completes Auth0 Universal Login.
 2. Fabric token service validates issuer, signature, audience, and expiry using Auth0 JWKS.
-3. Fabric maps the Auth0 subject to a local user and membership.
-4. Fabric issues a short-lived `fabric-control` JWT.
-5. Control API authorizes actions from local membership and policy.
+3. Fabric maps the Auth0 subject to a local user and active account memberships.
+4. Zero active memberships returns `account_membership_required` with no token; one may be selected implicitly; multiple require a valid requested account or return `account_selection_required` with no token.
+5. Foreign/inactive account selection is rejected and a successful exchange issues exactly one short-lived account-bound `fabric-control` JWT.
+6. Control API authorizes actions from local membership and policy.
 
 ## API-key flow
 
-1. Authorized user creates a scoped key.
+1. Authorized user creates a scoped key, either for an account-owned service principal or as an explicitly supported human development key.
 2. Fabric generates a high-entropy secret and displays it once.
-3. Fabric stores key ID/prefix, a verifier, owner, organization/workspace, scopes, restrictions, expiry, and revocation state.
-4. SDK sends the key only to the token endpoint.
-5. Token service validates it and returns a short-lived `fabric-inference` JWT.
-6. SDK caches the JWT and uses it for inference.
+3. Fabric stores key ID/prefix, a verifier, authoritative `account_id`, principal owner, scopes, restrictions, expiry, and revocation state.
+4. SDK sends the key only to the token endpoint; any supplied account selector is ignored.
+5. Token service derives account/scopes solely from the stored key record, validates the secret and restrictions, rejects keys whose service principal is inactive, and returns a short-lived audience-bound Fabric JWT.
+6. SDK caches the JWT and uses it for the authorized operation.
 
-A planned key format is `fab_<key-id>_<random-secret>`. Exact cryptographic storage design must be reviewed before implementation; raw secrets are never persisted.
+Keys are account-owned rather than membership-owned: revoking a user's membership does not revoke keys that user created, so key revocation is an explicit step during offboarding.
+
+The credential format is `fab_<class>_<credential-id-hex>_<random-secret>`, where the class is `key`, `enroll`, `agent`, or `telem`. The presented class must match the class being verified, so one credential type can never be used as another. Storage is `HMAC-SHA256(pepper, "<credential-id>:<secret>")` compared in constant time; raw secrets are never persisted, and the pepper must be a real secret outside `local`/`test`.
+
+A key may only carry a control scope that the principal creating it already holds; `inference:invoke` is delegable because no control role holds it.
 
 ## Fabric JWT contract
 
@@ -31,30 +36,52 @@ Required claims:
 
 ```text
 iss, sub, aud, iat, nbf, exp, jti
-org, workspace, scp, typ
+account_id, scp, principal_type
 ```
 
 - `aud` is exactly `fabric-control` or `fabric-inference`.
 - `scp` is server-derived and least privilege.
-- `typ` distinguishes human and service principals.
+- `principal_type` distinguishes human and service principals; `account_id` is derived from Fabric membership or API-key ownership.
 - Token lifetime is short enough to bound revocation staleness.
 - Signing keys have persistent single-writer rotation and overlap longer than token lifetime plus verifier cache skew.
 
 ## Data-plane authorization
 
-Ingress/router validates token signature and claims locally. It derives tenant identity from verified claims and derives deployment identity from the matched route. Client ownership headers are stripped or overwritten. Runtime Services are reachable only from the authorized ingress/router identity through network and workload policy.
+Ingress/router validates token signature and claims locally. It derives account identity from verified claims and deployment identity from the matched route. Client ownership headers are stripped or overwritten. Runtime Services are reachable only from the authorized ingress/router identity through network and workload policy.
 
 ## Control-plane authorization
 
-Every product record is organization/workspace scoped. Cluster registration, placement, and deployment delivery use workload identities distinct from user credentials. The control API has no GPU runtime credential and the runtime has no general control-plane database credential.
+Every tenant product record is account scoped. Cluster registration, placement, and deployment delivery use workload identities distinct from user credentials. The control API has no GPU runtime credential and the runtime has no general control-plane database credential.
 
-## Cluster and VM identity
+## Cluster enrollment and identity
 
-- AKS/k3s operators use least-privilege local RBAC.
-- Cluster agents use outbound mTLS or a similarly authenticated pull mechanism.
+- Managed and BYOI stamps have control-plane-issued IDs bound to authoritative account ownership and operating mode. Managed stamps belong to the Fabric system account; BYOI stamps belong to the enrolling customer account.
+- A short-lived, single-use account-bound enrollment token is exchanged over TLS for a revocable stamp-scoped credential and then discarded. The server ignores caller-supplied account ownership.
+- A scoped HTTPS token is acceptable for testing; rotating mTLS credentials are the production direction.
+- Agent credentials authorize only heartbeat, capabilities, desired-state reads, and status writes for that stamp. A separate collector credential authorizes write-only telemetry. Neither is a user, control, or inference credential.
+- Enrollment, credential issuance/revocation, ownership changes, and privileged stamp operations are audited.
+
+## Agent and operator isolation
+
+- Cluster agents initiate outbound authenticated communication; routine orchestration requires no public Kubernetes API or SSH access.
+- Agent RBAC permits Fabric CR and selected status/capability reads, not arbitrary Secret reads or direct mutation of operator-owned generated workloads.
+- Operator RBAC is limited to its CRDs and generated inference resources.
+- Agent, operator, collector, runtime, and ingress use distinct ServiceAccounts where practical.
 - VM bootstrap uses managed identity for registry/model/secret access.
-- Kubernetes APIs and SSH are not made public for routine orchestration.
 - Benchmark and production identities, networks, and secrets are separate.
+
+## BYOI trust boundary
+
+The customer account owns the BYOI stamp while the customer owns the Kubernetes control plane, nodes, networking, and availability. Fabric owns only installed components and resources permitted by the Helm bundle RBAC. Capability reports use an allowlisted schema and exclude Secrets, arbitrary labels/annotations, node files, prompt/response content, and unnecessary customer metadata.
+
+## Telemetry authentication and privacy
+
+- OTLP/remote-write export uses TLS and a separate write-only telemetry credential in a collector-only Secret/ServiceAccount, including during testing.
+- Central ingestion resolves authoritative account/stamp ownership from the credential, verifies deployment placement, and overwrites untrusted account/stamp telemetry attributes.
+- Prompt/response content is excluded from logs, metrics, and traces by default.
+- Metric labels use bounded control-plane-issued IDs; authorization values and unbounded request IDs are prohibited.
+- Usage events carry identifiers/counts needed for operations or future metering, not credentials or raw content.
+- Telemetry queues are bounded and never create request-path backpressure.
 
 ## Supply chain
 
@@ -63,22 +90,21 @@ Every product record is organization/workspace scoped. Cluster registration, pla
 - Pin model/tokenizer revisions and verify checksums.
 - Scan runtime images and dependencies.
 - Restrict operator-created pods, capabilities, host mounts, and service accounts.
-
-## Data and telemetry
-
-Prompt/response content is excluded from logs and traces by default. Usage events carry identifiers and counts needed for operations/metering, not raw credentials. Audit records cover key lifecycle, login/token failure, deployment changes, cluster registration, and privileged operations.
+- Sign/version the BYOI Helm bundle and component images.
 
 ## Threats requiring tests
 
 - Forged, expired, wrong-issuer, wrong-audience, or over-scoped JWT.
 - API-key enumeration, replay, leakage, and revoked-key exchange.
+- Enrollment-token replay or use after expiry.
+- Stamp credential used for another tenant/stamp or after revocation.
+- Malicious capability/status payload or high-cardinality telemetry.
 - Cross-tenant deployment access.
-- Identity-header spoofing.
-- Direct runtime Service bypass.
-- Malicious image/model reference.
-- Compromised cluster agent/operator credential.
-- Secret leakage in logs, metrics, traces, and benchmark artifacts.
-- Denial through unbounded context, output, concurrency, or streaming connections.
+- Identity-header spoofing and direct runtime Service bypass.
+- Malicious image/model/chart reference.
+- Compromised cluster agent, operator, or collector credential.
+- Secret/content leakage in logs, metrics, traces, and benchmark artifacts.
+- Denial through unbounded context, output, concurrency, streaming, or telemetry queues.
 
 ## Deferred identity work
 

@@ -1,122 +1,161 @@
 # Fabric System Design
 
-**Status:** Planned — no control plane or serving data plane is implemented.
+**Status:** Partly implemented — the control-plane service exists in [`control-plane/`](../../control-plane/). No cluster agent/operator, telemetry pipeline, or serving data plane is implemented.
 
 ## Overview
 
-Fabric is designed as a global control plane coordinating independent regional inference stamps. Each stamp owns its request path and remains operational for existing deployments when central services are unavailable.
+Fabric coordinates independent Kubernetes inference stamps from a central control plane without placing central services on the normal inference path. A stamp may be Fabric-managed or customer-operated BYOI.
 
 ```text
                            CONTROL PLANE
 
  Browser -> Auth0 -> Web/API -> PostgreSQL
                               |
-                 deployment and key intent
+               deployment intent and placement
                               |
-                   cluster registry/placement
-                              |
-              +---------------+----------------+
-              |                                |
-          T4 AKS stamp                    GPU VM/k3s stamp
-          local operator                  local operator
-              |                                |
-              +---------- status/events -------+
-
-                            DATA PLANE
-
- Client -> TLS ingress -> local JWT/resource authorization
-                              |
-                         request queue
-                              |
-                     Fabric-vLLM runtime
-                              |
-                      custom GPU kernels
-                              |
-                     async usage/telemetry
+                    cluster registry/status
+                              ^
+                              | outbound authenticated pull/status
+                              v
++----------------------------------------------------------------+
+|                    KUBERNETES INFERENCE STAMP                  |
+|                                                                |
+| Cluster agent -> FabricModelDeployment -> Fabric operator      |
+|      |                                      |                  |
+|      | capabilities/status                  v                  |
+|      |                              generated K8s resources     |
+|      |                                      |                  |
+| Client -> TLS ingress -> local auth -> runtime -> GPU          |
+|                                      |                         |
+| runtime/operator/K8s/GPU metrics -> local telemetry collector  |
++--------------------------------------+-------------------------+
+                                       |
+                              async OTLP/remote_write
+                                       v
+                         CENTRAL TELEMETRY SERVICE
+                         time series + usage/audit
+                                       |
+                                       v
+                              Dashboard API/charts
 ```
+
+The operator is not the inference cluster by itself. The Kubernetes cluster plus agent, operator, ingress/authorization, runtime/GPU resources, and telemetry collector is a Fabric inference stamp.
 
 ## Control-plane components
 
 ### Web application
 
-Planned Next.js console for login, organization/workspace context, API keys, deployments, endpoints, and operational views. The existing `/v1` starter does not implement these features.
+Planned console for login, account membership, API keys, managed-serverless deployments, BYOI enrollment, endpoints, status, and charts. The existing frontend scaffold implements none of these workflows.
 
 ### Control API
 
-Owns product workflows and enforces Fabric authorization. It writes durable product state and deployment intent but does not serve inference.
+Owns product workflows and authorization. It records deployment intent, stamp enrollment, placement, and aggregated status but does not serve or proxy inference.
 
 ### Token service
 
-Validates Auth0 assertions and Fabric API keys, then signs short-lived control or inference JWTs. It publishes JWKS and supports safe key rotation.
+Validates Auth0 assertions and Fabric API keys, then signs short-lived control or inference JWTs. It publishes JWKS and supports safe rotation.
 
 ### PostgreSQL
 
-Planned durable store for users, organizations, workspaces, service principals, API-key metadata/verifiers, deployments, cluster registrations, and audit references.
+Stores users, accounts/memberships, service principals, account-owned API-key metadata/verifiers, deployment intent, stamp registrations, placements, stamp credential metadata, and audit references.
 
 ### Cluster registry and placement
 
-Tracks independent execution stamps and their reported capabilities: region, environment, orchestrator, GPU product/count/memory/compute capability, runtime versions, health, and capacity. MVP placement may be explicit rather than an automatic global optimizer.
+Tracks authoritative account ownership and bounded reported capabilities: mode, region, orchestrator/version, GPU product/count/memory/compute capability, driver/runtime, allocatable capacity, component versions, health, and last heartbeat. Explicit placement is sufficient for MVP.
 
-## Data-plane components
+### Central telemetry service
 
-### Standard ingress
+Accepts authenticated OTLP or Prometheus remote-write traffic from stamps and durable usage/audit events through separate endpoints. A dashboard API queries central storage; it never scrapes customer clusters directly.
 
-Terminates TLS, enforces request limits, requires a valid inference JWT, and routes only supported inference paths. Fabric does not depend on an AI Gateway product.
+## Inference-stamp components
 
-### Local authorizer/router
+### Cluster agent
 
-Validates issuer, signature, audience, time claims, scope, and resource ownership using local/cached configuration. It strips or overwrites identity headers and routes directly to the selected runtime Service.
+- Exchanges a short-lived account-bound enrollment token for a revocable stamp-scoped credential; caller-supplied account identity is ignored.
+- Maintains outbound authenticated communication.
+- Reports bounded capabilities and heartbeats.
+- Pulls deployments assigned to the stamp.
+- Creates/updates `FabricModelDeployment` resources.
+- Reads CR status and reports observed deployment status.
+- Does not mutate operator-owned generated workloads directly.
+
+### Fabric operator
+
+Watches `FabricModelDeployment` and reconciles workload, Service, configuration, GPU scheduling, network policy, disruption policy, readiness, rollout/rollback, and Kubernetes status. It does not own enrollment, central connectivity, global placement, dashboard ingestion, or inference proxying.
+
+### Standard ingress and local authorizer
+
+Terminates TLS, enforces limits, validates inference JWTs and resource ownership using local/cached data, strips caller identity headers, and routes directly to runtime Services.
 
 ### Fabric-vLLM runtime
 
-Provides OpenAI-compatible streaming, continuous batching, cancellation, limits, model loading, validated custom kernel dispatch, and standard fallback.
+Provides OpenAI-compatible streaming, continuous batching, cancellation, limits, model loading, validated custom-kernel dispatch, and standard fallback.
 
-### Telemetry buffer
+### Local telemetry collector
 
-Emits metrics directly and queues usage/audit events asynchronously. Backpressure or remote telemetry outage cannot stall inference.
+Scrapes runtime, operator, Kubernetes, and GPU metrics and exports them asynchronously. It uses bounded queues and explicit retry/drop behavior. Telemetry delivery never blocks inference.
+
+## Operating modes
+
+### Managed serverless
+
+Fabric operates the Kubernetes stamp, which is owned by a protected internal Fabric system account. Cloud infrastructure provisioning creates or expands clusters/node pools outside the in-cluster operator. Placement selects a managed stamp; its agent pulls intent and its operator reconciles the data plane.
+
+### Bring your own infrastructure
+
+A customer installs a Fabric Helm bundle into an existing GPU Kubernetes cluster; the resulting BYOI stamp is owned by the enrolling customer account. The bundle includes CRDs, operator, cluster agent, RBAC/policies, and optional telemetry configuration. The agent enrolls outbound, the stamp appears in the console, and the customer can target deployments to it without exposing the Kubernetes API publicly.
 
 ## Key flows
 
-### Login and control request
+### Managed deployment
 
-1. Browser completes Auth0 login.
-2. Token service verifies the Auth0 assertion.
-3. Fabric resolves local membership and issues a short-lived control token.
-4. Control API authorizes the requested organization/workspace action.
+1. User creates deployment intent in the console.
+2. Control plane selects a managed stamp.
+3. Stamp agent pulls the assigned generation and writes the local CR.
+4. Operator reconciles the inference resources and updates CR status.
+5. Agent reports readiness/conditions to the control plane.
+6. Collector exports metrics centrally for charts.
+7. Client inference goes directly to the stamp endpoint.
+
+### BYOI enrollment and deployment
+
+1. Authorized user creates a short-lived enrollment token.
+2. Customer installs the Helm bundle with that token.
+3. Agent exchanges it for a stamp-scoped credential; the server derives account ownership from the enrollment record and the agent reports capabilities.
+4. Control plane registers the BYOI stamp and permits explicit placement.
+5. Desired state, reconciliation, status, telemetry, and direct inference follow the managed flow.
 
 ### API-key inference
 
-1. SDK presents a Fabric API key to the token endpoint.
-2. Token service validates the stored verifier and key restrictions.
-3. SDK receives a short-lived inference JWT.
-4. Data-plane ingress and local authorizer validate the JWT without a control-plane call.
-5. Runtime streams the model response.
+1. SDK exchanges a Fabric API key for a short-lived inference JWT.
+2. Data-plane ingress validates the JWT locally without a central call.
+3. Runtime streams the response.
+4. Metrics and usage events are emitted asynchronously.
 
-### Deployment
+## Status, metrics, and usage separation
 
-1. Control API records desired deployment.
-2. Placement selects a registered stamp.
-3. Desired `FabricModelDeployment` reaches the target cluster through an authenticated delivery mechanism.
-4. Local operator reconciles workload, service, policy, storage, and status.
-5. Route becomes active only when readiness converges.
+- **Status path:** cluster heartbeat, capabilities, desired/observed generation, conditions, replicas, endpoint readiness.
+- **Metrics path:** time-series latency, throughput, queue, runtime, operator, Kubernetes, and GPU signals.
+- **Usage/audit path:** durable append-oriented token counts and security/product events; billing-grade semantics are deferred.
+
+These paths may share transport infrastructure later, but they have distinct schemas, retention, and failure behavior.
 
 ## Failure behavior
 
 | Failure | Required behavior |
 |---|---|
-| Auth0 unavailable | Existing inference JWTs remain usable until expiry; new human login fails |
-| Token service unavailable | Existing JWTs remain usable; key exchange/refresh fails |
-| Control API or PostgreSQL unavailable | Existing deployments continue serving; changes pause |
+| Auth0/token/control API unavailable | Existing valid-token inference continues; new login, exchange, or deployment changes may pause |
+| Cluster agent unavailable | Existing workloads and local operator continue; desired-state/status synchronization pauses |
 | Operator unavailable | Existing workloads continue; reconciliation pauses |
-| Telemetry destination unavailable | Local buffering/drop policy applies; inference continues |
+| Central telemetry unavailable | Collector buffers within bounds then applies drop policy; inference continues |
 | Runtime pod fails | Kubernetes recreates it; route remains unavailable until readiness |
-| Single-node k3s VM fails | Entire stamp is unavailable; global routing must use another stamp if configured |
-| Unsupported GPU/kernel | Runtime uses standard fallback or fails readiness according to policy |
+| Single-node k3s host fails | Entire stamp is unavailable |
+| Unsupported GPU/kernel | Standard fallback is selected or readiness fails according to policy |
+
+## Testing-first deployment
+
+Initial dashboard testing may use one agent, one operator, one collector, a single central telemetry gateway, and a single-node Prometheus-compatible store. It does not require HA ingestion, long retention, exactly-once usage, a message bus, global placement automation, or customer alert configuration. TLS, scoped credentials, content exclusion, bounded queues, and inference-path isolation remain mandatory.
 
 ## Data ownership
 
-Control-plane records are authoritative for product state. Kubernetes resources are generated deployment state. Runtime caches and queues are reconstructable operational state. Benchmark artifacts are immutable evidence identified by source/image/model/hardware configuration.
-
-## Multi-region model
-
-A region contains an independent stamp. AKS node pools do not span regions. A future multi-region production system may use Azure Front Door and fleet/GitOps tooling, but the MVP production stamp is T4 AKS; A10 Southeast Asia remains research unless explicitly promoted.
+Control-plane records are authoritative for account ownership, product intent, enrollment, placement, and aggregated status. CRs and generated Kubernetes resources are local desired/observed deployment state. Central telemetry is operational evidence, not deployment authority. Runtime caches and collector queues are reconstructable operational state.

@@ -1,0 +1,104 @@
+{
+  "citable_as_production": false,
+  "claim_scope": "Single-kernel microbenchmark against the local eager reference. Not a full-model, optimized-baseline, or production performance claim.",
+  "config": {
+    "batches": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "benchmark_reps": 500,
+    "benchmark_warmup": 100,
+    "block_v": 32,
+    "correctness_seeds": [
+      0,
+      1,
+      17
+    ],
+    "dtype": "float16",
+    "heads": 8,
+    "key_dim": 64,
+    "shapes_are_synthetic": true,
+    "state_dtype": "float32",
+    "value_dim": 64
+  },
+  "content_hash": "669e303fb7acd515a735ae01256c0a93b57b524e8671fa881088ed35c90e7bc3",
+  "correctness": [
+    {
+      "batch": 1,
+      "output_max_abs": 3.0517578125e-05,
+      "state_max_abs": 0.0006356239318847656
+    },
+    {
+      "batch": 2,
+      "output_max_abs": 6.103515625e-05,
+      "state_max_abs": 0.0009124279022216797
+    },
+    {
+      "batch": 4,
+      "output_max_abs": 6.103515625e-05,
+      "state_max_abs": 0.0005536079406738281
+    },
+    {
+      "batch": 8,
+      "output_max_abs": 6.103515625e-05,
+      "state_max_abs": 0.00074005126953125
+    }
+  ],
+  "created_at": "2026-08-12T11:34:53.230655Z",
+  "environment": {
+    "cuda_available": true,
+    "driver_version": "592.82",
+    "git": {
+      "commit": "c8e12a4505d4c0aa0d3c965a70d69700a38b5335",
+      "dirty": false
+    },
+    "gpu": {
+      "compute_capability": "8.9",
+      "memory_bytes": 8585216000,
+      "name": "NVIDIA GeForce RTX 4070 Laptop GPU"
+    },
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python_version": "3.12.3",
+    "torch_cuda_version": "12.8",
+    "torch_version": "2.8.0+cu128",
+    "triton_version": "3.4.0"
+  },
+  "measurements": [
+    {
+      "batch": 1,
+      "reference_ms": 0.2627659673019061,
+      "speedup": 29.19712202760563,
+      "state_bandwidth_gbps": 29.128012411176236,
+      "triton_ms": 0.008999721515478927
+    },
+    {
+      "batch": 2,
+      "reference_ms": 0.24335554408121712,
+      "speedup": 22.729714855447515,
+      "state_bandwidth_gbps": 48.96916068678399,
+      "triton_ms": 0.010706493487879956
+    },
+    {
+      "batch": 4,
+      "reference_ms": 0.2581706238587697,
+      "speedup": 20.217411744648963,
+      "state_bandwidth_gbps": 82.11427164212941,
+      "triton_ms": 0.012769716871750457
+    },
+    {
+      "batch": 8,
+      "reference_ms": 0.2466411292552948,
+      "speedup": 16.09535878867456,
+      "state_bandwidth_gbps": 136.85638715774652,
+      "triton_ms": 0.015323742234863564
+    }
+  ],
+  "run_id": "51c2df9b750f478db45bdeaeaf599e81",
+  "schema_version": 1,
+  "status": "pass",
+  "suite": "gated-delta-decode-microbench",
+  "target": "rtx4070-dev",
+  "target_role": "development and regression"
+}

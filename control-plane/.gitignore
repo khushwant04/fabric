@@ -1,0 +1,13 @@
+# Local environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Secrets and local state; never commit these
+.env
+*.pem
+*.key
+*.db
+*.sqlite3

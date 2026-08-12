@@ -1,40 +1,39 @@
 # Benchmark and Research Plan
 
 **Status:** Partially implemented  
-**Implemented:** Local exact-shape correctness and microbenchmark harness.  
-**Planned:** Reproducible cross-GPU scripts, full-model comparisons, artifacts, and paper analysis.
+**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema with a target/hardware guard, and a one-command runner producing RTX 4070 development artifacts.  
+**Planned:** Private-profile cross-GPU scripts, optimized FLA/vLLM baselines, full-model comparisons, drift and profiler suites, A10/T4 artifacts, and paper analysis.
 
 ## Existing local evidence
 
-The implemented harness was exercised interactively on an RTX 4070 Laptop GPU (SM89) using Python 3.12, `torch==2.8.0`, and `triton==3.4.0`. The numbers below are an **unverified anecdotal session record**, not release evidence. Raw machine-readable artifacts were not committed. The current harness can generate new eager-reference timing measurements, but it cannot reproduce or verify this historical timing table as the same run; it also cannot reproduce the compiler-resource capture, AST-extracted authoritative comparison, or 128-step drift check without additional scripts. The timing baseline is the local eager fallback, not optimized FLA/vLLM.
+The public harness runs configurable synthetic dimensions and compares the Triton recurrence with its eager reference. Prior private-profile measurements, compiler metadata, dimensions, and drift results are intentionally not published here.
 
-Selected local configuration: `BLOCK_V=32`, 8 warps, 48 registers per thread, no spills, and 1,024 bytes shared memory.
+Committed artifacts exist only for the RTX 4070 development target and are explicitly not production evidence: they are single-kernel microbenchmarks against the local eager reference. No A10 or T4 artifact, optimized-baseline comparison, or full-model result exists, so no production or paper performance claim is made.
 
-| Dtype | Batch | Triton ms | Speedup vs eager |
-|---|---:|---:|---:|
-| FP16 | 1 | 0.0189 | 19.91x |
-| FP16 | 2 | 0.0316 | 9.54x |
-| FP16 | 4 | 0.0657 | 5.97x |
-| FP16 | 8 | 0.1137 | 4.99x |
-| FP16 | 16 | 0.2132 | 4.43x |
-| BF16 | 1 | 0.0207 | 16.77x |
-| BF16 | 2 | 0.0343 | 10.74x |
-| BF16 | 4 | 0.0657 | 6.27x |
-| BF16 | 8 | 0.1117 | 5.22x |
-| BF16 | 16 | 0.2134 | 4.26x |
+## Implemented artifact pipeline
 
-Direct comparison against AST-extracted authoritative recurrence functions passed FP32/FP16/BF16 for batches 1, 2, 4, 8, and 16 across seeds 0, 1, and 17. Representative maximum final-state errors were `1.19e-7` for FP32, approximately `4.57e-4` for FP16, and approximately `3.77e-3` for BF16. In a 128-step recurrence, observed maxima were:
+One command per target produces one auditable artifact:
 
-| Dtype | Output max | State max |
-|---|---:|---:|
-| FP16 | 6.10e-5 | 5.73e-4 |
-| BF16 | 4.88e-4 | 4.33e-3 |
+```bash
+cd runtime
+.venv/bin/python -m harness.runner --target rtx4070-dev
+.venv/bin/python -m harness.runner --target rtx4070-dev --check-only   # correctness only
+.venv/bin/python -m harness.runner --target rtx4070-dev --dry-run      # print, do not write
+```
 
-These observations must be regenerated through the artifact contract before citation in release notes or a paper. No A10 or T4 performance claim exists yet.
+- Targets are `rtx4070-dev`, `a10-research`, and `t4-production`, matching the fixed environment roles below. Only the T4 release gate is marked `citable_as_production`.
+- Writing an artifact **fails closed when the declared target does not match the GPU present**, so a development measurement cannot be filed as production evidence by passing the wrong flag.
+- Every artifact carries `schema_version`, the target and its role, a claim-scope statement, the captured environment, the full configuration, correctness results, measurements, and a `content_hash` over all of it. Reading an artifact verifies the hash and rejects unknown schema versions.
+- Artifacts land in `runtime/artifacts/<target>/<timestamp>-<commit>.json`, and a run from a dirty worktree is marked `-dirty` in the filename so non-reproducible runs are obvious.
+- Dependencies are pinned in [`runtime/pyproject.toml`](../../runtime/pyproject.toml) (`torch==2.8.0`, `triton==3.4.0`) so an artifact names the exact inputs that produced it.
+
+Artifact-contract fields recorded today: source Git SHA and dirty flag, GPU product, memory, and compute capability, driver, CUDA runtime, PyTorch, and Triton versions, dtype and kernel configuration, workload shapes, seeds, warmup, repetitions, and timestamps, plus raw correctness and kernel results.
+
+Still missing from the contract, pending the components that would supply them: signed image digest, model and tokenizer revision, GPU UUID, vLLM and FLA versions, and profiler summaries.
 
 ## Evidence objective
 
-Determine whether Fabric runtime changes improve Qwen3.5-2B under identical quality and latency constraints, and produce reproducible evidence suitable for engineering release decisions and a research paper.
+Determine whether Fabric runtime changes improve the private supported launch model under identical quality and latency constraints, and produce reproducible evidence suitable for engineering release decisions and a research paper.
 
 ## Environments
 
@@ -78,9 +77,9 @@ At minimum compare:
 
 ### Full model
 
-- Prompt lengths: 128, 512, 2K, 8K, and 32K where supported.
-- Output lengths: 32, 128, and 512.
-- Concurrency: 1, 2, 4, 8, 16, 32, and saturation.
+- Prompt profiles: short, medium, long, and stress, with exact private lengths supplied by non-public run configuration.
+- Output profiles: short, medium, and long, with exact private lengths supplied by non-public run configuration.
+- Concurrency profiles: serial, low, medium, high, and saturation, with values recorded only in run artifacts.
 - Warm and cold model conditions reported separately.
 - Streaming and cancellation included.
 
@@ -135,12 +134,13 @@ Every run must record:
 - Benchmark workload, seed, warmup, repetitions, and timestamps.
 - Raw results and profiler summaries.
 
-Planned artifacts:
+Implemented today: one self-describing JSON artifact per run under
+`runtime/artifacts/<target>/`, containing environment, configuration, correctness,
+and kernel results with a content hash over all of them.
+
+Planned additional artifacts, once the full-model and profiler suites exist:
 
 ```text
-environment.json
-correctness.json
-kernel-results.json
 full-model-results.json
 latency.csv
 profiler-summary.json
