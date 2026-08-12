@@ -55,7 +55,7 @@ Agent-aware session caching, multimodal serving, quantization, speculative decod
 | [`runtime/integration/`](runtime/integration/) | Host-facing kernel dispatch, fallback, and telemetry | Implemented; no host calls it yet |
 | [`runtime/benchmarks/`](runtime/benchmarks/) | Correctness and microbenchmark harnesses | Local prototype implemented |
 | [`serving/`](serving/) | vLLM host integration and decode-op substitution | Verified against vLLM's kernel; not registered in a live host |
-| [`scripts/`](scripts/) | A10 research-host bootstrap and measurement runbook | Implemented |
+| [`scripts/`](scripts/) | A10 research-host provisioning (driver, CUDA, envs) and measurement runbook | Implemented |
 | [`v1/`](v1/) | Next.js frontend | Scaffold only |
 | [`utils/transformers/`](utils/transformers/) | Vendored upstream model reference | Not a Fabric runtime integration |
 
