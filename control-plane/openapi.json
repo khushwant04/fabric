@@ -337,6 +337,163 @@
         }
       }
     },
+    "/v1/accounts/{account_id}/service-principals": {
+      "post": {
+        "tags": [
+          "service-principals"
+        ],
+        "summary": "Create an automation identity that can own API keys",
+        "operationId": "create_v1_accounts__account_id__service_principals_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServicePrincipalCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicePrincipalResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "service-principals"
+        ],
+        "summary": "List service principals",
+        "operationId": "list_all_v1_accounts__account_id__service_principals_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ServicePrincipalResponse"
+                  },
+                  "title": "Response List All V1 Accounts  Account Id  Service Principals Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/service-principals/{principal_id}": {
+      "delete": {
+        "tags": [
+          "service-principals"
+        ],
+        "summary": "Disable a service principal and revoke its keys",
+        "operationId": "disable_v1_accounts__account_id__service_principals__principal_id__delete",
+        "parameters": [
+          {
+            "name": "principal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Principal Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicePrincipalResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/{account_id}/api-keys": {
       "post": {
         "tags": [
@@ -1461,7 +1618,8 @@
                 "type": "null"
               }
             ],
-            "title": "Service Principal Id"
+            "title": "Service Principal Id",
+            "description": "Owning automation identity; omit for a human development key"
           }
         },
         "type": "object",
@@ -2185,6 +2343,57 @@
           "release"
         ],
         "title": "RuntimeSpec"
+      },
+      "ServicePrincipalCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ServicePrincipalCreateRequest"
+      },
+      "ServicePrincipalResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "title": "ServicePrincipalResponse"
       },
       "StampCapabilities": {
         "properties": {

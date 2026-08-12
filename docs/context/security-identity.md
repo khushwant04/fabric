@@ -17,12 +17,14 @@ Auth0 authenticates humans. Fabric owns accounts, account memberships, service p
 
 ## API-key flow
 
-1. Authorized user creates a scoped key.
+1. Authorized user creates a scoped key, either for an account-owned service principal or as an explicitly supported human development key.
 2. Fabric generates a high-entropy secret and displays it once.
 3. Fabric stores key ID/prefix, a verifier, authoritative `account_id`, principal owner, scopes, restrictions, expiry, and revocation state.
 4. SDK sends the key only to the token endpoint; any supplied account selector is ignored.
-5. Token service derives account/scopes solely from the stored key record, validates the secret and restrictions, and returns a short-lived audience-bound Fabric JWT.
+5. Token service derives account/scopes solely from the stored key record, validates the secret and restrictions, rejects keys whose service principal is inactive, and returns a short-lived audience-bound Fabric JWT.
 6. SDK caches the JWT and uses it for the authorized operation.
+
+Keys are account-owned rather than membership-owned: revoking a user's membership does not revoke keys that user created, so key revocation is an explicit step during offboarding.
 
 The credential format is `fab_<class>_<credential-id-hex>_<random-secret>`, where the class is `key`, `enroll`, `agent`, or `telem`. The presented class must match the class being verified, so one credential type can never be used as another. Storage is `HMAC-SHA256(pepper, "<credential-id>:<secret>")` compared in constant time; raw secrets are never persisted, and the pepper must be a real secret outside `local`/`test`.
 

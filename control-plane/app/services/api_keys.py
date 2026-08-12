@@ -19,8 +19,9 @@ from app.core.scopes import (
     UnsupportedScopeError,
     validate_requested_key_scopes,
 )
-from app.models import PRINCIPAL_SERVICE, PRINCIPAL_USER, ApiKey, ServicePrincipal
+from app.models import PRINCIPAL_SERVICE, PRINCIPAL_USER, ApiKey
 from app.services.audit import record_audit
+from app.services.service_principals import get_active_service_principal
 
 
 async def create_api_key(
@@ -53,16 +54,9 @@ async def create_api_key(
         ) from exc
 
     if service_principal_id is not None:
-        principal = (
-            await session.execute(
-                select(ServicePrincipal).where(
-                    ServicePrincipal.id == service_principal_id,
-                    ServicePrincipal.account_id == account_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if principal is None:
-            raise NotFound("service_principal_not_found", "Service principal does not exist")
+        principal = await get_active_service_principal(
+            session, account_id=account_id, principal_id=service_principal_id
+        )
         principal_type = PRINCIPAL_SERVICE
         principal_id = principal.id
     else:

@@ -57,6 +57,8 @@ Automated callers use account-owned service principals. API keys belong to a ser
 service_principals(id, account_id, name, status, created_by_user_id, created_at, updated_at)
 ```
 
+A principal is guarded by the `api-keys` scopes because it exists only to own keys. Disabling one revokes every key it owns in the same transaction, and token exchange independently rejects a key whose principal is not active.
+
 ## Core PostgreSQL schema
 
 All IDs are globally unique UUIDs/UUIDv7. Timestamps are UTC. Tenant tables include `account_id`; soft deletion is used where audit or credential history requires it.
@@ -312,6 +314,10 @@ GET  /v1/accounts/{account_id}
 GET  /v1/accounts/{account_id}/members
 POST /v1/accounts/{account_id}/members
 
+POST   /v1/accounts/{account_id}/service-principals
+GET    /v1/accounts/{account_id}/service-principals
+DELETE /v1/accounts/{account_id}/service-principals/{principal_id}
+
 POST   /v1/accounts/{account_id}/api-keys
 GET    /v1/accounts/{account_id}/api-keys
 DELETE /v1/accounts/{account_id}/api-keys/{key_id}
@@ -339,7 +345,7 @@ POST /v1/stamps/{stamp_id}/status
 
 For stamp endpoints, the authenticated credential—not the URL alone—determines authoritative stamp and account identity.
 
-Planned and not implemented: telemetry ingestion, usage publication, outbox delivery workers, and managed-capacity entitlement management.
+Planned and not implemented: telemetry ingestion, usage publication, outbox delivery workers, request idempotency (the `idempotency_keys` table exists but no handler consumes it), machine-credential rotation, and managed-capacity entitlement management.
 
 ## Deferred
 

@@ -83,6 +83,21 @@ class MeResponse(BaseModel):
     memberships: list[MembershipResponse]
 
 
+# --- service principals ---------------------------------------------------
+
+
+class ServicePrincipalCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ServicePrincipalResponse(ORMModel):
+    id: uuid.UUID
+    account_id: uuid.UUID
+    name: str
+    status: str
+    created_at: dt.datetime
+
+
 # --- API keys -------------------------------------------------------------
 
 
@@ -90,7 +105,10 @@ class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     scopes: list[str] = Field(min_length=1)
     expires_in_days: int | None = Field(default=None, ge=1, le=365)
-    service_principal_id: uuid.UUID | None = None
+    service_principal_id: uuid.UUID | None = Field(
+        default=None,
+        description="Owning automation identity; omit for a human development key",
+    )
 
 
 class ApiKeyResponse(ORMModel):

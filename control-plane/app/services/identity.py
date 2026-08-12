@@ -14,7 +14,14 @@ from app.core.credentials import PREFIX_API_KEY, parse_credential, verify_creden
 from app.core.errors import BadRequest, Forbidden, Unauthorized
 from app.core.jwt_service import issue_token
 from app.core.timeutil import is_expired, utc_now
-from app.models import Account, AccountMembership, ApiKey, User
+from app.models import (
+    PRINCIPAL_SERVICE,
+    Account,
+    AccountMembership,
+    ApiKey,
+    ServicePrincipal,
+    User,
+)
 from app.schemas import TokenResponse
 from app.services.audit import record_audit
 
@@ -167,6 +174,22 @@ async def exchange_api_key(
         raise Unauthorized("api_key_revoked", "API key has been revoked")
     if is_expired(record.expires_at, now=now):
         raise Unauthorized("api_key_expired", "API key has expired")
+    if record.principal_type == PRINCIPAL_SERVICE:
+        # Disabling a principal revokes its keys, but check here too so a key
+        # created concurrently with the disable cannot outlive it.
+        active = (
+            await session.execute(
+                select(ServicePrincipal.id).where(
+                    ServicePrincipal.id == record.principal_id,
+                    ServicePrincipal.account_id == record.account_id,
+                    ServicePrincipal.status == "active",
+                )
+            )
+        ).scalar_one_or_none()
+        if active is None:
+            raise Unauthorized(
+                "principal_inactive", "The principal owning this key is not active"
+            )
 
     key_scopes = frozenset(record.scopes or [])
     if audience == scope_defs.AUDIENCE_INFERENCE:

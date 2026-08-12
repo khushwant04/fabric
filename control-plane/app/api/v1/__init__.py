@@ -4,12 +4,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import accounts, api_keys, deployments, stamps, system, tokens
+from app.api.v1 import (
+    accounts,
+    api_keys,
+    deployments,
+    service_principals,
+    stamps,
+    system,
+    tokens,
+)
 
 api_router = APIRouter()
 api_router.include_router(system.router)
 api_router.include_router(tokens.router)
 api_router.include_router(accounts.router)
+api_router.include_router(service_principals.router)
 api_router.include_router(api_keys.router)
 api_router.include_router(deployments.router)
 api_router.include_router(stamps.router)

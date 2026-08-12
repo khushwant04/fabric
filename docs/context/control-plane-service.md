@@ -17,6 +17,7 @@
 | Fabric RS256 JWT signing and JWKS publication | Implemented |
 | API-key create/list/revoke with verifier-only storage | Implemented |
 | API-key scopes bounded by the creating principal's scopes | Implemented |
+| Service principals owning machine API keys | Implemented |
 | Deployment intent with monotonic generations | Implemented |
 | Placement authorization for BYOI and managed stamps | Implemented |
 | Supported-orchestrator gate for managed placement | Implemented |
@@ -28,23 +29,27 @@
 | Row-level security policies | Not implemented; application and composite keys enforce tenancy |
 | Telemetry ingestion endpoints | Not implemented; the collector credential class exists and is verified by tests |
 | Managed-capacity entitlement management API | Not implemented; the flag is set directly in the database |
+| Request idempotency | Not implemented; `idempotency_keys` exists with no handler |
+| Machine-credential rotation | Not implemented; credentials are revocable but not rotatable |
 
 ## Layout
 
 ```text
 control-plane/
 ├── app/
-│   ├── api/v1/        accounts, api_keys, deployments, stamps, tokens, system
+│   ├── api/v1/        accounts, service_principals, api_keys, deployments,
+│   │                  stamps, tokens, system
 │   ├── core/          config, database, security, auth0, jwt_service, credentials,
 │   │                  scopes, platform, errors, timeutil
-│   ├── services/      accounts, api_keys, deployments, identity, stamps, audit
+│   ├── services/      accounts, service_principals, api_keys, deployments,
+│   │                  identity, stamps, audit
 │   ├── models.py      all account-scoped tables
 │   ├── schemas.py     request/response contracts
 │   ├── cli.py         seed-system-account
 │   └── main.py        ASGI app
 ├── migrations/        Alembic history (0001_initial)
-├── tests/             accounts, identity, API keys, deployments, stamps, config,
-│                      system/schema/OpenAPI parity
+├── tests/             accounts, identity, service principals, API keys,
+│                      deployments, stamps, config, system/schema/OpenAPI parity
 └── openapi.json       exported spec for frontend client generation
 ```
 
@@ -124,6 +129,10 @@ GET  /v1/accounts/{account_id}
 GET  /v1/accounts/{account_id}/members
 POST /v1/accounts/{account_id}/members
 
+POST   /v1/accounts/{account_id}/service-principals
+GET    /v1/accounts/{account_id}/service-principals
+DELETE /v1/accounts/{account_id}/service-principals/{principal_id}
+
 POST   /v1/accounts/{account_id}/api-keys
 GET    /v1/accounts/{account_id}/api-keys
 DELETE /v1/accounts/{account_id}/api-keys/{key_id}
@@ -163,7 +172,9 @@ heartbeat, desired-state, and status calls are denied.
 Notable codes: `account_membership_required` (403), `account_selection_required`
 (400), `invalid_account_selection` (403), `account_mismatch` (403),
 `insufficient_scope` (403), `scope_not_delegable` (403), `audience_not_permitted`
-(403), `api_key_revoked` (401), `last_owner_required` (409),
+(403), `api_key_revoked` (401), `principal_inactive` (401),
+`service_principal_not_found` (404), `service_principal_name_taken` (409),
+`last_owner_required` (409),
 `enrollment_token_used` (401), `enrollment_token_revoked` (401),
 `enrollment_token_not_found` (404), `credential_revoked` (401),
 `stamp_mismatch` (403), `stamp_revoked` (403), `managed_capacity_not_enabled`
@@ -192,4 +203,4 @@ then use the returned control token as `Authorization: Bearer <token>`.
 - Managed placement additionally requires a supported Kubernetes distribution (`aks`, `k3s`).
 - Usage events, telemetry ingestion, and outbox delivery workers are defined in the schema but have no publisher yet.
 - Stamp revocation is available through the API; agent and telemetry credential rotation is not.
-- Verified locally: `ruff` clean, 50 tests passing, `alembic upgrade → downgrade → upgrade` reproducing 16 application tables, 32 routes, and `openapi.json` matching the running app (22 paths, 36 schemas) — enforced by a test.
+- Verified locally: `ruff` clean, 55 tests passing, `alembic upgrade → downgrade → upgrade` reproducing 16 application tables, 35 routes, and `openapi.json` matching the running app (24 paths, 38 schemas) — enforced by a test.
