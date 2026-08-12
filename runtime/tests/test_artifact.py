@@ -90,12 +90,12 @@ def test_unknown_schema_version_is_rejected() -> None:
         verify_artifact(artifact)
 
 
-def test_current_schema_is_v2_and_v1_remains_readable() -> None:
+def test_current_schema_is_v3_and_older_versions_remain_readable() -> None:
     """Bumping the schema must not invalidate already-committed evidence."""
-    assert SCHEMA_VERSION == 2
-    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2})
+    assert SCHEMA_VERSION == 3
+    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2, 3})
 
-    # A v1 body carries no drift or tile_sweep keys and must still verify.
+    # A v1 body carries no drift, tile_sweep, or baselines keys and must verify.
     v1_body = {
         "schema_version": 1,
         "suite": "gated-delta-decode-microbench",
@@ -117,13 +117,47 @@ def test_current_schema_is_v2_and_v1_remains_readable() -> None:
     }
     verify_artifact(v1_artifact)
 
+    v2_body = {**v1_body, "schema_version": 2, "drift": None, "tile_sweep": None}
+    v2_artifact = {
+        **v2_body,
+        "run_id": "1" * 32,
+        "created_at": "2026-08-12T12:12:49Z",
+        "content_hash": content_hash(v2_body),
+    }
+    verify_artifact(v2_artifact)
 
-def test_v2_records_drift_and_tile_sweep() -> None:
+
+def test_v3_records_the_baseline_comparison() -> None:
+    baseline = [
+        {
+            "name": "flash-linear-attention:fused_recurrent_gated_delta_rule",
+            "version": "0.5.2",
+            "equivalence": {"within_atol": True, "output_max_abs": 3.05e-05},
+            "timings": [
+                {"batch": 8, "baseline_ms": 0.0264, "fabric_ms": 0.0211,
+                 "fabric_speedup_vs_baseline": 1.25},
+            ],
+        }
+    ]
+    artifact = _artifact(baselines=baseline)
+    assert artifact["schema_version"] == 3
+    assert artifact["baselines"] == baseline
+    verify_artifact(artifact)
+
+
+def test_baseline_results_are_covered_by_the_content_hash() -> None:
+    artifact = _artifact(baselines=[{"name": "fla", "version": "0.5.2", "timings": []}])
+    artifact["baselines"][0]["version"] = "9.9.9"
+    with pytest.raises(UnsupportedArtifactError, match="content_hash"):
+        verify_artifact(artifact)
+
+
+def test_drift_and_tile_sweep_are_recorded() -> None:
     drift = {"steps": 1024, "output_max_abs": 6e-05, "within_single_step_atol": True}
     sweep = [{"block_v": 16, "kernel": {"registers": 40}, "timings": []}]
     artifact = _artifact(drift=drift, tile_sweep=sweep)
 
-    assert artifact["schema_version"] == 2
+    assert artifact["schema_version"] == SCHEMA_VERSION
     assert artifact["drift"] == drift
     assert artifact["tile_sweep"] == sweep
     verify_artifact(artifact)

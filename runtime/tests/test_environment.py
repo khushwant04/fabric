@@ -19,6 +19,8 @@ def test_capture_reports_versions_and_repository_state() -> None:
         "cuda_available",
         "gpu",
         "driver_version",
+        "fla_version",
+        "vllm_version",
         "git",
     }
     assert captured["python_version"].startswith("3.")
@@ -45,6 +47,12 @@ def test_capture_never_raises_without_a_gpu(monkeypatch) -> None:
 
 def test_missing_tool_returns_none() -> None:
     assert environment._command_output(["fabric-tool-that-does-not-exist"]) is None
+
+
+def test_optional_version_reports_absence_without_raising() -> None:
+    assert environment._optional_version("fabric_library_that_does_not_exist") is None
+    # A module that is certainly importable reports something.
+    assert environment._optional_version("json") is not None
 
 
 def test_config_records_every_input_needed_to_reproduce() -> None:

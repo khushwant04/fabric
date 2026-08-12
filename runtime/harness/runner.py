@@ -66,6 +66,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Value tiles to sweep with compiled-kernel metadata (empty disables)",
     )
     parser.add_argument(
+        "--no-baselines",
+        dest="baselines",
+        action="store_false",
+        help="Skip the optimized-library baseline comparison",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="Print the artifact instead of writing it"
     )
     parser.add_argument("--artifact-root", type=pathlib.Path, default=DEFAULT_ARTIFACT_ROOT)
@@ -88,6 +94,7 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
         "drift_steps": args.drift_steps,
         "drift_batch": args.batches[0],
         "sweep_block_v": list(args.sweep_block_v),
+        "baselines_requested": bool(args.baselines),
         "shapes_are_synthetic": True,
     }
 
@@ -141,6 +148,34 @@ def fastest_tile_per_batch(tile_sweep: list[dict[str, Any]]) -> dict[str, int]:
     return {batch: block_v for batch, (_ms, block_v) in best.items()}
 
 
+def run_baselines(args: argparse.Namespace, dtype: Any) -> list[dict[str, Any]] | None:
+    """Compare the Fabric kernel against pinned optimized libraries.
+
+    Returns ``None`` when no baseline library is installed, which is recorded on
+    the artifact so a reader can tell "not compared" from "compared and equal".
+    """
+    from benchmarks import baselines
+    from benchmarks.gated_delta_decode_bench import make_inputs, tolerances
+
+    if not baselines.is_available():
+        return None
+
+    atol, _rtol = tolerances(dtype)
+    inputs = make_inputs(args.batches[0], args.heads, args.key_dim, args.value_dim, dtype, seed=3)
+    entry = {
+        "name": baselines.FLA_BASELINE,
+        "version": baselines.fla_version(),
+        "equivalence": baselines.equivalence(*inputs, atol=atol),
+        "timings": [
+            baselines.benchmark_against_fabric(
+                batch, args.heads, args.key_dim, args.value_dim, dtype, args.block_v
+            )
+            for batch in args.batches
+        ],
+    }
+    return [entry]
+
+
 def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
     """Execute the suite phases and assemble the artifact."""
     import torch
@@ -159,6 +194,7 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
     measurements: list[dict[str, Any]] = []
     tile_sweep: list[dict[str, Any]] | None = None
     drift: dict[str, Any] | None = None
+    baselines: list[dict[str, Any]] | None = None
     status = "pass"
 
     try:
@@ -183,6 +219,9 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
                 steps=args.drift_steps,
             )
 
+        if args.baselines and not args.check_only:
+            baselines = run_baselines(args, dtype)
+
         if not args.check_only:
             for batch in args.batches:
                 measurements.append(
@@ -204,6 +243,7 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
         measurements=measurements,
         drift=drift,
         tile_sweep=tile_sweep,
+        baselines=baselines,
     )
 
 
@@ -256,6 +296,23 @@ def main(argv: list[str] | None = None) -> int:
             f"final_state_max_rel={drift['final_state_max_rel']:.3%} "
             f"within_single_step_atol={drift['within_single_step_atol']}"
         )
+
+    for entry in artifact["baselines"] or []:
+        equivalence = entry["equivalence"]
+        print(
+            f"baseline {entry['name']}=={entry['version']} "
+            f"equivalent={equivalence['within_atol']} "
+            f"out_vs_ref={equivalence['output_max_abs']:.3g} "
+            f"out_vs_fabric={equivalence['output_max_abs_vs_fabric']:.3g}"
+        )
+        for timing in entry["timings"]:
+            print(
+                f"  batch={timing['batch']:<3} baseline_ms={timing['baseline_ms']:.4f} "
+                f"fabric_ms={timing['fabric_ms']:.4f} "
+                f"fabric_speedup={timing['fabric_speedup_vs_baseline']:.2f}x"
+            )
+    if artifact["config"]["baselines_requested"] and not artifact["baselines"]:
+        print("baseline: no optimized library installed; comparison not run")
     return 0 if artifact["status"] == "pass" else 1
 
 

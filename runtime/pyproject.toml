@@ -21,6 +21,12 @@ dev = [
   "pytest==8.3.4",
   "ruff==0.8.4",
 ]
+# Optimized library baseline. Pinned because an artifact must name the exact
+# baseline it was measured against; the suite runs without it and records the
+# comparison as absent.
+baselines = [
+  "flash-linear-attention==0.5.2",
+]
 
 [project.scripts]
 fabric-bench = "harness.runner:main"

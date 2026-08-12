@@ -20,11 +20,12 @@ import pathlib
 import uuid
 from typing import Any
 
-#: Current artifact schema. v2 adds long-generation drift, compiled-kernel
-#: metadata, and the value-tile sweep. v1 artifacts stay readable so previously
-#: committed evidence remains verifiable.
-SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+#: Current artifact schema. v2 added long-generation drift, compiled-kernel
+#: metadata, and the value-tile sweep; v3 adds optimized-library baselines.
+#: Older versions stay readable so previously committed evidence remains
+#: verifiable.
+SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 
 #: Claim scope recorded on every artifact produced by the microbenchmark suite.
 MICROBENCH_CLAIM_SCOPE = (
@@ -114,6 +115,7 @@ def build_artifact(
     measurements: list[dict[str, Any]],
     drift: dict[str, Any] | None = None,
     tile_sweep: list[dict[str, Any]] | None = None,
+    baselines: list[dict[str, Any]] | None = None,
     claim_scope: str = MICROBENCH_CLAIM_SCOPE,
     run_id: str | None = None,
     created_at: dt.datetime | None = None,
@@ -134,6 +136,7 @@ def build_artifact(
         # ``None`` distinguishes "not run" from "ran and found nothing".
         "drift": drift,
         "tile_sweep": tile_sweep,
+        "baselines": baselines,
     }
     stamp = (created_at or dt.datetime.now(tz=dt.UTC)).astimezone(dt.UTC)
     return {

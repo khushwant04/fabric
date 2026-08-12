@@ -54,22 +54,34 @@ The Triton path intentionally normalizes Q/K in FP32. The eager fallback normali
 `/runtime/harness` adds the reproducibility layer around it: pinned dependencies in
 `runtime/pyproject.toml` (`torch==2.8.0`, `triton==3.4.0`), environment capture
 (versions, GPU identity, driver, commit, dirty flag), a versioned artifact schema
-(v2, with v1 still readable), and a one-command runner (`python -m harness.runner
---target <name>`). Declaring a target whose GPU is not present fails closed, so an
-RTX measurement cannot be recorded as A10 or T4 evidence. 26 harness tests run
-without a GPU.
+(v3, with v1 and v2 still readable), and a one-command runner (`python -m
+harness.runner --target <name>`). Declaring a target whose GPU is not present fails
+closed, so an RTX measurement cannot be recorded as A10 or T4 evidence. 35 harness
+tests run without a GPU.
 
-A run records four phases in one artifact: single-step correctness, long-generation
+A run records five phases in one artifact: single-step correctness, long-generation
 drift over a configurable number of decode steps (default 1024), a value-tile sweep
-carrying compiled-kernel registers/spills/shared-memory/warps, and the eager-versus-
-Triton microbenchmark.
+carrying compiled-kernel registers/spills/shared-memory/warps, the eager-versus-
+Triton microbenchmark, and a comparison against a pinned optimized baseline
+(`flash-linear-attention==0.5.2`, `fused_recurrent_gated_delta_rule`) whose
+equivalence to the eager reference is verified on every run. The baseline is an
+optional extra; without it the artifact records `baselines: null`.
 
-What the committed RTX 4070 artifacts show: drift stays bounded (worst output error
-~1.2e-4 over 1024 FP16 steps against a 2e-3 single-step tolerance, final state
-divergence ~0.06% relative), the kernel compiles with no spills at every tile, and
-the fastest value tile depends on batch — `block_v=8` degrades at batch 8 while 16
-and 32 differ within run-to-run noise at small batches, which is not enough evidence
-to change the default of 32.
+What the committed RTX 4070 artifacts show:
+
+- Against the optimized FLA baseline the kernel is at parity for batches 1–4
+  (ratios 0.92–1.08 across four runs, inside run-to-run variance) and reproducibly
+  faster at batch 8 (1.16–1.25x), with numerically identical output. The much larger
+  speedups against the eager reference are not a performance claim, because the
+  reference is not a tuned implementation. FLA also allocates a new state tensor
+  where the Fabric kernel updates state in place, an asymmetry that favors Fabric
+  and is not corrected for.
+- Drift stays bounded (worst output error ~1.2e-4 over 1024 FP16 steps against a
+  2e-3 single-step tolerance, final state divergence ~0.06% relative).
+- The kernel compiles with no spills at every tile.
+- The fastest value tile depends on batch: `block_v=8` degrades at batch 8 while 16
+  and 32 differ within run-to-run noise at small batches, which is not enough
+  evidence to change the default of 32.
 
 Committed artifacts exist only for the `rtx4070-dev` target and are labeled
 `citable_as_production: false` with an explicit claim scope. The RTX 4070 is
