@@ -32,7 +32,7 @@ baselines = [
 fabric-bench = "harness.runner:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["harness", "kernels", "benchmarks"]
+packages = ["harness", "kernels", "benchmarks", "integration"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

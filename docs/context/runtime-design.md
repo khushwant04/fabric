@@ -1,8 +1,8 @@
 # Fabric Runtime Design
 
 **Status:** Partially implemented  
-**Implemented:** One shape-generic Triton recurrence and configurable synthetic harness.  
-**Planned:** Model-host integration, private-profile dispatch, additional kernels, target-GPU profiles, serving, and rollout controls.
+**Implemented:** One shape-generic Triton recurrence, a configurable synthetic harness with a versioned artifact pipeline, and the host-facing kernel dispatch/fallback layer.  
+**Planned:** vLLM host integration, private-profile dispatch, additional kernels, target-GPU profiles, serving, and rollout controls.
 
 ## Private target execution focus
 
@@ -32,7 +32,39 @@ The Triton path normalizes Q/K in FP32. The eager reference preserves model-dtyp
 
 ### Current limitation
 
-The kernel is not connected to full target-model execution or vLLM. It has no A10/T4 result committed. Its microbenchmark does not establish full-model benefit against optimized FLA/vLLM.
+The kernel is not connected to full target-model execution or vLLM. It has no A10/T4 result committed. Its microbenchmark does not establish full-model benefit against optimized FLA/vLLM; at the kernel level on the development GPU it is at parity with FLA for small batches and modestly faster at batch 8.
+
+## Implemented dispatch and fallback
+
+`/runtime/integration/dispatch.py` is the decision point a model host calls per
+step. It implements the three kernel modes that the control plane's deployment
+spec already carries in `runtime.kernel_mode`:
+
+| Mode | Behaviour | Used by |
+|---|---|---|
+| `auto` | Prefer the Fabric kernel; fall back to the eager reference on unsupported input or any kernel failure | Production deployments |
+| `fabric` | Require the Fabric kernel and raise `KernelUnavailableError` if it cannot run | Benchmarks and release gates |
+| `standard` | Always use the eager reference | Taking a suspect kernel out of service without redeploying |
+
+Design points that follow from the safety requirements below:
+
+- A kernel failure never fails a request in `auto` mode. Exceptions from the
+  launch are caught, the call is served eagerly, and the reason is retained.
+- `fabric` mode deliberately refuses to degrade. A silent fallback during a
+  benchmark would otherwise be measured and reported as Fabric performance.
+- Both paths update the recurrent state in place, so falling back mid-generation
+  leaves the recurrence valid.
+- Fallbacks are counted per deployment and exposed through
+  `GatedDeltaDecoder.telemetry()` as `fabric_calls`, `eager_calls`,
+  `fallback_calls`, `fabric_fraction`, and `last_fallback_reason`. A deployment
+  that has quietly stopped running the kernel it was measured with is an
+  operational event, so it has to be observable.
+- The eager reference accepts CPU tensors, so it is a genuine fallback rather than
+  a second CUDA-only path. Only the Triton wrapper requires a GPU.
+
+Not yet implemented: the private-profile dispatch boundary (exact model, shape,
+and revision checks), hardware-profile selection of tile and warp configuration,
+and the vLLM host that would call this layer.
 
 ## Planned runtime host
 
@@ -84,11 +116,11 @@ Triton and established vLLM/CUTLASS kernels are preferred. Handwritten CUDA or P
 
 ## Runtime safety
 
-- Exact immutable model and tokenizer revisions.
-- Immutable runtime image digest.
-- Kernel mode `auto`, `fabric`, or `standard`.
-- Standard fallback for unsupported shapes, dtypes, and hardware.
-- Readiness blocked on model and kernel initialization.
-- Graceful drain for streaming requests.
-- Explicit queue, context, output, concurrency, and memory limits.
-- Canary and rollback before production promotion.
+- Exact immutable model and tokenizer revisions. *(Planned.)*
+- Immutable runtime image digest. *(Planned.)*
+- Kernel mode `auto`, `fabric`, or `standard`. *(Implemented in `integration/dispatch.py`.)*
+- Standard fallback for unsupported shapes, dtypes, and hardware. *(Implemented, including containment of unexpected kernel failures.)*
+- Readiness blocked on model and kernel initialization. *(Planned; needs the host.)*
+- Graceful drain for streaming requests. *(Planned; needs the host.)*
+- Explicit queue, context, output, concurrency, and memory limits. *(Planned; needs the host.)*
+- Canary and rollback before production promotion. *(Planned.)*

@@ -48,6 +48,13 @@ Exit requirement: one command per target produces auditable artifacts from immut
 - Validate A10 FP16/BF16 and T4 FP16.
 - Select hardware-specific profiles only from measurements.
 
+Implemented so far: the dispatch and fallback layer itself
+(`runtime/integration/dispatch.py`) with the `auto`/`fabric`/`standard` modes from
+the deployment spec, containment of unexpected kernel failures, and per-deployment
+fallback telemetry. Still open: the model host that calls it, the private-profile
+dispatch boundary, causal-convolution fusion, packed projections, and A10/T4
+validation.
+
 Exit requirement: correctness and full-model evidence show which kernels merit promotion.
 
 ## Phase 3: Internal serving runtime — weeks 3–4

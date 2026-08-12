@@ -29,7 +29,8 @@ See [Control-Plane Service](control-plane-service.md) for configuration, command
 
 The public wrapper currently requires:
 
-- CUDA tensors.
+- CUDA tensors for the Triton path. The eager reference accepts CPU tensors so it
+  can serve as a genuine fallback.
 - Contiguous Q, K, and V tensors with compatible batch/head dimensions.
 - Contiguous `g` and `beta` tensors matching the batch/head dimensions; the wrapper does not currently enforce their dtype, while the benchmark harness supplies FP32.
 - An FP32 recurrent state matching the input-derived key/value dimensions.
@@ -38,6 +39,21 @@ The public wrapper currently requires:
 The kernel fuses Q/K normalization, query scaling, state decay, memory prediction, beta correction, rank-one in-place state update, and output reduction. The wrapper validates dimensional relationships, devices, dtypes, contiguity, and unsafe memory overlap. It supports value tiles of 8, 16, or 32 and currently defaults to 32.
 
 The Triton path intentionally normalizes Q/K in FP32. The eager fallback normalizes in model dtype before converting recurrence arithmetic to FP32. The code documents this as tolerance-qualified equivalence rather than bitwise equivalence.
+
+### Runtime dispatch
+
+`/runtime/integration/dispatch.py` implements the host-facing decision point with
+the same three modes the control plane's deployment spec carries: `auto` prefers
+the Fabric kernel and falls back to the eager reference on unsupported input or
+any kernel failure, `fabric` raises `KernelUnavailableError` rather than degrade
+silently so a benchmark cannot attribute eager performance to the kernel, and
+`standard` always uses the reference. Both paths update state in place, so a
+mid-generation fallback keeps the recurrence valid. Fallbacks are counted per
+deployment and exposed through `GatedDeltaDecoder.telemetry()`.
+
+Not implemented: the private-profile dispatch boundary, hardware-profile tile and
+warp selection, and any model host that calls this layer. 61 runtime tests pass,
+with the Triton-path tests skipped when no GPU is present.
 
 ### Benchmark prototype
 
