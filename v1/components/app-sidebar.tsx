@@ -2,56 +2,58 @@
 
 import * as React from "react"
 
-import { NavMain } from "@/components/nav-main"
+import { NavMain, type NavItem } from "@/components/nav-main"
 import {
   Sidebar,
   SidebarContent,
-  SidebarHeader,
+  SidebarFooter,
+  SidebarGroup,
 } from "@/components/ui/sidebar"
 import {
   BookOpenIcon,
   BotIcon,
+  LayoutDashboardIcon,
   Settings2Icon,
   TerminalSquareIcon,
 } from "lucide-react"
 
-// This is sample data.
-const data = {
-  navMain: [
-    {
-      title: "Playground",
-      url: "#",
-      icon: <TerminalSquareIcon />,
-    },
-    {
-      title: "Models",
-      url: "#",
-      icon: <BotIcon />,
-    },
-    {
-      title: "Documentation",
-      url: "#",
-      icon: <BookOpenIcon />,
-    },
-    {
-      title: "Settings",
-      url: "#",
-      icon: <Settings2Icon />,
-    },
-  ],
-}
+const navigation: NavItem[] = [
+  {
+    title: "Dashboard",
+    url: "/dashboard",
+    icon: <LayoutDashboardIcon />,
+  },
+  {
+    title: "Playground",
+    url: "#",
+    icon: <TerminalSquareIcon />,
+  },
+  {
+    title: "Models",
+    url: "#",
+    icon: <BotIcon />,
+  },
+  {
+    title: "Documentation",
+    url: "#",
+    icon: <BookOpenIcon />,
+  },
+  {
+    title: "Settings",
+    url: "#",
+    icon: <Settings2Icon />,
+  },
+]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
-    <Sidebar collapsible="none" {...props} variant="sidebar">
-      <SidebarHeader>
-        <div className="flex h-12 items-center px-2">
-          <span className="text-lg font-semibold tracking-tight">Fabric</span>
-        </div>
-      </SidebarHeader>
-      <SidebarContent>
-        <NavMain items={data.navMain} />
+    <Sidebar collapsible="offcanvas" variant="sidebar" {...props}>
+      <SidebarContent className="px-1 py-3">
+        <SidebarGroup>
+          <NavMain items={navigation} />
+        </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter className="p-3" />
     </Sidebar>
   )
 }

@@ -159,7 +159,7 @@ The repository currently has no implementation of:
 - A Kubernetes CRD, operator, or cluster agent.
 - Managed-serverless infrastructure provisioning or the BYOI Helm bundle.
 - AKS or k3s deployment manifests.
-- GPU VM provisioning/bootstrap scripts.
+- Kubernetes stamp provisioning scripts. The A10 research-host bootstrap and measurement scripts in `/scripts` are implemented; nothing provisions a k3s or AKS stamp.
 - A10 or T4 benchmark automation/results.
 - Prometheus/OpenTelemetry collectors, central telemetry ingestion/storage, dashboard charts, metering, or billing.
 - Console workflows in the frontend scaffold.

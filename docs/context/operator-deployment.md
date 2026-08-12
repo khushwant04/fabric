@@ -1,6 +1,6 @@
 # Operator, Cluster Agent, and Deployment Design
 
-**Status:** Planned — no CRD, operator, cluster agent, Helm bundle, telemetry collector configuration, or bootstrap scripts are implemented.
+**Status:** Mostly planned — the A10 research-host bootstrap and measurement scripts in [`scripts/`](../../scripts/) are implemented. No CRD, operator, cluster agent, Helm bundle, or telemetry collector configuration exists.
 
 ## Inference stamp definition
 
@@ -149,11 +149,45 @@ One GPU and model replica per pod, FP16 runtime profile, multiple nodes/replicas
 
 Manual Docker/NVIDIA research benchmarks first; optional k3s/operator enrollment later for production-style testing. Default production-style layout is independent one-GPU replicas; tensor parallelism remains research-only.
 
-## Planned VM scripts
+## VM scripts
+
+### Implemented: A10 research host
+
+[`scripts/bootstrap-a10.sh`](../../scripts/bootstrap-a10.sh) prepares an Azure A10 GPU
+VM on Ubuntu 22.04 LTS to produce research artifacts, and
+[`scripts/run-a10-suite.sh`](../../scripts/run-a10-suite.sh) records them.
+
+Bootstrap deliberately does not install a driver, CUDA, cuDNN, or NCCL through apt.
+Azure NVIDIA images ship the driver, and the CUDA runtime arrives with the PyTorch
+wheel; an apt-installed CUDA stack would be a second, conflicting source of truth.
+
+It installs the project's pinned toolchain rather than current releases:
+
+| Environment | Contents | Why pinned |
+|---|---|---|
+| `runtime/.venv` | `torch==2.8.0` (cu128 index), `triton==3.4.0`, dev and `baselines` extras | Artifacts record their inputs, so A10 numbers must be produced on the same toolchain as the committed RTX ones |
+| `serving/.venv` | `vllm==0.11.0` on the same torch | 0.11.0 is the newest vLLM release pinning torch 2.8.0; later releases move to torch 2.9+ and would fork the toolchain |
+
+It verifies the driver meets the cu128 floor, warns when the GPU is not an A10 or when
+fewer than two are visible, moves the model cache off the OS disk to `/mnt`
+(override with `FABRIC_CACHE_ROOT`), and runs both test suites.
+
+Model identity is never written into the repository: the script prints serve commands
+that read `FABRIC_MODEL` from the environment. Those commands default to two
+independent single-GPU replicas, with tensor-parallel size two shown only as a
+separate paper experiment, matching the research configuration above.
+
+`run-a10-suite.sh` records an FP16 pass and a BF16 pass — A10 supports BF16 natively
+where T4 does not — plus the vLLM decode comparison, then verifies every artifact's
+content hash and prints its target and claim scope. It warns when the worktree is
+dirty, because such a run is filenamed `-dirty` and is not reproducible evidence. The
+harness refuses to write when the GPU present does not match `--target`, so a
+mislabeled run fails rather than producing false evidence.
+
+### Planned: full stamp provisioning
 
 ```text
 01-provision-vm
-02-bootstrap-gpu
 03-install-k3s
 04-install-nvidia-components
 05-install-fabric-operator-agent
