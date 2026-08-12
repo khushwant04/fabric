@@ -1,0 +1,2802 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Fabric Control Plane",
+    "summary": "Accounts, credentials, deployment intent, and inference stamps.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Liveness probe",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Healthz Healthz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Readiness probe",
+        "description": "Readiness requires a usable database connection.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Readyz Readyz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/jwks.json": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Fabric token signing keys",
+        "description": "Publish active and retiring public keys for data-plane verifiers.",
+        "operationId": "jwks__well_known_jwks_json_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object",
+                  "title": "Response Jwks  Well Known Jwks Json Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/token": {
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Exchange a credential",
+        "description": "Issue exactly one account-bound Fabric token.\n\nAuth0 exchange resolves account membership and honors an explicit\n``account_id``. API-key exchange ignores any selector and derives the account\nand scopes from the stored key record.",
+        "operationId": "create_token_v1_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Current user and memberships",
+        "operationId": "read_me_v1_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Create an account and become its owner",
+        "operationId": "create_account_endpoint_v1_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Read one account",
+        "operationId": "read_account_v1_accounts__account_id__get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/members": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "List account members",
+        "operationId": "list_account_members_v1_accounts__account_id__members_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MembershipResponse"
+                  },
+                  "title": "Response List Account Members V1 Accounts  Account Id  Members Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Add or update an account member",
+        "operationId": "upsert_account_member_v1_accounts__account_id__members_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/api-keys": {
+      "post": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Create an account-owned API key",
+        "operationId": "create_key_v1_accounts__account_id__api_keys_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "List API keys",
+        "operationId": "list_keys_v1_accounts__account_id__api_keys_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyResponse"
+                  },
+                  "title": "Response List Keys V1 Accounts  Account Id  Api Keys Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/api-keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "api-keys"
+        ],
+        "summary": "Revoke an API key",
+        "operationId": "revoke_key_v1_accounts__account_id__api_keys__key_id__delete",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Key Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/deployments": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Create deployment intent",
+        "operationId": "create_v1_accounts__account_id__deployments_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "List deployments",
+        "operationId": "list_all_v1_accounts__account_id__deployments_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeploymentResponse"
+                  },
+                  "title": "Response List All V1 Accounts  Account Id  Deployments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/deployments/{deployment_id}": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Read one deployment",
+        "operationId": "read_one_v1_accounts__account_id__deployments__deployment_id__get",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Replace the desired spec and advance the generation",
+        "operationId": "update_v1_accounts__account_id__deployments__deployment_id__patch",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Delete deployment intent",
+        "operationId": "delete_v1_accounts__account_id__deployments__deployment_id__delete",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/deployments/{deployment_id}/placements": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Assign a deployment to an authorized stamp",
+        "operationId": "assign_placement_v1_accounts__account_id__deployments__deployment_id__placements_post",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlacementCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "List placements",
+        "operationId": "read_placements_v1_accounts__account_id__deployments__deployment_id__placements_get",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PlacementResponse"
+                  },
+                  "title": "Response Read Placements V1 Accounts  Account Id  Deployments  Deployment Id  Placements Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/deployments/{deployment_id}/status": {
+      "get": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Read reported status per stamp",
+        "operationId": "read_status_v1_accounts__account_id__deployments__deployment_id__status_get",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeploymentStatusResponse"
+                  },
+                  "title": "Response Read Status V1 Accounts  Account Id  Deployments  Deployment Id  Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/stamp-enrollment-tokens": {
+      "post": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Create a single-use stamp enrollment token",
+        "operationId": "create_token_v1_accounts__account_id__stamp_enrollment_tokens_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentTokenCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentTokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/stamp-enrollment-tokens/{token_id}": {
+      "delete": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Revoke an unused stamp enrollment token",
+        "operationId": "revoke_token_v1_accounts__account_id__stamp_enrollment_tokens__token_id__delete",
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Token Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/stamps": {
+      "get": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "List inference stamps owned by this account",
+        "operationId": "list_account_stamps_v1_accounts__account_id__stamps_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StampResponse"
+                  },
+                  "title": "Response List Account Stamps V1 Accounts  Account Id  Stamps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/stamps/{stamp_id}": {
+      "delete": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Revoke a stamp and its machine credentials",
+        "description": "Stop further synchronization for this stamp.\n\nThe agent and telemetry credentials are revoked in the same transaction, so\nheartbeat, desired-state, status, and future telemetry export are all denied.",
+        "operationId": "revoke_account_stamp_v1_accounts__account_id__stamps__stamp_id__delete",
+        "parameters": [
+          {
+            "name": "stamp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Stamp Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/stamps/enroll": {
+      "post": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Register a stamp using a one-time enrollment token",
+        "description": "Account ownership is derived from the enrollment record, never the payload.",
+        "operationId": "enroll_v1_stamps_enroll_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StampEnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampEnrollResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/stamps/{stamp_id}/heartbeat": {
+      "post": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Report liveness and bounded capabilities",
+        "operationId": "heartbeat_v1_stamps__stamp_id__heartbeat_post",
+        "parameters": [
+          {
+            "name": "stamp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Stamp Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/stamps/{stamp_id}/desired-state": {
+      "get": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Pull assignments newer than the acknowledged generation",
+        "operationId": "desired_state_v1_stamps__stamp_id__desired_state_get",
+        "parameters": [
+          {
+            "name": "stamp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Stamp Id"
+            }
+          },
+          {
+            "name": "after_generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "After Generation"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesiredStateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/stamps/{stamp_id}/status": {
+      "post": {
+        "tags": [
+          "stamps"
+        ],
+        "summary": "Report observed deployment status",
+        "operationId": "report_v1_stamps__stamp_id__status_post",
+        "parameters": [
+          {
+            "name": "stamp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Stamp Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusReportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountCreateRequest": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "AccountCreateRequest"
+      },
+      "AccountResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "is_system": {
+            "type": "boolean",
+            "title": "Is System"
+          },
+          "managed_capacity_enabled": {
+            "type": "boolean",
+            "title": "Managed Capacity Enabled"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "status",
+          "is_system",
+          "managed_capacity_enabled",
+          "created_at"
+        ],
+        "title": "AccountResponse"
+      },
+      "ApiKeyCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Scopes"
+          },
+          "expires_in_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 365.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Days"
+          },
+          "service_principal_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Principal Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "title": "ApiKeyCreateRequest"
+      },
+      "ApiKeyCreatedResponse": {
+        "properties": {
+          "api_key": {
+            "$ref": "#/components/schemas/ApiKeyResponse"
+          },
+          "secret": {
+            "type": "string",
+            "title": "Secret",
+            "description": "Shown once and never stored"
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key",
+          "secret"
+        ],
+        "title": "ApiKeyCreatedResponse"
+      },
+      "ApiKeyResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "principal_type": {
+            "type": "string",
+            "title": "Principal Type"
+          },
+          "principal_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Principal Id"
+          },
+          "key_prefix": {
+            "type": "string",
+            "title": "Key Prefix"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "name",
+          "principal_type",
+          "principal_id",
+          "key_prefix",
+          "scopes",
+          "expires_at",
+          "revoked_at",
+          "created_at"
+        ],
+        "title": "ApiKeyResponse"
+      },
+      "DeploymentCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,198}[a-z0-9])?$",
+            "title": "Name"
+          },
+          "model_alias": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Model Alias"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/DeploymentSpec"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "model_alias",
+          "spec"
+        ],
+        "title": "DeploymentCreateRequest"
+      },
+      "DeploymentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "model_alias": {
+            "type": "string",
+            "title": "Model Alias"
+          },
+          "desired_spec": {
+            "type": "object",
+            "title": "Desired Spec"
+          },
+          "generation": {
+            "type": "integer",
+            "title": "Generation"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "name",
+          "model_alias",
+          "desired_spec",
+          "generation",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DeploymentResponse"
+      },
+      "DeploymentSpec": {
+        "properties": {
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeSpec"
+          },
+          "replicas": {
+            "type": "integer",
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Replicas",
+            "default": 1
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceSpec"
+          },
+          "limits_policy_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limits Policy Ref"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runtime"
+        ],
+        "title": "DeploymentSpec"
+      },
+      "DeploymentStatusResponse": {
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "observed_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Generation"
+          },
+          "phase": {
+            "type": "string",
+            "title": "Phase"
+          },
+          "ready_replicas": {
+            "type": "integer",
+            "title": "Ready Replicas"
+          },
+          "unavailable_replicas": {
+            "type": "integer",
+            "title": "Unavailable Replicas"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "conditions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Conditions"
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reported At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "stamp_id",
+          "observed_generation",
+          "phase",
+          "ready_replicas",
+          "unavailable_replicas",
+          "endpoint",
+          "conditions",
+          "reported_at"
+        ],
+        "title": "DeploymentStatusResponse"
+      },
+      "DeploymentUpdateRequest": {
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/DeploymentSpec"
+          }
+        },
+        "type": "object",
+        "required": [
+          "spec"
+        ],
+        "title": "DeploymentUpdateRequest"
+      },
+      "DesiredDeployment": {
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "model_alias": {
+            "type": "string",
+            "title": "Model Alias"
+          },
+          "desired_generation": {
+            "type": "integer",
+            "title": "Desired Generation"
+          },
+          "spec": {
+            "type": "object",
+            "title": "Spec"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "name",
+          "model_alias",
+          "desired_generation",
+          "spec"
+        ],
+        "title": "DesiredDeployment"
+      },
+      "DesiredStateResponse": {
+        "properties": {
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "max_generation": {
+            "type": "integer",
+            "title": "Max Generation"
+          },
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/DesiredDeployment"
+            },
+            "type": "array",
+            "title": "Deployments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp_id",
+          "max_generation",
+          "deployments"
+        ],
+        "title": "DesiredStateResponse"
+      },
+      "EnrollmentTokenCreateRequest": {
+        "properties": {
+          "allowed_mode": {
+            "type": "string",
+            "enum": [
+              "managed",
+              "byoi"
+            ],
+            "title": "Allowed Mode",
+            "default": "byoi"
+          },
+          "expires_in_minutes": {
+            "type": "integer",
+            "maximum": 1440.0,
+            "minimum": 5.0,
+            "title": "Expires In Minutes",
+            "default": 60
+          }
+        },
+        "type": "object",
+        "title": "EnrollmentTokenCreateRequest"
+      },
+      "EnrollmentTokenResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "allowed_mode": {
+            "type": "string",
+            "title": "Allowed Mode"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "enrollment_token": {
+            "type": "string",
+            "title": "Enrollment Token",
+            "description": "Shown once and never stored"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "allowed_mode",
+          "expires_at",
+          "enrollment_token"
+        ],
+        "title": "EnrollmentTokenResponse"
+      },
+      "GpuCapability": {
+        "properties": {
+          "product": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Product"
+          },
+          "count": {
+            "type": "integer",
+            "maximum": 1024.0,
+            "minimum": 0.0,
+            "title": "Count"
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Memory Bytes",
+            "default": 0
+          },
+          "compute_capability": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compute Capability"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product",
+          "count"
+        ],
+        "title": "GpuCapability"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HeartbeatRequest": {
+        "properties": {
+          "capabilities": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StampCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "HeartbeatRequest"
+      },
+      "HeartbeatResponse": {
+        "properties": {
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Received At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp_id",
+          "received_at"
+        ],
+        "title": "HeartbeatResponse"
+      },
+      "MeResponse": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          },
+          "memberships": {
+            "items": {
+              "$ref": "#/components/schemas/MembershipResponse"
+            },
+            "type": "array",
+            "title": "Memberships"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user",
+          "memberships"
+        ],
+        "title": "MeResponse"
+      },
+      "MemberCreateRequest": {
+        "properties": {
+          "auth0_subject": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Auth0 Subject"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 320
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "developer",
+              "viewer"
+            ],
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "auth0_subject",
+          "role"
+        ],
+        "title": "MemberCreateRequest"
+      },
+      "MembershipResponse": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_id",
+          "user_id",
+          "role",
+          "status"
+        ],
+        "title": "MembershipResponse"
+      },
+      "PlacementCreateRequest": {
+        "properties": {
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp_id"
+        ],
+        "title": "PlacementCreateRequest"
+      },
+      "PlacementResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "desired_generation": {
+            "type": "integer",
+            "title": "Desired Generation"
+          },
+          "observed_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Generation"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "deployment_id",
+          "stamp_id",
+          "desired_generation",
+          "observed_generation",
+          "status"
+        ],
+        "title": "PlacementResponse"
+      },
+      "ResourceSpec": {
+        "properties": {
+          "gpu_count": {
+            "type": "integer",
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Gpu Count",
+            "default": 1
+          },
+          "gpu_class": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Gpu Class",
+            "default": "t4"
+          }
+        },
+        "type": "object",
+        "title": "ResourceSpec"
+      },
+      "RuntimeSpec": {
+        "properties": {
+          "release": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Release"
+          },
+          "kernel_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fabric",
+              "standard"
+            ],
+            "title": "Kernel Mode",
+            "default": "auto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "release"
+        ],
+        "title": "RuntimeSpec"
+      },
+      "StampCapabilities": {
+        "properties": {
+          "orchestrator": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Orchestrator"
+          },
+          "orchestrator_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator Version"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/GpuCapability"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Gpus"
+          },
+          "allocatable_gpus": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Allocatable Gpus",
+            "default": 0
+          },
+          "requested_gpus": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Requested Gpus",
+            "default": 0
+          },
+          "driver_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Version"
+          },
+          "container_runtime_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Runtime Version"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "operator_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Version"
+          },
+          "collector_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collector Version"
+          },
+          "runtime_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "orchestrator"
+        ],
+        "title": "StampCapabilities",
+        "description": "Bounded capability report.\n\nSecrets, arbitrary labels, node files, and request content are excluded by\nschema. Unknown fields are rejected."
+      },
+      "StampEnrollRequest": {
+        "properties": {
+          "enrollment_token": {
+            "type": "string",
+            "minLength": 8,
+            "title": "Enrollment Token"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/StampCapabilities"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enrollment_token",
+          "name",
+          "capabilities"
+        ],
+        "title": "StampEnrollRequest"
+      },
+      "StampEnrollResponse": {
+        "properties": {
+          "stamp": {
+            "$ref": "#/components/schemas/StampResponse"
+          },
+          "agent_credential": {
+            "type": "string",
+            "title": "Agent Credential",
+            "description": "Shown once; agent-only Secret"
+          },
+          "telemetry_credential": {
+            "type": "string",
+            "title": "Telemetry Credential",
+            "description": "Shown once; collector-only Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp",
+          "agent_credential",
+          "telemetry_credential"
+        ],
+        "title": "StampEnrollResponse"
+      },
+      "StampResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "orchestrator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "capabilities": {
+            "type": "object",
+            "title": "Capabilities"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "account_id",
+          "name",
+          "mode",
+          "orchestrator",
+          "region",
+          "status",
+          "capabilities",
+          "last_heartbeat_at",
+          "revoked_at",
+          "created_at"
+        ],
+        "title": "StampResponse"
+      },
+      "StatusCondition": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Type"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "True",
+              "False",
+              "Unknown"
+            ],
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "last_transition_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Transition Time"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "status"
+        ],
+        "title": "StatusCondition",
+        "description": "One bounded, Kubernetes-style condition reported by a stamp.\n\nUnknown fields are rejected so status reports cannot become an arbitrary data\nchannel into the control plane."
+      },
+      "StatusReportRequest": {
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "observed_generation": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Generation"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "progressing",
+              "ready",
+              "degraded",
+              "failed",
+              "terminating"
+            ],
+            "title": "Phase"
+          },
+          "ready_replicas": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Ready Replicas",
+            "default": 0
+          },
+          "unavailable_replicas": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unavailable Replicas",
+            "default": 0
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/StatusCondition"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Conditions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "phase"
+        ],
+        "title": "StatusReportRequest"
+      },
+      "StatusReportResponse": {
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deployment Id"
+          },
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Accepted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "stamp_id",
+          "accepted_at"
+        ],
+        "title": "StatusReportResponse"
+      },
+      "TokenRequest": {
+        "properties": {
+          "grant_type": {
+            "type": "string",
+            "enum": [
+              "auth0_token",
+              "api_key"
+            ],
+            "title": "Grant Type"
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "fabric-control",
+              "fabric-inference"
+            ],
+            "title": "Audience",
+            "default": "fabric-control"
+          },
+          "assertion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assertion",
+            "description": "Auth0 access token"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key",
+            "description": "Fabric API key"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grant_type"
+        ],
+        "title": "TokenRequest",
+        "description": "Credential exchange request.\n\n``account_id`` is honored only for Auth0 exchange. API-key exchange derives\nthe account from the stored key record and ignores any selector."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer",
+            "title": "Token Type",
+            "default": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "expires_in",
+          "account_id",
+          "scope"
+        ],
+        "title": "TokenResponse"
+      },
+      "UserResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "auth0_subject": {
+            "type": "string",
+            "title": "Auth0 Subject"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "auth0_subject",
+          "email",
+          "display_name"
+        ],
+        "title": "UserResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
