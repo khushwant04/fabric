@@ -51,7 +51,21 @@ The Triton path intentionally normalizes Q/K in FP32. The eager fallback normali
 - Accepts explicit synthetic head, key, and value dimensions.
 - Reports eager latency, Triton latency, speedup, and state-only effective bandwidth.
 
-No versioned benchmark result artifacts are committed. The RTX 4070 is development-only context for the existing local prototype; the Southeast Asia two-A10 VM is the planned research environment; and T4 AKS is the planned production profile and release gate. No A10 or T4 benchmark result exists. Local observations from an interactive RTX session are not a production claim.
+`/runtime/harness` adds the reproducibility layer around it: pinned dependencies in
+`runtime/pyproject.toml` (`torch==2.8.0`, `triton==3.4.0`), environment capture
+(versions, GPU identity, driver, commit, dirty flag), a versioned artifact schema
+with a content hash, and a one-command runner (`python -m harness.runner --target
+<name>`). Declaring a target whose GPU is not present fails closed, so an RTX
+measurement cannot be recorded as A10 or T4 evidence. 14 harness tests run without
+a GPU.
+
+Committed artifacts exist only for the `rtx4070-dev` target and are labeled
+`citable_as_production: false` with an explicit claim scope. The RTX 4070 is
+development-only context; the Southeast Asia two-A10 VM is the planned research
+environment; and T4 AKS is the planned production profile and release gate. No A10
+or T4 artifact, optimized FLA/vLLM baseline, full-model result, or profiler summary
+exists. Local observations from an interactive RTX session are not a production
+claim.
 
 ### Vendored model source
 

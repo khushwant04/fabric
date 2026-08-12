@@ -27,7 +27,6 @@ import torch
 import triton
 import triton.language as tl
 
-
 L2_EPS = 1e-6
 _MAX_KEY_DIM = 256
 

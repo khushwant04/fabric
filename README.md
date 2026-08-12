@@ -56,24 +56,34 @@ Agent-aware session caching, multimodal serving, quantization, speculative decod
 
 ## Run the current kernel harness
 
-The current harness requires a CUDA-capable NVIDIA GPU and was locally validated with Python 3.12, `torch==2.8.0`, and `triton==3.4.0`. A reproducible environment bootstrap is not committed yet.
+The harness requires a CUDA-capable NVIDIA GPU. Dependencies are pinned in
+[`runtime/pyproject.toml`](runtime/pyproject.toml) (`torch==2.8.0`, `triton==3.4.0`);
+install the CUDA build matching your host.
 
 ```bash
-# Syntax check
-python -m py_compile \
-  runtime/kernels/gated_delta_decode.py \
-  runtime/benchmarks/gated_delta_decode_bench.py
+cd runtime
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e '.[dev]'
 
-# Correctness only
-python runtime/benchmarks/gated_delta_decode_bench.py \
-  --check-only \
-  --dtype float16 \
-  --batches 1 2 4 8 16
+# One command per target; writes a versioned artifact under runtime/artifacts/
+.venv/bin/python -m harness.runner --target rtx4070-dev
+.venv/bin/python -m harness.runner --target rtx4070-dev --check-only
+.venv/bin/python -m harness.runner --target rtx4070-dev --dry-run
 
-# Correctness and eager-reference microbenchmark
-python runtime/benchmarks/gated_delta_decode_bench.py \
-  --dtype float16 \
-  --block-v 32
+# Harness tests (no GPU required)
+.venv/bin/python -m pytest -q
+```
+
+Declaring a target that does not match the GPU present fails closed, so a
+development measurement cannot be recorded as A10 or T4 evidence. Every artifact
+records its environment, configuration, and a content hash, and states its own
+claim scope.
+
+The underlying script can also be driven directly:
+
+```bash
+python runtime/benchmarks/gated_delta_decode_bench.py --check-only --dtype float16
+python runtime/benchmarks/gated_delta_decode_bench.py --dtype float16 --block-v 32
 ```
 
 These timings compare against the local eager reference, not optimized FLA/vLLM, and must not be treated as full-model or production results.

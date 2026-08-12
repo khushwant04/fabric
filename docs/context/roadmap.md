@@ -26,6 +26,11 @@ Exit requirement: none; this records the starting point.
 - Establish optimized vLLM/FLA baselines.
 - Run local RTX 4070 regression.
 
+Implemented so far: pinned runtime dependencies, environment capture, the versioned
+artifact schema with a fail-closed target/hardware guard, the one-command runner,
+and correctness plus microkernel runs producing RTX 4070 artifacts. Still open:
+drift, full-model, and profiler suites, and the optimized vLLM/FLA baselines.
+
 Exit requirement: one command per target produces auditable artifacts from immutable inputs.
 
 ## Phase 2: Runtime integration and target validation — weeks 2–3

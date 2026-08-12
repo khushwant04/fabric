@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling==1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fabric-runtime"
+version = "0.1.0"
+description = "Fabric GPU kernels, correctness harness, and benchmark artifact pipeline."
+requires-python = ">=3.12"
+
+# Pinned so an artifact can name the exact inputs that produced it. The CUDA
+# build must match the target host; the local development GPU uses the cu128
+# wheels published at https://download.pytorch.org/whl/cu128.
+dependencies = [
+  "torch==2.8.0",
+  "triton==3.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+  "ruff==0.8.4",
+]
+
+[project.scripts]
+fabric-bench = "harness.runner:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness", "kernels", "benchmarks"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
