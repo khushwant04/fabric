@@ -40,14 +40,22 @@ def _gated_delta_decode_kernel(
     beta_ptr,
     state_ptr,
     out_ptr,
+    state_index_ptr,
+    heads: tl.constexpr,
     key_dim: tl.constexpr,
     value_dim: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_V: tl.constexpr,
     QUERY_SCALE: tl.constexpr,
     L2_EPS: tl.constexpr,
+    HAS_STATE_INDEX: tl.constexpr,
 ):
-    """One program updates one value-dimension tile for one batch/head pair."""
+    """One program updates one value-dimension tile for one batch/head pair.
+
+    With ``HAS_STATE_INDEX`` the recurrent state is a paged cache and each
+    sequence's slot is read from ``state_index_ptr``, which lets a serving host
+    pass its cache directly instead of gathering rows into a dense tensor.
+    """
     batch_head = tl.program_id(0)
     value_block = tl.program_id(1)
 
@@ -69,7 +77,13 @@ def _gated_delta_decode_kernel(
     decay = tl.exp(tl.load(g_ptr + scalar_offset).to(tl.float32))
     beta = tl.load(beta_ptr + scalar_offset).to(tl.float32)
 
-    state_base = batch_head * key_dim * value_dim
+    if HAS_STATE_INDEX:
+        sequence = batch_head // heads
+        head = batch_head % heads
+        slot = tl.load(state_index_ptr + sequence).to(tl.int64)
+        state_base = (slot * heads + head) * key_dim * value_dim
+    else:
+        state_base = batch_head * key_dim * value_dim
     state_offsets = state_base + key_offsets[:, None] * value_dim + value_offsets[None, :]
     state_mask = key_mask[:, None] & value_mask[None, :]
     state = tl.load(state_ptr + state_offsets, mask=state_mask, other=0.0).to(tl.float32)
@@ -116,12 +130,17 @@ def _validate_inputs(
     out: torch.Tensor | None,
     *,
     require_cuda: bool = True,
+    state_indices: torch.Tensor | None = None,
 ) -> tuple[int, int, int, int]:
     """Validate the shared operand contract.
 
     ``require_cuda`` is set for the Triton path, which can only run on a GPU. The
     eager reference is pure PyTorch, so it accepts CPU tensors and can therefore
     serve as a fallback wherever the fused kernel cannot run.
+
+    With ``state_indices`` the state is a paged cache ``[slots, heads, K, V]`` and
+    each sequence's slot is looked up, matching how a serving host stores
+    recurrent state.
     """
     if require_cuda and not q.is_cuda:
         raise ValueError("all inputs must be CUDA tensors")
@@ -139,8 +158,22 @@ def _validate_inputs(
         raise ValueError("v must have shape [batch, heads, value_dim] with value_dim > 0")
 
     value_dim = v.shape[-1]
-    if tuple(state.shape) != (batch, heads, key_dim, value_dim):
-        raise ValueError("state must have shape [batch, heads, key_dim, value_dim]")
+    if state_indices is None:
+        if tuple(state.shape) != (batch, heads, key_dim, value_dim):
+            raise ValueError("state must have shape [batch, heads, key_dim, value_dim]")
+    else:
+        if state.ndim != 4 or tuple(state.shape[1:]) != (heads, key_dim, value_dim):
+            raise ValueError(
+                "paged state must have shape [slots, heads, key_dim, value_dim]"
+            )
+        if state_indices.ndim != 1 or state_indices.shape[0] != batch:
+            raise ValueError("state_indices must have shape [batch]")
+        if state_indices.dtype not in (torch.int32, torch.int64):
+            raise TypeError("state_indices must be int32 or int64")
+        if not state_indices.is_contiguous():
+            raise ValueError("state_indices must be contiguous")
+        if state_indices.device != q.device:
+            raise ValueError("state_indices must be on the same device as the inputs")
     if tuple(g.shape) != (batch, heads) or tuple(beta.shape) != (batch, heads):
         raise ValueError("g and beta must have shape [batch, heads]")
     if state.dtype != torch.float32:
@@ -178,14 +211,21 @@ def gated_delta_decode(
     *,
     out: torch.Tensor | None = None,
     block_v: int = 32,
+    state_indices: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run the fused single-token gated-delta recurrence and update ``state`` in place.
 
     The caller must provide exclusive ownership of ``state`` for the duration of
     the launch. Output/input aliasing is rejected because each value tile reads
     the complete Q/K vectors while peer tiles write their outputs.
+
+    ``state_indices`` selects one slot per sequence from a paged state cache, so a
+    serving host can pass its cache directly rather than gathering rows into a
+    dense tensor and scattering them back.
     """
-    batch, heads, key_dim, value_dim = _validate_inputs(q, k, v, g, beta, state, out)
+    batch, heads, key_dim, value_dim = _validate_inputs(
+        q, k, v, g, beta, state, out, state_indices=state_indices
+    )
     if block_v not in (8, 16, 32):
         raise ValueError("block_v must be one of 8, 16, or 32")
     if out is None:
@@ -201,12 +241,15 @@ def gated_delta_decode(
         beta,
         state,
         out,
+        state_indices,
+        heads,
         key_dim,
         value_dim,
         BLOCK_K=block_k,
         BLOCK_V=block_v,
         QUERY_SCALE=key_dim**-0.5,
         L2_EPS=L2_EPS,
+        HAS_STATE_INDEX=state_indices is not None,
         num_warps=4 if block_v <= 16 else 8,
     )
     return out
@@ -221,13 +264,21 @@ def torch_gated_delta_decode_reference(
     state: torch.Tensor,
     *,
     out: torch.Tensor | None = None,
+    state_indices: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Eager reference preserving the authoritative operation order.
 
     Runs on any device, so a host can fall back to it when the fused kernel
-    cannot serve a call.
+    cannot serve a call. With ``state_indices`` the addressed slots of a paged
+    cache are read, updated, and written back, matching the fused path's effect
+    on the caller's cache.
     """
-    _, _, key_dim, _ = _validate_inputs(q, k, v, g, beta, state, out, require_cuda=False)
+    _, _, key_dim, _ = _validate_inputs(
+        q, k, v, g, beta, state, out, require_cuda=False, state_indices=state_indices
+    )
+
+    slots = None if state_indices is None else state_indices.long()
+    working = state if slots is None else state[slots]
 
     # The authoritative fallback applies l2norm in the model dtype, then
     # converts Q/K/V/beta/g to FP32 for the recurrent update.
@@ -236,11 +287,15 @@ def torch_gated_delta_decode_reference(
     q_float = q_norm.float() * (key_dim**-0.5)
     k_float = k_norm.float()
 
-    state.mul_(g.float().exp().unsqueeze(-1).unsqueeze(-1))
-    memory = (state * k_float.unsqueeze(-1)).sum(dim=-2)
+    working.mul_(g.float().exp().unsqueeze(-1).unsqueeze(-1))
+    memory = (working * k_float.unsqueeze(-1)).sum(dim=-2)
     delta = (v.float() - memory) * beta.float().unsqueeze(-1)
-    state.add_(k_float.unsqueeze(-1) * delta.unsqueeze(-2))
-    result = (state * q_float.unsqueeze(-1)).sum(dim=-2)
+    working.add_(k_float.unsqueeze(-1) * delta.unsqueeze(-2))
+    result = (working * q_float.unsqueeze(-1)).sum(dim=-2)
+
+    if slots is not None:
+        # ``state[slots]`` gathered a copy, so the cache needs the write back.
+        state[slots] = working
 
     if out is None:
         return result.to(v.dtype)

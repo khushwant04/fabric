@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling==1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fabric-serving"
+version = "0.1.0"
+description = "Fabric integration with a vLLM model host."
+requires-python = ">=3.12"
+
+# vLLM 0.11.0 is the newest release pinning torch==2.8.0, which keeps the serving
+# host on the same toolchain as the kernels and the committed benchmark
+# artifacts. Later vLLM releases move to torch 2.9+ and would fork it.
+dependencies = [
+  "vllm==0.11.0",
+  "torch==2.8.0",
+  "triton==3.4.0",
+  "fabric-runtime",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+  "ruff==0.8.4",
+]
+
+[tool.uv.sources]
+fabric-runtime = { path = "../runtime", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["fabric_serving"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

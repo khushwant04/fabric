@@ -108,6 +108,8 @@ def unsupported_reason(
     g: torch.Tensor,
     beta: torch.Tensor,
     state: torch.Tensor,
+    *,
+    state_indices: torch.Tensor | None = None,
 ) -> str | None:
     """Return why the Fabric kernel cannot serve these inputs, or ``None``.
 
@@ -127,6 +129,13 @@ def unsupported_reason(
         return f"key dimension exceeds {MAX_KEY_DIM} or rank is not 3"
     if any(not tensor.is_contiguous() for tensor in (q, k, v, g, beta, state)):
         return "inputs are not contiguous"
+    if state_indices is not None:
+        if state_indices.dtype not in (torch.int32, torch.int64):
+            return f"state_indices dtype {state_indices.dtype} is not int32/int64"
+        if state_indices.ndim != 1 or state_indices.shape[0] != q.shape[0]:
+            return "state_indices must have one slot per sequence"
+        if not state_indices.is_contiguous():
+            return "state_indices is not contiguous"
     return None
 
 
@@ -141,27 +150,34 @@ def dispatch_gated_delta_decode(
     mode: KernelMode = "auto",
     out: torch.Tensor | None = None,
     block_v: int = 32,
+    state_indices: torch.Tensor | None = None,
     stats: DispatchStats | None = None,
 ) -> tuple[torch.Tensor, DispatchDecision]:
     """Run one decode step through the mode's chosen path.
 
     Returns the output and the decision that produced it. ``state`` is updated in
     place by both paths, so a fallback mid-generation keeps the recurrence valid.
+    ``state_indices`` selects slots from a paged cache, which is how a serving
+    host stores recurrent state.
     """
     if mode not in SUPPORTED_MODES:
         raise ValueError(f"unknown kernel mode {mode!r}; expected one of {SUPPORTED_MODES}")
 
     if mode == "standard":
         decision = DispatchDecision(mode, PATH_EAGER, "standard mode requested")
-        result = torch_gated_delta_decode_reference(q, k, v, g, beta, state, out=out)
+        result = torch_gated_delta_decode_reference(
+            q, k, v, g, beta, state, out=out, state_indices=state_indices
+        )
         if stats is not None:
             stats.record(decision, fell_back=False)
         return result, decision
 
-    reason = unsupported_reason(q, k, v, g, beta, state)
+    reason = unsupported_reason(q, k, v, g, beta, state, state_indices=state_indices)
     if reason is None:
         try:
-            result = gated_delta_decode(q, k, v, g, beta, state, out=out, block_v=block_v)
+            result = gated_delta_decode(
+                q, k, v, g, beta, state, out=out, block_v=block_v, state_indices=state_indices
+            )
         except Exception as exc:  # noqa: BLE001 - a kernel failure must not fail a request
             reason = f"{type(exc).__name__}: {exc}"
         else:
@@ -176,7 +192,9 @@ def dispatch_gated_delta_decode(
         raise KernelUnavailableError(reason)
 
     decision = DispatchDecision(mode, PATH_EAGER, reason)
-    result = torch_gated_delta_decode_reference(q, k, v, g, beta, state, out=out)
+    result = torch_gated_delta_decode_reference(
+        q, k, v, g, beta, state, out=out, state_indices=state_indices
+    )
     if stats is not None:
         stats.record(decision, fell_back=True)
     return result, decision
@@ -207,6 +225,7 @@ class GatedDeltaDecoder:
         state: torch.Tensor,
         *,
         out: torch.Tensor | None = None,
+        state_indices: torch.Tensor | None = None,
     ) -> torch.Tensor:
         result, decision = dispatch_gated_delta_decode(
             q,
@@ -218,6 +237,7 @@ class GatedDeltaDecoder:
             mode=self.mode,
             out=out,
             block_v=self.block_v,
+            state_indices=state_indices,
             stats=None,
         )
         with self._lock:

@@ -10,10 +10,11 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A shape-generic, single-token gated-delta Triton kernel in [`runtime/kernels/gated_delta_decode.py`](runtime/kernels/gated_delta_decode.py).
 - A CUDA correctness and microbenchmark harness in [`runtime/benchmarks/gated_delta_decode_bench.py`](runtime/benchmarks/gated_delta_decode_bench.py).
 - A host-facing kernel dispatch and fallback layer in [`runtime/integration/dispatch.py`](runtime/integration/dispatch.py) implementing the `auto`/`fabric`/`standard` kernel modes; no model host calls it yet.
+- A vLLM decode-op substitution in [`serving/`](serving/) that computes the same function as vLLM's own gated-delta kernel and is 1.0–1.4x faster than it on the development GPU; it is not registered in a live vLLM instance.
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
 - A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
 
-There is currently no inference data plane, vLLM integration, Kubernetes operator, cluster agent, AKS/k3s deployment, telemetry pipeline, or A10/T4 benchmark result.
+There is currently no inference data plane, running vLLM host, Kubernetes operator, cluster agent, AKS/k3s deployment, telemetry pipeline, or A10/T4 benchmark result.
 
 ## Run the control plane
 
@@ -53,6 +54,7 @@ Agent-aware session caching, multimodal serving, quantization, speculative decod
 | [`runtime/kernels/`](runtime/kernels/) | Fabric GPU kernel prototypes | One gated-delta kernel implemented |
 | [`runtime/integration/`](runtime/integration/) | Host-facing kernel dispatch, fallback, and telemetry | Implemented; no host calls it yet |
 | [`runtime/benchmarks/`](runtime/benchmarks/) | Correctness and microbenchmark harnesses | Local prototype implemented |
+| [`serving/`](serving/) | vLLM host integration and decode-op substitution | Verified against vLLM's kernel; not registered in a live host |
 | [`v1/`](v1/) | Next.js frontend | Scaffold only |
 | [`utils/transformers/`](utils/transformers/) | Vendored upstream model reference | Not a Fabric runtime integration |
 
