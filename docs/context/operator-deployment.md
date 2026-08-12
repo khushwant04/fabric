@@ -153,36 +153,73 @@ Manual Docker/NVIDIA research benchmarks first; optional k3s/operator enrollment
 
 ### Implemented: A10 research host
 
-[`scripts/bootstrap-a10.sh`](../../scripts/bootstrap-a10.sh) prepares an Azure A10 GPU
-VM on Ubuntu 22.04 LTS to produce research artifacts, and
-[`scripts/run-a10-suite.sh`](../../scripts/run-a10-suite.sh) records them.
+[`scripts/bootstrap-a10.sh`](../../scripts/bootstrap-a10.sh) provisions an Azure A10
+GPU VM from a **bare Ubuntu 22.04 LTS server image with no NVIDIA driver**, and
+[`scripts/run-a10-suite.sh`](../../scripts/run-a10-suite.sh) records the artifacts.
 
-Bootstrap deliberately does not install a driver, CUDA, cuDNN, or NCCL through apt.
-Azure NVIDIA images ship the driver, and the CUDA runtime arrives with the PyTorch
-wheel; an apt-installed CUDA stack would be a second, conflicting source of truth.
+Bootstrap runs eight idempotent phases, so re-running skips completed work:
 
-It installs the project's pinned toolchain rather than current releases:
+| Phase | Work |
+|---|---|
+| 0 | Preflight: OS version, Secure Boot state, GPU visibility on the PCI bus, disk layout |
+| 1 | System packages including `dkms` and the running kernel's headers |
+| 2 | NVIDIA driver: the Azure GRID `.run` installer, silent, with DKMS |
+| 3 | CUDA toolkit 12.8 from NVIDIA's repository |
+| 4 | `uv`, plus a managed Python 3.12 |
+| 5 | Model cache moved off the OS disk |
+| 6 | Runtime environment and its test suite |
+| 7 | Serving environment and its test suite |
+| 8 | Validation: driver, `nvcc`, BF16 execution, NCCL, GPU topology |
+
+Driver choices that matter on this SKU:
+
+- The `NVadsA10_v5` family needs the **Azure GRID driver** (pinned to
+  `570.211.01`, overridable through `FABRIC_DRIVER_URL`/`FABRIC_DRIVER_VERSION`).
+  A generic datacenter or desktop driver is the wrong build, and Ubuntu's
+  `nvidia-driver-*` packages are a second, conflicting source.
+- The GRID module is unsigned, so **Secure Boot and vTPM must be disabled**. The
+  script fails early with that explanation rather than letting the module fail to
+  load later.
+- The installer runs `--silent --dkms --no-install-compat32-libs`: silent avoids
+  the interactive X11 and Vulkan prompts that would block an unattended run, DKMS
+  rebuilds the module across kernel upgrades, and 32-bit compatibility libraries
+  are pointless on a headless inference host.
+- The kernel module usually needs a **reboot**. When it does, the script stops
+  with instructions; the next run detects the working driver and continues.
+- CUDA arrives as `cuda-toolkit-12-8` from NVIDIA's repository, never as the
+  `cuda` meta-package (which pulls driver components that would fight the GRID
+  driver) and never as Ubuntu's `nvidia-cuda-toolkit` (a different CUDA version).
+  `nvidia-smi` reports the driver's maximum CUDA API while `nvcc` reports the
+  toolkit; those numbers need not match.
+- `--skip-driver` and `--skip-cuda-toolkit` exist for hosts where an image
+  already provides them.
+
+Python environments install the project's pinned toolchain rather than current
+releases:
 
 | Environment | Contents | Why pinned |
 |---|---|---|
 | `runtime/.venv` | `torch==2.8.0` (cu128 index), `triton==3.4.0`, dev and `baselines` extras | Artifacts record their inputs, so A10 numbers must be produced on the same toolchain as the committed RTX ones |
 | `serving/.venv` | `vllm==0.11.0` on the same torch | 0.11.0 is the newest vLLM release pinning torch 2.8.0; later releases move to torch 2.9+ and would fork the toolchain |
 
-It verifies the driver meets the cu128 floor, warns when the GPU is not an A10 or when
-fewer than two are visible, moves the model cache off the OS disk to `/mnt`
-(override with `FABRIC_CACHE_ROOT`), and runs both test suites.
+The script warns when the GPU is not an A10, when fewer than two are visible, and
+when the intended cache directory turns out to live on the OS disk rather than a
+separate data disk. It ends by executing a BF16 matrix multiply on each GPU,
+because device visibility is not proof of execution, and by printing
+`nvidia-smi topo -m`: these A10s report `SYS` with no NVLink, so peer traffic
+crosses PCIe and the CPU interconnect.
 
-Model identity is never written into the repository: the script prints serve commands
-that read `FABRIC_MODEL` from the environment. Those commands default to two
-independent single-GPU replicas, with tensor-parallel size two shown only as a
-separate paper experiment, matching the research configuration above.
+Model identity is never written into the repository: the printed serve commands
+read `FABRIC_MODEL` from the environment. They default to two independent
+single-GPU replicas, with tensor-parallel size two shown only as the separate
+paper experiment that ADR 0005 and the runtime design describe.
 
-`run-a10-suite.sh` records an FP16 pass and a BF16 pass — A10 supports BF16 natively
-where T4 does not — plus the vLLM decode comparison, then verifies every artifact's
-content hash and prints its target and claim scope. It warns when the worktree is
-dirty, because such a run is filenamed `-dirty` and is not reproducible evidence. The
-harness refuses to write when the GPU present does not match `--target`, so a
-mislabeled run fails rather than producing false evidence.
+`run-a10-suite.sh` records an FP16 pass and a BF16 pass — A10 supports BF16
+natively where T4 does not — plus the vLLM decode comparison, then verifies every
+artifact's content hash and prints its target and claim scope. It warns when the
+worktree is dirty, because such a run is filenamed `-dirty` and is not
+reproducible evidence. The harness refuses to write when the GPU present does not
+match `--target`, so a mislabeled run fails rather than producing false evidence.
 
 ### Planned: full stamp provisioning
 
@@ -195,6 +232,10 @@ mislabeled run fails rather than producing false evidence.
 07-verify-status-telemetry
 99-destroy
 ```
+
+The A10 bootstrap already covers the driver and CUDA layers that
+`04-install-nvidia-components` would install on a k3s stamp; the remaining
+scripts are the Kubernetes-specific work.
 
 Scripts pin versions, avoid embedded secrets, emit bounded environment metadata, and make cleanup explicit.
 
