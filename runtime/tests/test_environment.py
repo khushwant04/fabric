@@ -80,6 +80,18 @@ def test_drift_and_sweep_can_be_disabled() -> None:
     assert config["sweep_block_v"] == []
 
 
+def test_profiling_is_requested_by_default_and_can_be_disabled() -> None:
+    default = build_config(parse_args(["--target", "rtx4070-dev"]))
+    assert default["profile_requested"] is True
+    assert default["compile_probe_requested"] is True
+
+    trimmed = build_config(
+        parse_args(["--target", "rtx4070-dev", "--no-profile", "--no-compile-probe"])
+    )
+    assert trimmed["profile_requested"] is False
+    assert trimmed["compile_probe_requested"] is False
+
+
 def test_every_roadmap_target_is_selectable() -> None:
     assert set(TARGETS) == {"rtx4070-dev", "a10-research", "t4-production"}
     # Only the release-gate target may back a production claim.

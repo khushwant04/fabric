@@ -1,8 +1,8 @@
 # Benchmark and Research Plan
 
 **Status:** Partially implemented  
-**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema (v3) with a target/hardware guard, long-generation drift, compiled-kernel metadata, a value-tile sweep, a pinned optimized FLA baseline with equivalence checking, and a one-command runner producing RTX 4070 development artifacts.  
-**Planned:** Private-profile cross-GPU scripts, pinned standard and Fabric-enabled vLLM baselines, full-model comparisons, full profiler capture, A10/T4 artifacts, and paper analysis.
+**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema (v4) with a target/hardware guard, long-generation drift, compiled-kernel metadata, a value-tile sweep, a pinned optimized FLA baseline with equivalence checking, theoretical occupancy, bandwidth utilization, cold/warm first-use latency, and a one-command runner producing RTX 4070 development artifacts.  
+**Planned:** Private-profile cross-GPU scripts, pinned standard and Fabric-enabled vLLM baselines, full-model comparisons, counter-based profiling, A10/T4 artifacts, and paper analysis.
 
 ## Existing local evidence
 
@@ -24,6 +24,8 @@ cd runtime
 .venv/bin/python -m harness.runner --target rtx4070-dev --drift-steps 4096
 .venv/bin/python -m harness.runner --target rtx4070-dev --drift-steps 0 --sweep-block-v
 .venv/bin/python -m harness.runner --target rtx4070-dev --no-baselines
+.venv/bin/python -m harness.runner --target rtx4070-dev --no-profile
+.venv/bin/python -m harness.runner --target rtx4070-dev --no-compile-probe
 ```
 
 The optimized baseline requires the pinned extra:
@@ -40,7 +42,7 @@ uv pip install --python .venv/bin/python -e '.[dev,baselines]'
 
 Artifact-contract fields recorded today: source Git SHA and dirty flag, GPU product, memory, and compute capability, driver, CUDA runtime, PyTorch, Triton, FLA, and vLLM versions (the last two as `null` when absent), dtype and kernel configuration, workload shapes, seeds, warmup, repetitions, and timestamps, plus raw correctness, drift, tile-sweep, baseline, and kernel results.
 
-Still missing from the contract, pending the components that would supply them: signed image digest, model and tokenizer revision, GPU UUID, and profiler summaries.
+Still missing from the contract, pending the components or host permissions that would supply them: signed image digest, model and tokenizer revision, GPU UUID, and counter-based profiler summaries.
 
 ## Suite phases
 
@@ -51,16 +53,23 @@ A single run records four phases, all in one artifact:
 3. **Value-tile sweep with compiled-kernel metadata** — every supported tile (8, 16, 32) is timed at every batch, and registers, spills, shared memory, warps, and stages are read from the compiled kernel. The sweep runs before other launches so each tile's metadata can be attributed to its own first compilation. Triton's compiled-kernel layout is an internal API, so every read is guarded and the artifact records `null` metadata rather than failing the run.
 4. **Microbenchmark** — eager versus Triton latency, speedup, and state-only effective bandwidth per batch.
 5. **Optimized baseline** — flash-linear-attention's `fused_recurrent_gated_delta_rule`, pinned at 0.5.2 in the `baselines` extra. Every timing is paired with an equivalence check against the authoritative eager reference, because a latency comparison against something computing a different function is meaningless. When the library is absent the suite still runs and the artifact records `baselines: null`.
+6. **Profile** — theoretical occupancy from compiled register/shared-memory/warp counts against device limits, achieved bandwidth as a fraction of *measured* device copy bandwidth, and first-use latency with both a cold and a warm Triton cache (the cold measurement runs in a subprocess with an isolated `TRITON_CACHE_DIR`).
+
+### Counter-based metrics are not collected
+
+Achieved occupancy, warp execution efficiency, and DRAM counters require Nsight Compute with admin-enabled GPU performance counters. On a host where profiling is restricted to admin users, Nsight returns `ERR_NVGPUCTRPERM` and collects nothing. Rather than omit those metrics, each artifact records them as `null` alongside the reason, so the gap is auditable. Enabling them is a host configuration change (the NVIDIA kernel-module profiling restriction), not a code change.
+
+The occupancy figure is therefore arithmetic, not a measurement, and is marked `is_upper_bound: true`: it ignores register allocation granularity and the hardware maximum blocks per SM, neither of which torch exposes. The bandwidth denominator is a copy benchmark measured on the same device in the same run, not a vendor peak.
 
 ### Observations from the committed RTX 4070 artifacts
 
 - **Speedup against the eager reference is not a performance claim.** The eager path is a readable formulation, not a tuned implementation, and the 11–24x figures against it say little. Against the pinned FLA baseline on this GPU, the Fabric kernel is at parity for batches 1–4 (ratios 0.92–1.08 across four runs, inside run-to-run variance) and reproducibly faster at batch 8 (1.16–1.25x). Outputs are numerically identical to FLA (0 max abs difference), so the comparison is like-for-like.
+- **The small-batch regime is launch-latency bound, not occupancy or bandwidth bound.** Theoretical occupancy is 100% at every value tile (48/48 warps per SM), yet achieved bandwidth is only ~13% of measured copy bandwidth at batch 1, rising to ~55% at batch 8. That is consistent with the FLA parity result: at small batch both implementations are dominated by launch overhead rather than the memory system, so there is little for a kernel to win.
+- **First use is expensive relative to steady state.** ~1.1 s with a cold Triton cache, ~0.3 s with a warm one, against ~0.06 ms steady-state launches. This matters for cold-start behaviour in a serving host, not for throughput.
 - FLA returns a new state tensor while the Fabric kernel updates state in place, so the baseline timing includes an allocation the Fabric timing does not. That asymmetry favors Fabric and is not corrected for.
 - Drift stays bounded: worst output error ~1.2e-4 over 1024 FP16 steps against a 2e-3 single-step tolerance, with final state divergence ~0.06% relative. The gated decay (`g < 0`) shrinks the state each step, which bounds accumulation rather than compounding it. This is a negative result — no numerical problem found at these synthetic shapes.
 - The kernel compiles without spills at every tile (37–40 registers, 128–1024 B shared).
 - Tile choice is batch-dependent. `block_v=8` degrades clearly at batch 8, while 16 and 32 differ by only a few percent at small batches, which is inside run-to-run variance on this GPU. One run is therefore not sufficient evidence to retune the kernel default, and the default remains 32.
-
-Metrics still not captured: occupancy, DRAM utilization, warp efficiency, and compile/first-use latency. Those need a profiler pass rather than compiled-kernel metadata.
 
 Baselines still missing: pinned standard vLLM, vLLM with individual Fabric optimizations, and vLLM with the promoted kernel set. Those are serving-level comparisons and need the runtime integration that does not exist yet.
 
@@ -128,11 +137,11 @@ At minimum compare:
 
 ### Kernel
 
-- P50/P95 latency.
-- Effective state bandwidth.
-- Registers, spills, shared memory, and occupancy.
-- DRAM utilization and warp efficiency.
-- Compile and first-use latency.
+- P50/P95 latency. *(Mean latency captured; percentiles planned.)*
+- Effective state bandwidth. *(Captured, plus total bytes moved as a fraction of measured copy bandwidth.)*
+- Registers, spills, shared memory, and occupancy. *(Registers, spills, and shared memory captured from the compiled kernel; occupancy is computed as a theoretical upper bound. Achieved occupancy needs counters.)*
+- DRAM utilization and warp efficiency. *(Counter-only; not collected — see above.)*
+- Compile and first-use latency. *(Captured with both a cold and a warm Triton cache.)*
 
 ### Serving
 

@@ -54,18 +54,27 @@ The Triton path intentionally normalizes Q/K in FP32. The eager fallback normali
 `/runtime/harness` adds the reproducibility layer around it: pinned dependencies in
 `runtime/pyproject.toml` (`torch==2.8.0`, `triton==3.4.0`), environment capture
 (versions, GPU identity, driver, commit, dirty flag), a versioned artifact schema
-(v3, with v1 and v2 still readable), and a one-command runner (`python -m
+(v4, with v1 through v3 still readable), and a one-command runner (`python -m
 harness.runner --target <name>`). Declaring a target whose GPU is not present fails
-closed, so an RTX measurement cannot be recorded as A10 or T4 evidence. 35 harness
+closed, so an RTX measurement cannot be recorded as A10 or T4 evidence. 46 harness
 tests run without a GPU.
 
-A run records five phases in one artifact: single-step correctness, long-generation
+A run records six phases in one artifact: single-step correctness, long-generation
 drift over a configurable number of decode steps (default 1024), a value-tile sweep
 carrying compiled-kernel registers/spills/shared-memory/warps, the eager-versus-
-Triton microbenchmark, and a comparison against a pinned optimized baseline
+Triton microbenchmark, a comparison against a pinned optimized baseline
 (`flash-linear-attention==0.5.2`, `fused_recurrent_gated_delta_rule`) whose
-equivalence to the eager reference is verified on every run. The baseline is an
-optional extra; without it the artifact records `baselines: null`.
+equivalence to the eager reference is verified on every run, and a profile phase
+covering theoretical occupancy, achieved bandwidth as a fraction of measured device
+copy bandwidth, and cold/warm first-use latency. The baseline is an optional extra;
+without it the artifact records `baselines: null`.
+
+Counter-based metrics — achieved occupancy, warp execution efficiency, DRAM counters
+— are not collected. They require Nsight Compute with admin-enabled GPU performance
+counters; on this host profiling is restricted to admin users and Nsight returns
+`ERR_NVGPUCTRPERM`. Artifacts record those metrics as `null` with that reason rather
+than omitting them, and the recorded occupancy is arithmetic marked
+`is_upper_bound: true`, not a measurement.
 
 What the committed RTX 4070 artifacts show:
 
@@ -76,6 +85,12 @@ What the committed RTX 4070 artifacts show:
   reference is not a tuned implementation. FLA also allocates a new state tensor
   where the Fabric kernel updates state in place, an asymmetry that favors Fabric
   and is not corrected for.
+- The small-batch regime is launch-latency bound: theoretical occupancy is 100% at
+  every value tile while achieved bandwidth is only ~13% of measured copy bandwidth
+  at batch 1, rising to ~55% at batch 8. This is consistent with the FLA parity
+  result — at small batch neither implementation is limited by the memory system.
+- First use costs ~1.1 s with a cold Triton cache and ~0.3 s with a warm one against
+  ~0.06 ms steady-state launches, which matters for serving cold start.
 - Drift stays bounded (worst output error ~1.2e-4 over 1024 FP16 steps against a
   2e-3 single-step tolerance, final state divergence ~0.06% relative).
 - The kernel compiles with no spills at every tile.
