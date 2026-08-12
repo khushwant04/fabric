@@ -9,6 +9,7 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A control-plane API in [`control-plane/`](control-plane/) with Auth0 validation, accounts and memberships, API keys, token exchange, deployment intent, and inference-stamp enrollment.
 - A shape-generic, single-token gated-delta Triton kernel in [`runtime/kernels/gated_delta_decode.py`](runtime/kernels/gated_delta_decode.py).
 - A CUDA correctness and microbenchmark harness in [`runtime/benchmarks/gated_delta_decode_bench.py`](runtime/benchmarks/gated_delta_decode_bench.py).
+- A host-facing kernel dispatch and fallback layer in [`runtime/integration/dispatch.py`](runtime/integration/dispatch.py) implementing the `auto`/`fabric`/`standard` kernel modes; no model host calls it yet.
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
 - A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
 
@@ -50,6 +51,7 @@ Agent-aware session caching, multimodal serving, quantization, speculative decod
 | [`docs/context/`](docs/context/) | Product, architecture, design, roadmap, risks, and ADRs | Living source of project context |
 | [`control-plane/`](control-plane/) | FastAPI control-plane API and PostgreSQL schema | Initial version implemented |
 | [`runtime/kernels/`](runtime/kernels/) | Fabric GPU kernel prototypes | One gated-delta kernel implemented |
+| [`runtime/integration/`](runtime/integration/) | Host-facing kernel dispatch, fallback, and telemetry | Implemented; no host calls it yet |
 | [`runtime/benchmarks/`](runtime/benchmarks/) | Correctness and microbenchmark harnesses | Local prototype implemented |
 | [`v1/`](v1/) | Next.js frontend | Scaffold only |
 | [`utils/transformers/`](utils/transformers/) | Vendored upstream model reference | Not a Fabric runtime integration |

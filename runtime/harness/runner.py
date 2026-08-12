@@ -453,7 +453,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"fabric_ms={timing['fabric_ms']:.4f} "
                 f"fabric_speedup={timing['fabric_speedup_vs_baseline']:.2f}x"
             )
-    if artifact["config"]["baselines_requested"] and not artifact["baselines"]:
+    if (
+        artifact["config"]["baselines_requested"]
+        and not artifact["baselines"]
+        and not args.check_only
+    ):
         print("baseline: no optimized library installed; comparison not run")
 
     profile = artifact["profile"]

@@ -114,8 +114,16 @@ def _validate_inputs(
     beta: torch.Tensor,
     state: torch.Tensor,
     out: torch.Tensor | None,
+    *,
+    require_cuda: bool = True,
 ) -> tuple[int, int, int, int]:
-    if not q.is_cuda:
+    """Validate the shared operand contract.
+
+    ``require_cuda`` is set for the Triton path, which can only run on a GPU. The
+    eager reference is pure PyTorch, so it accepts CPU tensors and can therefore
+    serve as a fallback wherever the fused kernel cannot run.
+    """
+    if require_cuda and not q.is_cuda:
         raise ValueError("all inputs must be CUDA tensors")
     if q.ndim != 3:
         raise ValueError(f"q must have shape [batch, heads, key_dim], got {tuple(q.shape)}")
@@ -144,7 +152,7 @@ def _validate_inputs(
 
     tensors = (q, k, v, g, beta, state)
     if any(t.device != q.device for t in tensors):
-        raise ValueError("all inputs must be on the same CUDA device")
+        raise ValueError("all inputs must be on the same device")
     if any(not t.is_contiguous() for t in tensors):
         raise ValueError("all inputs must be contiguous")
     if any(_overlaps(state, tensor) for tensor in (q, k, v, g, beta)):
@@ -214,8 +222,12 @@ def torch_gated_delta_decode_reference(
     *,
     out: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Eager reference preserving the authoritative operation order."""
-    _, _, key_dim, _ = _validate_inputs(q, k, v, g, beta, state, out)
+    """Eager reference preserving the authoritative operation order.
+
+    Runs on any device, so a host can fall back to it when the fused kernel
+    cannot serve a call.
+    """
+    _, _, key_dim, _ = _validate_inputs(q, k, v, g, beta, state, out, require_cuda=False)
 
     # The authoritative fallback applies l2norm in the model dtype, then
     # converts Q/K/V/beta/g to FP32 for the recurrent update.
