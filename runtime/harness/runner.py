@@ -18,7 +18,7 @@ RUNTIME_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(RUNTIME_ROOT) not in sys.path:
     sys.path.insert(0, str(RUNTIME_ROOT))
 
-from harness import environment  # noqa: E402
+from harness import environment, kernel_metadata  # noqa: E402
 from harness.artifact import (  # noqa: E402
     TARGETS,
     Target,
@@ -53,6 +53,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--check-only", action="store_true", help="Run correctness without timing"
     )
     parser.add_argument(
+        "--drift-steps",
+        type=int,
+        default=1024,
+        help="Decode steps for the long-generation drift check (0 disables it)",
+    )
+    parser.add_argument(
+        "--sweep-block-v",
+        type=int,
+        nargs="*",
+        default=[8, 16, 32],
+        help="Value tiles to sweep with compiled-kernel metadata (empty disables)",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="Print the artifact instead of writing it"
     )
     parser.add_argument("--artifact-root", type=pathlib.Path, default=DEFAULT_ARTIFACT_ROOT)
@@ -72,15 +85,71 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
         "correctness_seeds": list(CORRECTNESS_SEEDS),
         "benchmark_warmup": 100,
         "benchmark_reps": 500,
+        "drift_steps": args.drift_steps,
+        "drift_batch": args.batches[0],
+        "sweep_block_v": list(args.sweep_block_v),
         "shapes_are_synthetic": True,
     }
 
 
+def sweep_value_tiles(args: argparse.Namespace, dtype: Any) -> list[dict[str, Any]]:
+    """Measure every value tile across every batch, with what each tile compiled to.
+
+    Runs before any other launch so each tile is compiled for the first time
+    here and its metadata can be attributed to this configuration. Timings cover
+    all requested batches because the best tile depends on how much work is
+    available to fill the GPU, so a single batch would not justify a default.
+    """
+    from benchmarks.gated_delta_decode_bench import benchmark, make_inputs
+    from kernels.gated_delta_decode import _gated_delta_decode_kernel, gated_delta_decode
+
+    results: list[dict[str, Any]] = []
+    for block_v in args.sweep_block_v:
+        inputs = make_inputs(
+            args.batches[0], args.heads, args.key_dim, args.value_dim, dtype, seed=7
+        )
+        metadata = kernel_metadata.capture(
+            _gated_delta_decode_kernel,
+            lambda inputs=inputs, block_v=block_v: gated_delta_decode(
+                *inputs, block_v=block_v
+            ),
+        )
+        timings = [
+            {
+                "batch": batch,
+                "triton_ms": timing["triton_ms"],
+                "state_bandwidth_gbps": timing["state_bandwidth_gbps"],
+            }
+            for batch in args.batches
+            for timing in [
+                benchmark(batch, args.heads, args.key_dim, args.value_dim, dtype, block_v)
+            ]
+        ]
+        results.append({"block_v": block_v, "kernel": metadata, "timings": timings})
+    return results
+
+
+def fastest_tile_per_batch(tile_sweep: list[dict[str, Any]]) -> dict[str, int]:
+    """Return the lowest-latency value tile for each batch in the sweep."""
+    best: dict[str, tuple[float, int]] = {}
+    for entry in tile_sweep:
+        for timing in entry["timings"]:
+            batch = str(timing["batch"])
+            candidate = (timing["triton_ms"], entry["block_v"])
+            if batch not in best or candidate < best[batch]:
+                best[batch] = candidate
+    return {batch: block_v for batch, (_ms, block_v) in best.items()}
+
+
 def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
-    """Execute correctness and, unless suppressed, timing for every batch."""
+    """Execute the suite phases and assemble the artifact."""
     import torch
 
-    from benchmarks.gated_delta_decode_bench import benchmark, check_correctness
+    from benchmarks.gated_delta_decode_bench import (
+        benchmark,
+        check_correctness,
+        measure_drift,
+    )
 
     captured = environment.capture()
     verify_target(target, captured)
@@ -88,14 +157,31 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
     dtype = getattr(torch, args.dtype)
     correctness: list[dict[str, Any]] = []
     measurements: list[dict[str, Any]] = []
+    tile_sweep: list[dict[str, Any]] | None = None
+    drift: dict[str, Any] | None = None
     status = "pass"
 
     try:
+        # Sweep first: metadata capture needs a cold compilation cache per tile.
+        if args.sweep_block_v and not args.check_only:
+            tile_sweep = sweep_value_tiles(args, dtype)
+
         for batch in args.batches:
             errors = check_correctness(
                 batch, args.heads, args.key_dim, args.value_dim, dtype, args.block_v
             )
             correctness.append({"batch": batch, **errors})
+
+        if args.drift_steps:
+            drift = measure_drift(
+                args.batches[0],
+                args.heads,
+                args.key_dim,
+                args.value_dim,
+                dtype,
+                args.block_v,
+                steps=args.drift_steps,
+            )
 
         if not args.check_only:
             for batch in args.batches:
@@ -116,6 +202,8 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
         config=build_config(args),
         correctness=correctness,
         measurements=measurements,
+        drift=drift,
+        tile_sweep=tile_sweep,
     )
 
 
@@ -140,6 +228,33 @@ def main(argv: list[str] | None = None) -> int:
             f"batch={entry['batch']:<3} eager_ms={entry['reference_ms']:.4f} "
             f"triton_ms={entry['triton_ms']:.4f} speedup={entry['speedup']:.2f}x "
             f"state_GB/s={entry['state_bandwidth_gbps']:.1f}"
+        )
+
+    for entry in artifact["tile_sweep"] or []:
+        kernel = entry["kernel"] or {}
+        latencies = " ".join(
+            f"b{timing['batch']}={timing['triton_ms']:.4f}" for timing in entry["timings"]
+        )
+        print(
+            f"block_v={entry['block_v']:<3} regs={kernel.get('registers')} "
+            f"spills={kernel.get('spills')} shared={kernel.get('shared_memory_bytes')}B "
+            f"warps={kernel.get('num_warps')} ms[{latencies}]"
+        )
+    if artifact["tile_sweep"]:
+        fastest = fastest_tile_per_batch(artifact["tile_sweep"])
+        print(
+            "fastest block_v per batch: "
+            + " ".join(f"b{batch}={block_v}" for batch, block_v in sorted(fastest.items()))
+            + f" (kernel default is {artifact['config']['block_v']})"
+        )
+
+    drift = artifact["drift"]
+    if drift:
+        print(
+            f"drift steps={drift['steps']} output_max_abs={drift['output_max_abs']:.6g} "
+            f"state_max_abs={drift['state_max_abs']:.6g} "
+            f"final_state_max_rel={drift['final_state_max_rel']:.3%} "
+            f"within_single_step_atol={drift['within_single_step_atol']}"
         )
     return 0 if artifact["status"] == "pass" else 1
 

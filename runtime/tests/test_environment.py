@@ -57,6 +57,19 @@ def test_config_records_every_input_needed_to_reproduce() -> None:
     assert config["state_dtype"] == "float32"
     assert config["shapes_are_synthetic"] is True
     assert config["benchmark_warmup"] and config["benchmark_reps"]
+    # Drift and sweep inputs must be reproducible too.
+    assert config["drift_steps"] == 1024
+    assert config["drift_batch"] == 1
+    assert config["sweep_block_v"] == [8, 16, 32]
+
+
+def test_drift_and_sweep_can_be_disabled() -> None:
+    args = parse_args(
+        ["--target", "rtx4070-dev", "--drift-steps", "0", "--sweep-block-v"]
+    )
+    config = build_config(args)
+    assert config["drift_steps"] == 0
+    assert config["sweep_block_v"] == []
 
 
 def test_every_roadmap_target_is_selectable() -> None:
