@@ -2,110 +2,109 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-
+import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 import {
-  Command,
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import { Kbd } from "@/components/ui/kbd"
-import { cn } from "@/lib/utils"
-import {
-  ArrowRightIcon,
-  BookOpenIcon,
+  Activity01Icon,
+  ArrowRight01Icon,
+  BookOpen01Icon,
   BotIcon,
+  ClockIcon,
   CreditCardIcon,
-  HistoryIcon,
-  KeyIcon,
-  LayoutDashboardIcon,
-  LifeBuoyIcon,
-  PlusIcon,
-  SearchIcon,
-  Settings2Icon,
-  StarIcon,
-  TerminalSquareIcon,
+  CustomerSupportIcon,
+  Home01Icon,
+  Key01Icon,
+  Search01Icon,
+  Settings01Icon,
+  Terminal,
   UserIcon,
-} from "lucide-react"
+} from "@hugeicons/core-free-icons"
 
-type SearchCategory = "quick-actions" | "platform" | "account" | "external"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
 
-type SearchItem = {
+interface NavItem {
   title: string
   description?: string
   url: string
-  icon: React.ReactNode
-  category: SearchCategory
+  icon: IconSvgElement
+  category: string
   keywords?: string[]
+  defaultShortcut?: boolean
 }
 
-// Sample navigation targets. Entries with a "#" url are placeholders until the
-// matching route exists, mirroring the placeholder links in the sidebar.
-const searchItems: SearchItem[] = [
+const navItems: NavItem[] = [
   {
     title: "New Playground Session",
     description: "Start a fresh prompt session",
     url: "#",
-    icon: <PlusIcon />,
+    icon: Terminal,
     category: "quick-actions",
     keywords: ["new", "create", "prompt", "session"],
+    defaultShortcut: true,
   },
   {
     title: "Create API Key",
     description: "Issue a key for programmatic access",
     url: "#",
-    icon: <KeyIcon />,
+    icon: Key01Icon,
     category: "quick-actions",
     keywords: ["api", "key", "token", "credential"],
+    defaultShortcut: true,
   },
   {
     title: "Dashboard",
     description: "Workspace overview",
     url: "/dashboard",
-    icon: <LayoutDashboardIcon />,
+    icon: Home01Icon,
     category: "platform",
     keywords: ["home", "overview", "dashboard"],
+    defaultShortcut: true,
   },
   {
     title: "Playground",
     description: "Experiment with prompts and models",
     url: "#",
-    icon: <TerminalSquareIcon />,
+    icon: Terminal,
     category: "platform",
     keywords: ["prompt", "experiment", "test"],
+    defaultShortcut: true,
   },
   {
     title: "History",
     description: "Past playground runs",
     url: "#",
-    icon: <HistoryIcon />,
-    category: "platform",
+    icon: ClockIcon,
+    category: "recent",
     keywords: ["past", "runs", "recent"],
-  },
-  {
-    title: "Starred",
-    description: "Saved playground runs",
-    url: "#",
-    icon: <StarIcon />,
-    category: "platform",
-    keywords: ["saved", "favorite", "bookmark"],
+    defaultShortcut: true,
   },
   {
     title: "Models",
     description: "Browse available models",
     url: "#",
-    icon: <BotIcon />,
+    icon: BotIcon,
     category: "platform",
     keywords: ["model", "catalog", "inference"],
+    defaultShortcut: true,
+  },
+  {
+    title: "Recent Activity",
+    description: "Latest workspace changes",
+    url: "/dashboard",
+    icon: Activity01Icon,
+    category: "recent",
+    keywords: ["activity", "recent", "events"],
+    defaultShortcut: true,
   },
   {
     title: "Documentation",
     description: "Guides and API reference",
     url: "#",
-    icon: <BookOpenIcon />,
+    icon: BookOpen01Icon,
     category: "platform",
     keywords: ["docs", "guide", "reference", "help"],
   },
@@ -113,208 +112,335 @@ const searchItems: SearchItem[] = [
     title: "Settings",
     description: "Workspace configuration",
     url: "#",
-    icon: <Settings2Icon />,
-    category: "platform",
+    icon: Settings01Icon,
+    category: "settings",
     keywords: ["config", "preferences", "workspace"],
   },
   {
     title: "Profile",
     description: "Your account details",
     url: "#",
-    icon: <UserIcon />,
-    category: "account",
+    icon: UserIcon,
+    category: "settings",
     keywords: ["account", "profile", "me"],
   },
   {
     title: "Billing",
     description: "Plan, usage, and invoices",
     url: "#",
-    icon: <CreditCardIcon />,
-    category: "account",
+    icon: CreditCardIcon,
+    category: "settings",
     keywords: ["billing", "invoice", "plan", "usage"],
   },
   {
     title: "Support",
     description: "Contact the Fabric team",
     url: "https://example.com/support",
-    icon: <LifeBuoyIcon />,
+    icon: CustomerSupportIcon,
     category: "external",
     keywords: ["support", "contact", "help"],
   },
 ]
 
-const categoryLabels: Record<SearchCategory, string> = {
+const categoryLabels: Record<string, string> = {
   "quick-actions": "Quick Actions",
+  recent: "Recent Resources",
   platform: "Platform",
-  account: "Account",
+  settings: "Settings",
   external: "External",
 }
 
-const categoryOrder: SearchCategory[] = [
-  "quick-actions",
-  "platform",
-  "account",
-  "external",
-]
-
-/**
- * Header search field. Looks like an input but opens the command palette,
- * so the palette owns all filtering and keyboard navigation.
- */
-function SearchCommandTrigger({
-  className,
-  ...props
-}: React.ComponentProps<"button">) {
-  return (
-    <button
-      type="button"
-      data-slot="search-command-trigger"
-      className={cn(
-        "flex h-8 w-full cursor-text items-center gap-2 rounded-md border border-input/60 bg-background px-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-input hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-        className
-      )}
-      {...props}
-    >
-      <SearchIcon className="size-4 shrink-0 opacity-60" />
-      <span className="flex-1 truncate">Search pages, actions, resources</span>
-      <Kbd className="hidden sm:inline-flex">/</Kbd>
-    </button>
-  )
+interface SearchCommandProps {
+  defaultOpen?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
-/**
- * Command palette. Opens on click from a trigger, or with "/" and Cmd/Ctrl+K.
- */
-function SearchCommandDialog({
-  open,
+export function SearchCommand({
+  defaultOpen = false,
   onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
+}: SearchCommandProps = {}) {
+  const [open, setOpen] = React.useState(defaultOpen)
+  const [search, setSearch] = React.useState("")
+  const [selectedIndex, setSelectedIndex] = React.useState(0)
+  const [showSkeleton, setShowSkeleton] = React.useState(defaultOpen)
+  const [isFocused, setIsFocused] = React.useState(false)
   const router = useRouter()
+  const triggerInputRef = React.useRef<HTMLInputElement>(null)
 
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
-      const isTyping =
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
+  const handleOpenChange = React.useCallback(
+    (newOpen: boolean) => {
+      setOpen(newOpen)
+      onOpenChange?.(newOpen)
 
-      if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault()
-        onOpenChange(!open)
-        return
+      if (newOpen) {
+        setSelectedIndex(0)
+        setShowSkeleton(true)
+        window.setTimeout(() => triggerInputRef.current?.focus(), 0)
+      } else {
+        setSearch("")
       }
-
-      if (event.key === "/" && !isTyping) {
-        event.preventDefault()
-        onOpenChange(true)
-      }
-    }
-
-    document.addEventListener("keydown", onKeyDown)
-    return () => document.removeEventListener("keydown", onKeyDown)
-  }, [open, onOpenChange])
+    },
+    [onOpenChange]
+  )
 
   const handleSelect = React.useCallback(
     (url: string) => {
-      onOpenChange(false)
+      handleOpenChange(false)
+      setSearch("")
 
       if (url.startsWith("http")) {
         window.open(url, "_blank", "noopener,noreferrer")
-        return
+      } else if (url !== "#") {
+        router.push(url)
       }
-
-      // Placeholder targets have no route yet, so just dismiss the palette.
-      if (url === "#") {
-        return
-      }
-
-      router.push(url)
     },
-    [onOpenChange, router]
+    [handleOpenChange, router]
   )
 
+  const filteredItems = React.useMemo(() => {
+    if (!search) return navItems.filter((item) => item.defaultShortcut)
+
+    const query = search.toLowerCase()
+    return navItems.filter(
+      (item) =>
+        item.title.toLowerCase().includes(query) ||
+        item.description?.toLowerCase().includes(query) ||
+        item.category.includes(query) ||
+        item.keywords?.some((keyword) =>
+          keyword.toLowerCase().includes(query)
+        )
+    )
+  }, [search])
+
+  const grouped = React.useMemo(() => {
+    const groups: Record<string, NavItem[]> = {}
+    for (const item of filteredItems) {
+      if (!groups[item.category]) groups[item.category] = []
+      groups[item.category].push(item)
+    }
+    return groups
+  }, [filteredItems])
+
+  React.useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isTyping =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable
+
+      if (event.key === "/" && !isTyping) {
+        event.preventDefault()
+        handleOpenChange(true)
+      }
+
+      if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        handleOpenChange(!open)
+      }
+    }
+
+    document.addEventListener("keydown", down)
+    return () => document.removeEventListener("keydown", down)
+  }, [handleOpenChange, open])
+
+  React.useEffect(() => {
+    if (!open) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (document.activeElement !== triggerInputRef.current) return
+      if (filteredItems.length === 0) return
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault()
+        setSelectedIndex((index) =>
+          Math.min(index + 1, filteredItems.length - 1)
+        )
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault()
+        setSelectedIndex((index) => Math.max(index - 1, 0))
+      } else if (event.key === "Enter") {
+        event.preventDefault()
+        const item = filteredItems[selectedIndex]
+        if (item) handleSelect(item.url)
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [filteredItems, handleSelect, open, selectedIndex])
+
+  React.useEffect(() => {
+    if (!showSkeleton) return
+    const timer = window.setTimeout(() => setShowSkeleton(false), 400)
+    return () => window.clearTimeout(timer)
+  }, [showSkeleton])
+
   return (
-    <CommandDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Search"
-      description="Search pages, actions, and resources"
-    >
-      <Command loop>
-        <CommandInput placeholder="Search pages, actions, resources" />
-        <CommandList className="max-h-[420px]">
-          <CommandEmpty>No results found.</CommandEmpty>
-          {categoryOrder.map((category) => {
-            const items = searchItems.filter(
-              (item) => item.category === category
-            )
+    <div className="w-full">
+      <Popover open={open} onOpenChange={handleOpenChange} modal={false}>
+        <PopoverTrigger
+          render={
+            <div
+              data-search-trigger
+              className={cn(
+                "relative flex h-9 w-full cursor-text items-center rounded-md border bg-background px-3 text-left transition-[border-color,box-shadow] duration-150",
+                isFocused && "border-foreground/20 shadow-overlay"
+              )}
+              onClick={() => {
+                if (!open) handleOpenChange(true)
+              }}
+            />
+          }
+        >
+          <HugeiconsIcon
+            icon={Search01Icon}
+            className="mr-2 size-4 shrink-0 text-muted-foreground"
+          />
+          <input
+            ref={triggerInputRef}
+            type="text"
+            placeholder="Search pages, actions, resources"
+            value={search}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => {
+              setSearch(event.target.value)
+              setSelectedIndex(0)
+              if (!open) handleOpenChange(true)
+            }}
+            onFocus={() => {
+              setIsFocused(true)
+              if (!open) handleOpenChange(true)
+            }}
+            onBlur={() => setIsFocused(false)}
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+          <span className="ml-2 hidden shrink-0 items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+            <kbd className="rounded-sm border bg-muted px-1.5 py-0.5 text-[10px]">
+              /
+            </kbd>
+          </span>
+        </PopoverTrigger>
 
-            if (items.length === 0) {
-              return null
-            }
-
-            return (
-              <CommandGroup key={category} heading={categoryLabels[category]}>
-                {items.map((item) => (
-                  <CommandItem
-                    key={`${item.category}-${item.title}`}
-                    keywords={item.keywords}
-                    onSelect={() => handleSelect(item.url)}
+        <PopoverContent
+          className="w-[var(--anchor-width)] min-w-[320px] border-0 p-0 shadow-overlay ring-1 ring-border/60"
+          align="start"
+          sideOffset={4}
+        >
+          <div
+            className={cn(
+              "overflow-y-auto scroll-smooth transition-all",
+              search ? "max-h-[640px]" : "max-h-[300px]"
+            )}
+          >
+            {showSkeleton ? (
+              <div className="space-y-1 p-2">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-3 rounded-sm px-2 py-2"
                   >
-                    <div className="flex size-8 shrink-0 items-center justify-center rounded-sm border bg-muted text-muted-foreground group-data-selected/command-item:bg-background">
-                      {item.icon}
+                    <div className="size-8 shrink-0 animate-pulse rounded-md bg-muted" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3.5 w-2/3 animate-pulse rounded-sm bg-muted" />
+                      <div className="h-2.5 w-1/2 animate-pulse rounded-sm bg-muted" />
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{item.title}</div>
-                      {item.description && (
-                        <div className="truncate text-xs text-muted-foreground">
-                          {item.description}
-                        </div>
-                      )}
-                    </div>
-                    <ArrowRightIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground opacity-0 group-data-selected/command-item:opacity-100" />
-                  </CommandItem>
+                  </div>
                 ))}
-              </CommandGroup>
-            )
-          })}
-        </CommandList>
-      </Command>
-      <div className="flex items-center gap-4 border-t bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <Kbd className="h-4 min-w-4 bg-background">↑↓</Kbd> navigate
-        </span>
-        <span className="flex items-center gap-1">
-          <Kbd className="h-4 min-w-4 bg-background">↵</Kbd> select
-        </span>
-        <span className="flex items-center gap-1">
-          <Kbd className="h-4 min-w-4 bg-background">esc</Kbd> close
-        </span>
-      </div>
-    </CommandDialog>
+              </div>
+            ) : (
+              <div className="p-1.5">
+                {Object.entries(grouped).map(([category, items]) => (
+                  <div key={category}>
+                    <div className="u-label px-2 py-1.5 text-muted-foreground">
+                      {categoryLabels[category] || category}
+                    </div>
+                    {items.map((item) => {
+                      const index = filteredItems.indexOf(item)
+                      const isSelected = selectedIndex === index
+
+                      return (
+                        <button
+                          key={`${item.category}-${item.title}`}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-sm px-2 py-2 text-left text-sm transition-colors",
+                            isSelected &&
+                              "bg-sidebar-accent text-sidebar-accent-foreground"
+                          )}
+                          onClick={() => handleSelect(item.url)}
+                          onMouseEnter={() => setSelectedIndex(index)}
+                        >
+                          <div
+                            className={cn(
+                              "flex size-8 shrink-0 items-center justify-center rounded-sm border",
+                              isSelected ? "bg-background" : "bg-muted"
+                            )}
+                          >
+                            <HugeiconsIcon
+                              icon={item.icon}
+                              className={cn(
+                                "size-4",
+                                isSelected
+                                  ? "text-foreground"
+                                  : "text-muted-foreground"
+                              )}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">
+                              {item.title}
+                            </div>
+                            {item.description ? (
+                              <div className="truncate text-xs text-muted-foreground">
+                                {item.description}
+                              </div>
+                            ) : null}
+                          </div>
+                          {isSelected ? (
+                            <HugeiconsIcon
+                              icon={ArrowRight01Icon}
+                              className="size-3.5 shrink-0 text-muted-foreground"
+                            />
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))}
+
+                {search && filteredItems.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">
+                    No results for &quot;{search}&quot;
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-4 border-t bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <kbd className="rounded-sm border bg-background px-1 py-0.5">
+                ↑↓
+              </kbd>{" "}
+              navigate
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="rounded-sm border bg-background px-1 py-0.5">
+                ↵
+              </kbd>{" "}
+              select
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="rounded-sm border bg-background px-1 py-0.5">
+                esc
+              </kbd>{" "}
+              close
+            </span>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
   )
 }
-
-/**
- * Self-contained search: input-style trigger plus the palette.
- */
-function SearchCommand({ className }: { className?: string }) {
-  const [open, setOpen] = React.useState(false)
-
-  return (
-    <>
-      <SearchCommandTrigger
-        className={className}
-        onClick={() => setOpen(true)}
-      />
-      <SearchCommandDialog open={open} onOpenChange={setOpen} />
-    </>
-  )
-}
-
-export { SearchCommand, SearchCommandDialog, SearchCommandTrigger }

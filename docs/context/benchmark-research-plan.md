@@ -87,6 +87,8 @@ Local development target for rapid iteration, correctness, compiler checks, and 
 
 Research environment. Manual scripts run single-GPU FP16/BF16, two independent replicas, and optional tensor-parallel size two. It is not production and does not join the T4 AKS cluster.
 
+Host setup and the measurement passes are scripted: [`scripts/bootstrap-a10.sh`](../../scripts/bootstrap-a10.sh) installs the pinned toolchain, and [`scripts/run-a10-suite.sh`](../../scripts/run-a10-suite.sh) records FP16 and BF16 artifacts plus the vLLM decode comparison.
+
 ### T4 / SM75
 
 Production-equivalent release environment using FP16 and the same VM SKU, driver, image, and Kubernetes constraints as production.
