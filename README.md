@@ -77,7 +77,8 @@ uv pip install --python .venv/bin/python -e '.[dev]'
 Declaring a target that does not match the GPU present fails closed, so a
 development measurement cannot be recorded as A10 or T4 evidence. Every artifact
 records its environment, configuration, and a content hash, and states its own
-claim scope.
+claim scope. One run covers single-step correctness, long-generation drift, a
+value-tile sweep with compiled-kernel metadata, and eager-versus-Triton timing.
 
 The underlying script can also be driven directly:
 

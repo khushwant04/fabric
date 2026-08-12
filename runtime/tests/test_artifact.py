@@ -10,9 +10,11 @@ import pytest
 
 from harness.artifact import (
     SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
     TargetMismatchError,
     UnsupportedArtifactError,
     build_artifact,
+    content_hash,
     read_artifact,
     resolve_target,
     verify_artifact,
@@ -83,9 +85,65 @@ def test_tampered_artifact_is_rejected() -> None:
 
 def test_unknown_schema_version_is_rejected() -> None:
     artifact = _artifact()
-    artifact["schema_version"] = SCHEMA_VERSION + 1
+    artifact["schema_version"] = max(SUPPORTED_SCHEMA_VERSIONS) + 1
     with pytest.raises(UnsupportedArtifactError, match="schema_version"):
         verify_artifact(artifact)
+
+
+def test_current_schema_is_v2_and_v1_remains_readable() -> None:
+    """Bumping the schema must not invalidate already-committed evidence."""
+    assert SCHEMA_VERSION == 2
+    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2})
+
+    # A v1 body carries no drift or tile_sweep keys and must still verify.
+    v1_body = {
+        "schema_version": 1,
+        "suite": "gated-delta-decode-microbench",
+        "target": "rtx4070-dev",
+        "target_role": "development and regression",
+        "citable_as_production": False,
+        "claim_scope": "scope",
+        "status": "pass",
+        "environment": ENVIRONMENT,
+        "config": {"dtype": "float16"},
+        "correctness": [],
+        "measurements": [],
+    }
+    v1_artifact = {
+        **v1_body,
+        "run_id": "0" * 32,
+        "created_at": "2026-08-12T11:34:53Z",
+        "content_hash": content_hash(v1_body),
+    }
+    verify_artifact(v1_artifact)
+
+
+def test_v2_records_drift_and_tile_sweep() -> None:
+    drift = {"steps": 1024, "output_max_abs": 6e-05, "within_single_step_atol": True}
+    sweep = [{"block_v": 16, "kernel": {"registers": 40}, "timings": []}]
+    artifact = _artifact(drift=drift, tile_sweep=sweep)
+
+    assert artifact["schema_version"] == 2
+    assert artifact["drift"] == drift
+    assert artifact["tile_sweep"] == sweep
+    verify_artifact(artifact)
+
+
+def test_absent_phases_are_recorded_as_null_not_omitted() -> None:
+    """``None`` distinguishes "not run" from "ran and found nothing"."""
+    artifact = _artifact()
+    assert artifact["drift"] is None
+    assert artifact["tile_sweep"] is None
+    assert "drift" in artifact and "tile_sweep" in artifact
+    verify_artifact(artifact)
+
+
+def test_drift_results_are_covered_by_the_content_hash() -> None:
+    baseline = _artifact(drift={"steps": 1024, "output_max_abs": 6e-05})
+    tampered = dict(baseline)
+    tampered["drift"] = {"steps": 1024, "output_max_abs": 1e-09}
+    with pytest.raises(UnsupportedArtifactError, match="content_hash"):
+        verify_artifact(tampered)
 
 
 def test_declaring_the_wrong_target_fails_closed() -> None:

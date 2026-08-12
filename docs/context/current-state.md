@@ -54,10 +54,22 @@ The Triton path intentionally normalizes Q/K in FP32. The eager fallback normali
 `/runtime/harness` adds the reproducibility layer around it: pinned dependencies in
 `runtime/pyproject.toml` (`torch==2.8.0`, `triton==3.4.0`), environment capture
 (versions, GPU identity, driver, commit, dirty flag), a versioned artifact schema
-with a content hash, and a one-command runner (`python -m harness.runner --target
-<name>`). Declaring a target whose GPU is not present fails closed, so an RTX
-measurement cannot be recorded as A10 or T4 evidence. 14 harness tests run without
-a GPU.
+(v2, with v1 still readable), and a one-command runner (`python -m harness.runner
+--target <name>`). Declaring a target whose GPU is not present fails closed, so an
+RTX measurement cannot be recorded as A10 or T4 evidence. 26 harness tests run
+without a GPU.
+
+A run records four phases in one artifact: single-step correctness, long-generation
+drift over a configurable number of decode steps (default 1024), a value-tile sweep
+carrying compiled-kernel registers/spills/shared-memory/warps, and the eager-versus-
+Triton microbenchmark.
+
+What the committed RTX 4070 artifacts show: drift stays bounded (worst output error
+~1.2e-4 over 1024 FP16 steps against a 2e-3 single-step tolerance, final state
+divergence ~0.06% relative), the kernel compiles with no spills at every tile, and
+the fastest value tile depends on batch — `block_v=8` degrades at batch 8 while 16
+and 32 differ within run-to-run noise at small batches, which is not enough evidence
+to change the default of 32.
 
 Committed artifacts exist only for the `rtx4070-dev` target and are labeled
 `citable_as_production: false` with an explicit claim scope. The RTX 4070 is

@@ -20,7 +20,11 @@ import pathlib
 import uuid
 from typing import Any
 
-SCHEMA_VERSION = 1
+#: Current artifact schema. v2 adds long-generation drift, compiled-kernel
+#: metadata, and the value-tile sweep. v1 artifacts stay readable so previously
+#: committed evidence remains verifiable.
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 #: Claim scope recorded on every artifact produced by the microbenchmark suite.
 MICROBENCH_CLAIM_SCOPE = (
@@ -108,6 +112,8 @@ def build_artifact(
     config: dict[str, Any],
     correctness: list[dict[str, Any]],
     measurements: list[dict[str, Any]],
+    drift: dict[str, Any] | None = None,
+    tile_sweep: list[dict[str, Any]] | None = None,
     claim_scope: str = MICROBENCH_CLAIM_SCOPE,
     run_id: str | None = None,
     created_at: dt.datetime | None = None,
@@ -125,6 +131,9 @@ def build_artifact(
         "config": config,
         "correctness": correctness,
         "measurements": measurements,
+        # ``None`` distinguishes "not run" from "ran and found nothing".
+        "drift": drift,
+        "tile_sweep": tile_sweep,
     }
     stamp = (created_at or dt.datetime.now(tz=dt.UTC)).astimezone(dt.UTC)
     return {
@@ -138,9 +147,10 @@ def build_artifact(
 def verify_artifact(artifact: dict[str, Any]) -> None:
     """Raise when an artifact is unsupported or its hash does not match."""
     version = artifact.get("schema_version")
-    if version != SCHEMA_VERSION:
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
         raise UnsupportedArtifactError(
-            f"artifact schema_version {version!r} is not supported (expected {SCHEMA_VERSION})"
+            f"artifact schema_version {version!r} is not supported "
+            f"(expected one of {sorted(SUPPORTED_SCHEMA_VERSIONS)})"
         )
     body = {
         key: value

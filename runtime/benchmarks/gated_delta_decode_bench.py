@@ -157,6 +157,98 @@ def benchmark(
     }
 
 
+def measure_drift(
+    batch: int,
+    heads: int,
+    key_dim: int,
+    value_dim: int,
+    dtype: torch.dtype,
+    block_v: int,
+    steps: int,
+    checkpoints: int = 8,
+    seed: int = 4242,
+) -> dict[str, object]:
+    """Track divergence between the Triton and eager recurrences over many steps.
+
+    Single-step agreement says little about a recurrence that runs for thousands
+    of decode steps: the Triton path normalizes Q/K in FP32 while the
+    authoritative reference normalizes in model dtype, so the two states can
+    separate progressively. Both paths consume identical per-step inputs and
+    carry their own FP32 state.
+    """
+    generator = torch.Generator(device="cuda")
+    generator.manual_seed(seed)
+
+    initial_state = (
+        torch.randn(
+            batch,
+            heads,
+            key_dim,
+            value_dim,
+            dtype=torch.float32,
+            device="cuda",
+            generator=generator,
+        )
+        * 0.05
+    )
+    reference_state = initial_state.clone()
+    triton_state = initial_state.clone()
+
+    every = max(1, steps // max(1, checkpoints))
+    samples: list[dict[str, float]] = []
+    worst_output = 0.0
+    worst_state = 0.0
+
+    for step in range(1, steps + 1):
+        q = torch.randn(
+            batch, heads, key_dim, dtype=dtype, device="cuda", generator=generator
+        )
+        k = torch.randn(
+            batch, heads, key_dim, dtype=dtype, device="cuda", generator=generator
+        )
+        v = torch.randn(
+            batch, heads, value_dim, dtype=dtype, device="cuda", generator=generator
+        )
+        g = -torch.rand(
+            batch, heads, dtype=torch.float32, device="cuda", generator=generator
+        )
+        beta = torch.rand(
+            batch, heads, dtype=torch.float32, device="cuda", generator=generator
+        )
+
+        reference_out = torch_gated_delta_decode_reference(q, k, v, g, beta, reference_state)
+        triton_out = gated_delta_decode(q, k, v, g, beta, triton_state, block_v=block_v)
+
+        output_error = (triton_out.float() - reference_out.float()).abs().max().item()
+        state_error = (triton_state - reference_state).abs().max().item()
+        worst_output = max(worst_output, output_error)
+        worst_state = max(worst_state, state_error)
+
+        if step % every == 0 or step == steps:
+            state_scale = reference_state.abs().max().item()
+            samples.append(
+                {
+                    "step": step,
+                    "output_max_abs": output_error,
+                    "state_max_abs": state_error,
+                    "state_max_rel": state_error / state_scale if state_scale else 0.0,
+                }
+            )
+
+    atol, _rtol = tolerances(dtype)
+    return {
+        "steps": steps,
+        "seed": seed,
+        "samples": samples,
+        "output_max_abs": worst_output,
+        "state_max_abs": worst_state,
+        "final_state_max_rel": samples[-1]["state_max_rel"] if samples else 0.0,
+        # Whether drift stayed inside the single-step tolerance for the whole run.
+        "within_single_step_atol": worst_output <= atol,
+        "single_step_atol": atol,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true")
@@ -166,6 +258,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--heads", type=int, default=8)
     parser.add_argument("--key-dim", type=int, default=64)
     parser.add_argument("--value-dim", type=int, default=64)
+    parser.add_argument(
+        "--drift-steps",
+        type=int,
+        default=0,
+        help="Run a long-generation drift check over this many decode steps",
+    )
     return parser.parse_args()
 
 
@@ -197,6 +295,22 @@ def main() -> None:
         print(
             f"correct batch={batch:<2} output_max_abs={errors['output_max_abs']:.6g} "
             f"state_max_abs={errors['state_max_abs']:.6g}"
+        )
+
+    if args.drift_steps:
+        drift = measure_drift(
+            args.batches[0],
+            args.heads,
+            args.key_dim,
+            args.value_dim,
+            dtype,
+            args.block_v,
+            steps=args.drift_steps,
+        )
+        print(
+            f"drift steps={drift['steps']} output_max_abs={drift['output_max_abs']:.6g} "
+            f"state_max_abs={drift['state_max_abs']:.6g} "
+            f"final_state_max_rel={drift['final_state_max_rel']:.6g}"
         )
 
     if args.check_only:

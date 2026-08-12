@@ -1,8 +1,8 @@
 # Benchmark and Research Plan
 
 **Status:** Partially implemented  
-**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema with a target/hardware guard, and a one-command runner producing RTX 4070 development artifacts.  
-**Planned:** Private-profile cross-GPU scripts, optimized FLA/vLLM baselines, full-model comparisons, drift and profiler suites, A10/T4 artifacts, and paper analysis.
+**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema (v2) with a target/hardware guard, long-generation drift, compiled-kernel metadata, a value-tile sweep, and a one-command runner producing RTX 4070 development artifacts.  
+**Planned:** Private-profile cross-GPU scripts, optimized FLA/vLLM baselines, full-model comparisons, full profiler capture, A10/T4 artifacts, and paper analysis.
 
 ## Existing local evidence
 
@@ -19,6 +19,10 @@ cd runtime
 .venv/bin/python -m harness.runner --target rtx4070-dev
 .venv/bin/python -m harness.runner --target rtx4070-dev --check-only   # correctness only
 .venv/bin/python -m harness.runner --target rtx4070-dev --dry-run      # print, do not write
+
+# Phase controls
+.venv/bin/python -m harness.runner --target rtx4070-dev --drift-steps 4096
+.venv/bin/python -m harness.runner --target rtx4070-dev --drift-steps 0 --sweep-block-v
 ```
 
 - Targets are `rtx4070-dev`, `a10-research`, and `t4-production`, matching the fixed environment roles below. Only the T4 release gate is marked `citable_as_production`.
@@ -30,6 +34,23 @@ cd runtime
 Artifact-contract fields recorded today: source Git SHA and dirty flag, GPU product, memory, and compute capability, driver, CUDA runtime, PyTorch, and Triton versions, dtype and kernel configuration, workload shapes, seeds, warmup, repetitions, and timestamps, plus raw correctness and kernel results.
 
 Still missing from the contract, pending the components that would supply them: signed image digest, model and tokenizer revision, GPU UUID, vLLM and FLA versions, and profiler summaries.
+
+## Suite phases
+
+A single run records four phases, all in one artifact:
+
+1. **Correctness** — single-step output and final-state comparison against the eager reference across seeds 0, 1, and 17.
+2. **Long-generation drift** — both recurrences run for N decode steps (default 1024) from a shared initial state on identical per-step inputs, sampling divergence at checkpoints. This is the phase that matters for a recurrence, because single-step agreement says nothing about accumulation, and the Triton path normalizes Q/K in FP32 while the authoritative reference normalizes in model dtype.
+3. **Value-tile sweep with compiled-kernel metadata** — every supported tile (8, 16, 32) is timed at every batch, and registers, spills, shared memory, warps, and stages are read from the compiled kernel. The sweep runs before other launches so each tile's metadata can be attributed to its own first compilation. Triton's compiled-kernel layout is an internal API, so every read is guarded and the artifact records `null` metadata rather than failing the run.
+4. **Microbenchmark** — eager versus Triton latency, speedup, and state-only effective bandwidth per batch.
+
+### Observations from the committed RTX 4070 artifact
+
+- Drift stays bounded: worst output error ~1.2e-4 over 1024 FP16 steps against a 2e-3 single-step tolerance, with final state divergence ~0.06% relative. The gated decay (`g < 0`) shrinks the state each step, which bounds accumulation rather than compounding it. This is a negative result — no numerical problem found at these synthetic shapes.
+- The kernel compiles without spills at every tile (37–40 registers, 128–1024 B shared).
+- Tile choice is batch-dependent. `block_v=8` degrades clearly at batch 8, while 16 and 32 differ by only a few percent at small batches, which is inside run-to-run variance on this GPU. One run is therefore not sufficient evidence to retune the kernel default, and the default remains 32.
+
+Metrics still not captured: occupancy, DRAM utilization, warp efficiency, and compile/first-use latency. Those need a profiler pass rather than compiled-kernel metadata.
 
 ## Evidence objective
 
