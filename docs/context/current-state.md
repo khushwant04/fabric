@@ -52,8 +52,31 @@ mid-generation fallback keeps the recurrence valid. Fallbacks are counted per
 deployment and exposed through `GatedDeltaDecoder.telemetry()`.
 
 Not implemented: the private-profile dispatch boundary, hardware-profile tile and
-warp selection, and any model host that calls this layer. 61 runtime tests pass,
+warp selection, and any model host that calls this layer. 70 runtime tests pass,
 with the Triton-path tests skipped when no GPU is present.
+
+The kernel also accepts `state_indices`, making the recurrent state a slot-addressed
+cache rather than a dense per-batch tensor, so a serving host passes its cache
+directly with no gather or scatter. The eager reference accepts the same argument.
+
+### vLLM integration
+
+`/serving` pins `vllm==0.11.0` — the newest release on `torch==2.8.0`, which keeps
+the serving host on the same toolchain as the kernels and the committed artifacts.
+`serving/fabric_serving/vllm_gated_delta.py` implements vLLM's
+`fused_recurrent_gated_delta_rule` signature backed by Fabric dispatch, claiming
+only the single-token decode step and delegating prefill, speculative multi-token
+steps, and every other shape to vLLM's own implementation. 17 serving tests pass.
+
+Measured on the development GPU against vLLM's own decode kernel, on identical
+inputs with a shuffled slot table: outputs agree to ≤1.5e-5 in FP16 and are often
+bit-identical, and Fabric is 1.03–1.12x at one sequence, 1.12–1.22x at four, and
+1.34–1.41x at sixteen across three runs. This is a kernel-level comparison on a
+development GPU, not a full-model or production result.
+
+Not implemented: registering the substitution inside a running vLLM instance, and
+any full-model or serving-level measurement, which need weights for a gated-delta
+architecture that fit this GPU.
 
 ### Benchmark prototype
 
@@ -132,7 +155,7 @@ The repository currently has no implementation of:
 
 - An inference ingress, router, or authorization layer.
 - An OpenAI-compatible serving endpoint.
-- vLLM or SGLang integration.
+- A running vLLM host; the Fabric decode-op substitution exists and is verified against vLLM's kernel, but nothing registers it in a live instance and no model weights are loaded.
 - A Kubernetes CRD, operator, or cluster agent.
 - Managed-serverless infrastructure provisioning or the BYOI Helm bundle.
 - AKS or k3s deployment manifests.

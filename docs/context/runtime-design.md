@@ -1,8 +1,8 @@
 # Fabric Runtime Design
 
 **Status:** Partially implemented  
-**Implemented:** One shape-generic Triton recurrence, a configurable synthetic harness with a versioned artifact pipeline, and the host-facing kernel dispatch/fallback layer.  
-**Planned:** vLLM host integration, private-profile dispatch, additional kernels, target-GPU profiles, serving, and rollout controls.
+**Implemented:** One shape-generic Triton recurrence with paged-state addressing, a configurable synthetic harness with a versioned artifact pipeline, the host-facing kernel dispatch/fallback layer, and a vLLM decode-op substitution verified against vLLM's own kernel.  
+**Planned:** Registering the substitution in a running vLLM host, private-profile dispatch, additional kernels, target-GPU profiles, serving surface, and rollout controls.
 
 ## Private target execution focus
 
@@ -64,7 +64,49 @@ Design points that follow from the safety requirements below:
 
 Not yet implemented: the private-profile dispatch boundary (exact model, shape,
 and revision checks), hardware-profile selection of tile and warp configuration,
-and the vLLM host that would call this layer.
+and an OpenAI-compatible serving surface.
+
+### Paged recurrent state
+
+A serving host stores recurrent state in a slot-addressed cache, not a dense
+per-batch tensor. `gated_delta_decode` therefore accepts `state_indices`: the
+state argument becomes a `[slots, heads, key_dim, value_dim]` cache and each
+sequence's slot is looked up inside the kernel. A host passes its cache directly,
+with no gather before the call and no scatter after it, which matters because
+copying the addressed slots would move as many bytes as the kernel itself does.
+The eager reference accepts the same argument, so the fallback path has identical
+effects on the cache.
+
+### vLLM substitution
+
+`serving/fabric_serving/vllm_gated_delta.py` implements vLLM 0.11.0's
+`fused_recurrent_gated_delta_rule` signature backed by Fabric dispatch. vLLM's
+Qwen3-Next layer calls that op for decode with its whole cache, one slot index per
+sequence, and ragged `cu_seqlens`.
+
+The adapter claims only the single-token decode step it implements and delegates
+prefill, speculative multi-token steps, callers that normalize outside the kernel,
+and any other shape to vLLM's own implementation. Delegations are counted with the
+reason retained.
+
+Two findings from building it:
+
+- **The Fabric kernel and vLLM's kernel compute the same function.** On identical
+  inputs with a shuffled slot table, outputs agree to ≤1.5e-5 in FP16 and are
+  frequently bit-identical, and both agree with the eager reference. That makes a
+  latency comparison between them meaningful, and it is the plan's "pinned
+  standard vLLM" baseline at the kernel level.
+- **Gating must not touch device memory.** The first version of the adapter
+  validated `cu_seqlens` values with `torch.all(...)`, which forced a device
+  synchronization on every call and cost ~0.2 ms — roughly twenty times the kernel
+  it was dispatching, making the substitution 5–20x *slower* than the op it
+  replaced. One token per sequence is now inferred from shapes alone. A test
+  patches `torch.all` to fail so this cannot regress.
+
+Not implemented: registering the adapter into a running vLLM instance, and any
+full-model or serving-level measurement. Those need model weights for a
+gated-delta architecture; the smallest public Qwen3-Next checkpoint does not fit
+this development GPU.
 
 ## Planned runtime host
 
