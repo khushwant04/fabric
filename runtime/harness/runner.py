@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 from typing import Any
 
 RUNTIME_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -72,6 +75,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip the optimized-library baseline comparison",
     )
     parser.add_argument(
+        "--no-profile",
+        dest="profile",
+        action="store_false",
+        help="Skip occupancy, bandwidth utilization, and compile-latency profiling",
+    )
+    parser.add_argument(
+        "--no-compile-probe",
+        dest="compile_probe",
+        action="store_false",
+        help="Skip the cold/warm first-use latency subprocesses",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="Print the artifact instead of writing it"
     )
     parser.add_argument("--artifact-root", type=pathlib.Path, default=DEFAULT_ARTIFACT_ROOT)
@@ -95,6 +110,8 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
         "drift_batch": args.batches[0],
         "sweep_block_v": list(args.sweep_block_v),
         "baselines_requested": bool(args.baselines),
+        "profile_requested": bool(args.profile),
+        "compile_probe_requested": bool(args.compile_probe),
         "shapes_are_synthetic": True,
     }
 
@@ -176,6 +193,126 @@ def run_baselines(args: argparse.Namespace, dtype: Any) -> list[dict[str, Any]] 
     return [entry]
 
 
+def _compile_probe(args: argparse.Namespace, *, cache_dir: str | None) -> dict[str, Any] | None:
+    """Run the first-use probe in a fresh process, optionally with a cold cache."""
+    command = [
+        sys.executable,
+        "-m",
+        "harness.compile_probe",
+        "--dtype",
+        args.dtype,
+        "--block-v",
+        str(args.block_v),
+        "--heads",
+        str(args.heads),
+        "--key-dim",
+        str(args.key_dim),
+        "--value-dim",
+        str(args.value_dim),
+    ]
+    child_env = dict(os.environ)
+    if cache_dir is not None:
+        child_env["TRITON_CACHE_DIR"] = cache_dir
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argument vector, no shell
+            command,
+            cwd=RUNTIME_ROOT,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"error": str(exc)[:500]}
+    if completed.returncode != 0:
+        return {"error": (completed.stderr or "probe failed").strip()[:500]}
+    try:
+        return json.loads(completed.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"error": "probe produced no parsable result"}
+
+
+def compile_latency(args: argparse.Namespace) -> dict[str, Any]:
+    """Measure first-use latency with a cold Triton cache and with the normal one."""
+    with tempfile.TemporaryDirectory(prefix="fabric-triton-cache-") as cold_cache:
+        cold = _compile_probe(args, cache_dir=cold_cache)
+    warm = _compile_probe(args, cache_dir=None)
+    return {
+        "cold_cache": cold,
+        "warm_cache": warm,
+        "note": (
+            "cold_cache uses an isolated TRITON_CACHE_DIR so it includes "
+            "compilation; warm_cache reuses the on-disk cache."
+        ),
+    }
+
+
+def run_profile(
+    args: argparse.Namespace,
+    tile_sweep: list[dict[str, Any]] | None,
+    measurements: list[dict[str, Any]],
+    dtype: Any,
+) -> dict[str, Any]:
+    """Collect the profiling metrics obtainable without hardware counters."""
+    import torch
+
+    from harness import profiling
+
+    limits = profiling.device_limits(torch.cuda.get_device_properties(0))
+    element_size = torch.empty((), dtype=dtype).element_size()
+
+    occupancy = []
+    for entry in tile_sweep or []:
+        kernel = entry.get("kernel") or {}
+        occupancy.append(
+            {
+                "block_v": entry["block_v"],
+                "theoretical": profiling.theoretical_occupancy(
+                    registers=kernel.get("registers"),
+                    shared_memory_bytes=kernel.get("shared_memory_bytes"),
+                    num_warps=kernel.get("num_warps"),
+                    limits=limits,
+                ),
+            }
+        )
+
+    bandwidth: list[dict[str, Any]] = []
+    if measurements:
+        copy_bandwidth = profiling.measure_copy_bandwidth()
+        for entry in measurements:
+            moved = profiling.bytes_moved(
+                batch=entry["batch"],
+                heads=args.heads,
+                key_dim=args.key_dim,
+                value_dim=args.value_dim,
+                element_size=element_size,
+            )
+            bandwidth.append(
+                {
+                    "batch": entry["batch"],
+                    "bytes_per_launch": moved,
+                    **profiling.utilization(
+                        bytes_per_launch=moved,
+                        launch_ms=entry["triton_ms"],
+                        copy_bandwidth_gbps=copy_bandwidth,
+                    ),
+                }
+            )
+
+    return {
+        "device_limits": limits,
+        "occupancy": occupancy,
+        "bandwidth": bandwidth,
+        "compile_latency": compile_latency(args) if args.compile_probe else None,
+        # Counter-based metrics are recorded as absent with the reason, not omitted.
+        "counter_metrics": {
+            metric: None for metric in profiling.COUNTER_ONLY_METRICS
+        },
+        "counter_metrics_unavailable_reason": profiling.COUNTER_METRICS_UNAVAILABLE,
+    }
+
+
 def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
     """Execute the suite phases and assemble the artifact."""
     import torch
@@ -195,6 +332,7 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
     tile_sweep: list[dict[str, Any]] | None = None
     drift: dict[str, Any] | None = None
     baselines: list[dict[str, Any]] | None = None
+    profile: dict[str, Any] | None = None
     status = "pass"
 
     try:
@@ -229,6 +367,9 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
                         batch, args.heads, args.key_dim, args.value_dim, dtype, args.block_v
                     )
                 )
+
+        if args.profile and not args.check_only:
+            profile = run_profile(args, tile_sweep, measurements, dtype)
     except AssertionError as exc:
         status = "fail"
         correctness.append({"error": str(exc)[:2000]})
@@ -244,6 +385,7 @@ def run_suite(args: argparse.Namespace, target: Target) -> dict[str, Any]:
         drift=drift,
         tile_sweep=tile_sweep,
         baselines=baselines,
+        profile=profile,
     )
 
 
@@ -313,6 +455,34 @@ def main(argv: list[str] | None = None) -> int:
             )
     if artifact["config"]["baselines_requested"] and not artifact["baselines"]:
         print("baseline: no optimized library installed; comparison not run")
+
+    profile = artifact["profile"]
+    if profile:
+        for entry in profile["occupancy"]:
+            theoretical = entry["theoretical"] or {}
+            print(
+                f"occupancy block_v={entry['block_v']:<3} "
+                f"theoretical={theoretical.get('occupancy', 0):.0%} "
+                f"warps/SM={theoretical.get('active_warps_per_sm')}/"
+                f"{theoretical.get('max_warps_per_sm')} "
+                f"limited_by={theoretical.get('limited_by')}"
+            )
+        for entry in profile["bandwidth"]:
+            print(
+                f"bandwidth batch={entry['batch']:<3} "
+                f"achieved={entry['achieved_gbps']:.1f}GB/s "
+                f"of_copy_bw={entry['fraction_of_copy_bandwidth']:.0%}"
+            )
+        latency = profile["compile_latency"]
+        if latency:
+            cold = latency["cold_cache"] or {}
+            warm = latency["warm_cache"] or {}
+            print(
+                f"first_use cold={cold.get('first_call_ms', float('nan')):.0f}ms "
+                f"warm={warm.get('first_call_ms', float('nan')):.0f}ms "
+                f"steady={warm.get('steady_state_ms', float('nan')):.4f}ms"
+            )
+        print(f"counter metrics: not collected ({profile['counter_metrics_unavailable_reason']})")
     return 0 if artifact["status"] == "pass" else 1
 
 

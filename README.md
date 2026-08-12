@@ -80,8 +80,9 @@ Declaring a target that does not match the GPU present fails closed, so a
 development measurement cannot be recorded as A10 or T4 evidence. Every artifact
 records its environment, configuration, and a content hash, and states its own
 claim scope. One run covers single-step correctness, long-generation drift, a
-value-tile sweep with compiled-kernel metadata, eager-versus-Triton timing, and a
-comparison against the pinned optimized baseline.
+value-tile sweep with compiled-kernel metadata, eager-versus-Triton timing, a
+comparison against the pinned optimized baseline, and a profile pass for occupancy,
+bandwidth utilization, and cold/warm first-use latency.
 
 The underlying script can also be driven directly:
 

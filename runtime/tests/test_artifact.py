@@ -90,10 +90,10 @@ def test_unknown_schema_version_is_rejected() -> None:
         verify_artifact(artifact)
 
 
-def test_current_schema_is_v3_and_older_versions_remain_readable() -> None:
+def test_current_schema_is_v4_and_older_versions_remain_readable() -> None:
     """Bumping the schema must not invalidate already-committed evidence."""
-    assert SCHEMA_VERSION == 3
-    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2, 3})
+    assert SCHEMA_VERSION == 4
+    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2, 3, 4})
 
     # A v1 body carries no drift, tile_sweep, or baselines keys and must verify.
     v1_body = {
@@ -126,8 +126,37 @@ def test_current_schema_is_v3_and_older_versions_remain_readable() -> None:
     }
     verify_artifact(v2_artifact)
 
+    v3_body = {**v2_body, "schema_version": 3, "baselines": None}
+    v3_artifact = {
+        **v3_body,
+        "run_id": "2" * 32,
+        "created_at": "2026-08-12T12:57:21Z",
+        "content_hash": content_hash(v3_body),
+    }
+    verify_artifact(v3_artifact)
 
-def test_v3_records_the_baseline_comparison() -> None:
+
+def test_v4_records_the_profile_section() -> None:
+    profile = {
+        "device_limits": {"multiprocessors": 36},
+        "occupancy": [{"block_v": 32, "theoretical": {"occupancy": 1.0}}],
+        "bandwidth": [{"batch": 8, "fraction_of_copy_bandwidth": 0.55}],
+        "compile_latency": {"cold_cache": {"first_call_ms": 1116.0}},
+        "counter_metrics": {"achieved_occupancy": None},
+        "counter_metrics_unavailable_reason": "ERR_NVGPUCTRPERM",
+    }
+    artifact = _artifact(profile=profile)
+    assert artifact["schema_version"] == 4
+    assert artifact["profile"] == profile
+    verify_artifact(artifact)
+
+    # Profiling results are covered by the hash like every other section.
+    artifact["profile"]["bandwidth"][0]["fraction_of_copy_bandwidth"] = 0.99
+    with pytest.raises(UnsupportedArtifactError, match="content_hash"):
+        verify_artifact(artifact)
+
+
+def test_baseline_comparison_is_recorded() -> None:
     baseline = [
         {
             "name": "flash-linear-attention:fused_recurrent_gated_delta_rule",
@@ -140,7 +169,7 @@ def test_v3_records_the_baseline_comparison() -> None:
         }
     ]
     artifact = _artifact(baselines=baseline)
-    assert artifact["schema_version"] == 3
+    assert artifact["schema_version"] == SCHEMA_VERSION
     assert artifact["baselines"] == baseline
     verify_artifact(artifact)
 

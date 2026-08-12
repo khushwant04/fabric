@@ -1,0 +1,416 @@
+{
+  "baselines": [
+    {
+      "equivalence": {
+        "atol": 0.002,
+        "output_max_abs": 1.52587890625e-05,
+        "output_max_abs_vs_fabric": 0.0,
+        "state_max_abs": 0.0005400776863098145,
+        "state_max_abs_vs_fabric": 5.960464477539063e-08,
+        "within_atol": true
+      },
+      "name": "flash-linear-attention:fused_recurrent_gated_delta_rule",
+      "timings": [
+        {
+          "baseline_ms": 0.009901736569931594,
+          "batch": 1,
+          "fabric_ms": 0.009772216955729137,
+          "fabric_speedup_vs_baseline": 1.0132538619219382
+        },
+        {
+          "baseline_ms": 0.00993790883174946,
+          "batch": 2,
+          "fabric_ms": 0.010711619019653503,
+          "fabric_speedup_vs_baseline": 0.9277690714648782
+        },
+        {
+          "baseline_ms": 0.013947203430313242,
+          "batch": 4,
+          "fabric_ms": 0.013288739866386819,
+          "fabric_speedup_vs_baseline": 1.0495504894028345
+        },
+        {
+          "baseline_ms": 0.020555560851609835,
+          "batch": 8,
+          "fabric_ms": 0.015437723882094925,
+          "fabric_speedup_vs_baseline": 1.3315149959023889
+        }
+      ],
+      "version": "0.5.2"
+    }
+  ],
+  "citable_as_production": false,
+  "claim_scope": "Single-kernel microbenchmark against the local eager reference. Not a full-model, optimized-baseline, or production performance claim.",
+  "config": {
+    "baselines_requested": true,
+    "batches": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "benchmark_reps": 500,
+    "benchmark_warmup": 100,
+    "block_v": 32,
+    "compile_probe_requested": true,
+    "correctness_seeds": [
+      0,
+      1,
+      17
+    ],
+    "drift_batch": 1,
+    "drift_steps": 1024,
+    "dtype": "float16",
+    "heads": 8,
+    "key_dim": 64,
+    "profile_requested": true,
+    "shapes_are_synthetic": true,
+    "state_dtype": "float32",
+    "sweep_block_v": [
+      8,
+      16,
+      32
+    ],
+    "value_dim": 64
+  },
+  "content_hash": "4c58d19539ac63c60ab96cde4bdbba65e2e960f90eb8fbe81a9b226241a45cec",
+  "correctness": [
+    {
+      "batch": 1,
+      "output_max_abs": 3.0517578125e-05,
+      "state_max_abs": 0.00048285722732543945
+    },
+    {
+      "batch": 2,
+      "output_max_abs": 6.103515625e-05,
+      "state_max_abs": 0.0005728602409362793
+    },
+    {
+      "batch": 4,
+      "output_max_abs": 6.103515625e-05,
+      "state_max_abs": 0.0005949735641479492
+    },
+    {
+      "batch": 8,
+      "output_max_abs": 6.103515625e-05,
+      "state_max_abs": 0.0005911588668823242
+    }
+  ],
+  "created_at": "2026-08-12T13:21:28.098337Z",
+  "drift": {
+    "final_state_max_rel": 0.0005457071435209787,
+    "output_max_abs": 0.0001220703125,
+    "samples": [
+      {
+        "output_max_abs": 3.0517578125e-05,
+        "state_max_abs": 0.0003052651882171631,
+        "state_max_rel": 0.0003615780263353624,
+        "step": 128
+      },
+      {
+        "output_max_abs": 6.103515625e-05,
+        "state_max_abs": 0.000605463981628418,
+        "state_max_rel": 0.0005152523940367068,
+        "step": 256
+      },
+      {
+        "output_max_abs": 3.0517578125e-05,
+        "state_max_abs": 0.00020864605903625488,
+        "state_max_rel": 0.0003598377671863524,
+        "step": 384
+      },
+      {
+        "output_max_abs": 6.103515625e-05,
+        "state_max_abs": 0.0003922581672668457,
+        "state_max_rel": 0.0004546138120946616,
+        "step": 512
+      },
+      {
+        "output_max_abs": 6.103515625e-05,
+        "state_max_abs": 0.000658869743347168,
+        "state_max_rel": 0.0006144214622185828,
+        "step": 640
+      },
+      {
+        "output_max_abs": 3.0517578125e-05,
+        "state_max_abs": 0.000422060489654541,
+        "state_max_rel": 0.0005002638731204781,
+        "step": 768
+      },
+      {
+        "output_max_abs": 3.0517578125e-05,
+        "state_max_abs": 0.0004142969846725464,
+        "state_max_rel": 0.00033210656689701065,
+        "step": 896
+      },
+      {
+        "output_max_abs": 3.0517578125e-05,
+        "state_max_abs": 0.0003821849822998047,
+        "state_max_rel": 0.0005457071435209787,
+        "step": 1024
+      }
+    ],
+    "seed": 4242,
+    "single_step_atol": 0.002,
+    "state_max_abs": 0.0009746551513671875,
+    "steps": 1024,
+    "within_single_step_atol": true
+  },
+  "environment": {
+    "cuda_available": true,
+    "driver_version": "592.82",
+    "fla_version": "0.5.2",
+    "git": {
+      "commit": "20e16c919fa8793670190cc33e7940236db33a5e",
+      "dirty": false
+    },
+    "gpu": {
+      "compute_capability": "8.9",
+      "memory_bytes": 8585216000,
+      "name": "NVIDIA GeForce RTX 4070 Laptop GPU"
+    },
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python_version": "3.12.3",
+    "torch_cuda_version": "12.8",
+    "torch_version": "2.8.0+cu128",
+    "triton_version": "3.4.0",
+    "vllm_version": null
+  },
+  "measurements": [
+    {
+      "batch": 1,
+      "reference_ms": 0.24665772597141125,
+      "speedup": 28.0013180474582,
+      "state_bandwidth_gbps": 29.75936589589602,
+      "triton_ms": 0.008808789841726805
+    },
+    {
+      "batch": 2,
+      "reference_ms": 0.19432929111532418,
+      "speedup": 19.33124516610025,
+      "state_bandwidth_gbps": 52.15446321794946,
+      "triton_ms": 0.010052600825533206
+    },
+    {
+      "batch": 4,
+      "reference_ms": 0.22328340111003406,
+      "speedup": 18.16982732508548,
+      "state_bandwidth_gbps": 85.32853209200171,
+      "triton_ms": 0.012288691417654055
+    },
+    {
+      "batch": 8,
+      "reference_ms": 0.20630193496164553,
+      "speedup": 13.072680662949693,
+      "state_bandwidth_gbps": 132.88968134381864,
+      "triton_ms": 0.0157811500395892
+    }
+  ],
+  "profile": {
+    "bandwidth": [
+      {
+        "achieved_gbps": 30.231621458208824,
+        "batch": 1,
+        "bytes_per_launch": 266304,
+        "copy_bandwidth_gbps": 226.1138133284663,
+        "fraction_of_copy_bandwidth": 0.13370090492566494
+      },
+      {
+        "achieved_gbps": 52.982109728976496,
+        "batch": 2,
+        "bytes_per_launch": 532608,
+        "copy_bandwidth_gbps": 226.1138133284663,
+        "fraction_of_copy_bandwidth": 0.2343161125322828
+      },
+      {
+        "achieved_gbps": 86.68262256709451,
+        "batch": 4,
+        "bytes_per_launch": 1065216,
+        "copy_bandwidth_gbps": 226.1138133284663,
+        "fraction_of_copy_bandwidth": 0.38335836847426125
+      },
+      {
+        "achieved_gbps": 134.99852638467513,
+        "batch": 8,
+        "bytes_per_launch": 2130432,
+        "copy_bandwidth_gbps": 226.1138133284663,
+        "fraction_of_copy_bandwidth": 0.5970379447299324
+      }
+    ],
+    "compile_latency": {
+      "cold_cache": {
+        "block_v": 32,
+        "dtype": "float16",
+        "first_call_ms": 866.486511000403,
+        "steady_state_ms": 0.04469874000278651,
+        "triton_cache_dir": "/tmp/fabric-triton-cache-n67i213i"
+      },
+      "note": "cold_cache uses an isolated TRITON_CACHE_DIR so it includes compilation; warm_cache reuses the on-disk cache.",
+      "warm_cache": {
+        "block_v": 32,
+        "dtype": "float16",
+        "first_call_ms": 231.93278800135886,
+        "steady_state_ms": 0.04722917001345195,
+        "triton_cache_dir": "/home/khushwant/.triton"
+      }
+    },
+    "counter_metrics": {
+      "achieved_occupancy": null,
+      "dram_counters": null,
+      "warp_execution_efficiency": null
+    },
+    "counter_metrics_unavailable_reason": "Requires Nsight Compute with admin-enabled GPU performance counters (ERR_NVGPUCTRPERM when profiling is restricted to admin users).",
+    "device_limits": {
+      "max_threads_per_sm": 1536,
+      "multiprocessors": 36,
+      "registers_per_sm": 65536,
+      "shared_memory_per_sm": 102400,
+      "warp_size": 32
+    },
+    "occupancy": [
+      {
+        "block_v": 8,
+        "theoretical": {
+          "active_warps_per_sm": 48,
+          "blocks_per_sm": 12,
+          "is_upper_bound": true,
+          "limited_by": "threads",
+          "max_warps_per_sm": 48,
+          "occupancy": 1.0,
+          "threads_per_block": 128
+        }
+      },
+      {
+        "block_v": 16,
+        "theoretical": {
+          "active_warps_per_sm": 48,
+          "blocks_per_sm": 12,
+          "is_upper_bound": true,
+          "limited_by": "registers",
+          "max_warps_per_sm": 48,
+          "occupancy": 1.0,
+          "threads_per_block": 128
+        }
+      },
+      {
+        "block_v": 32,
+        "theoretical": {
+          "active_warps_per_sm": 48,
+          "blocks_per_sm": 6,
+          "is_upper_bound": true,
+          "limited_by": "registers",
+          "max_warps_per_sm": 48,
+          "occupancy": 1.0,
+          "threads_per_block": 256
+        }
+      }
+    ]
+  },
+  "run_id": "e67c8209a96e4634a437fc7e12c993a9",
+  "schema_version": 4,
+  "status": "pass",
+  "suite": "gated-delta-decode-microbench",
+  "target": "rtx4070-dev",
+  "target_role": "development and regression",
+  "tile_sweep": [
+    {
+      "block_v": 8,
+      "kernel": {
+        "name": "_gated_delta_decode_kernel",
+        "num_stages": 3,
+        "num_warps": 4,
+        "registers": 37,
+        "shared_memory_bytes": 128,
+        "spills": 0
+      },
+      "timings": [
+        {
+          "batch": 1,
+          "state_bandwidth_gbps": 25.8025444122764,
+          "triton_ms": 0.010159618207081797
+        },
+        {
+          "batch": 2,
+          "state_bandwidth_gbps": 48.39200424012246,
+          "triton_ms": 0.010834186519708267
+        },
+        {
+          "batch": 4,
+          "state_bandwidth_gbps": 79.40840783952062,
+          "triton_ms": 0.013204848561113402
+        },
+        {
+          "batch": 8,
+          "state_bandwidth_gbps": 68.07766450332431,
+          "triton_ms": 0.030805287098202284
+        }
+      ]
+    },
+    {
+      "block_v": 16,
+      "kernel": {
+        "name": "_gated_delta_decode_kernel",
+        "num_stages": 3,
+        "num_warps": 4,
+        "registers": 40,
+        "shared_memory_bytes": 256,
+        "spills": 0
+      },
+      "timings": [
+        {
+          "batch": 1,
+          "state_bandwidth_gbps": 28.413177997129576,
+          "triton_ms": 0.00922614147655299
+        },
+        {
+          "batch": 2,
+          "state_bandwidth_gbps": 48.113389633394284,
+          "triton_ms": 0.010896925034691486
+        },
+        {
+          "batch": 4,
+          "state_bandwidth_gbps": 85.65128638521652,
+          "triton_ms": 0.012242384723610935
+        },
+        {
+          "batch": 8,
+          "state_bandwidth_gbps": 118.0801354440941,
+          "triton_ms": 0.017760413232189354
+        }
+      ]
+    },
+    {
+      "block_v": 32,
+      "kernel": {
+        "name": "_gated_delta_decode_kernel",
+        "num_stages": 3,
+        "num_warps": 8,
+        "registers": 40,
+        "shared_memory_bytes": 1024,
+        "spills": 0
+      },
+      "timings": [
+        {
+          "batch": 1,
+          "state_bandwidth_gbps": 29.331801850591415,
+          "triton_ms": 0.008937193880392807
+        },
+        {
+          "batch": 2,
+          "state_bandwidth_gbps": 51.72674363066686,
+          "triton_ms": 0.010135724060719126
+        },
+        {
+          "batch": 4,
+          "state_bandwidth_gbps": 85.67710457157409,
+          "triton_ms": 0.01223869556800938
+        },
+        {
+          "batch": 8,
+          "state_bandwidth_gbps": 130.93260281008128,
+          "triton_ms": 0.01601703437486792
+        }
+      ]
+    }
+  ]
+}
