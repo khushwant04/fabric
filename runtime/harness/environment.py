@@ -90,6 +90,15 @@ def _gpu_state() -> dict[str, Any]:
     return state
 
 
+def _optional_version(module_name: str) -> str | None:
+    """Return an installed library's version without requiring it."""
+    try:
+        module = __import__(module_name)
+    except ImportError:
+        return None
+    return getattr(module, "__version__", "unknown")
+
+
 def capture() -> dict[str, Any]:
     """Return the immutable inputs describing this execution environment."""
     gpu = _gpu_state()
@@ -102,5 +111,8 @@ def capture() -> dict[str, Any]:
         "cuda_available": gpu.pop("cuda_available"),
         "gpu": gpu,
         "driver_version": _driver_version(),
+        # Baseline libraries named by the artifact contract; None when absent.
+        "fla_version": _optional_version("fla"),
+        "vllm_version": _optional_version("vllm"),
         "git": _git_state(),
     }

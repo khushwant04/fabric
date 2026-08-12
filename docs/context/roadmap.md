@@ -28,10 +28,11 @@ Exit requirement: none; this records the starting point.
 
 Implemented so far: pinned runtime dependencies, environment capture, the versioned
 artifact schema with a fail-closed target/hardware guard, the one-command runner,
-and correctness, long-generation drift, value-tile sweep with compiled-kernel
-metadata, and microkernel timing runs producing RTX 4070 artifacts. Still open:
-full-model runs, a profiler pass covering occupancy, DRAM utilization, and warp
-efficiency, and the optimized vLLM/FLA baselines.
+correctness, long-generation drift, value-tile sweep with compiled-kernel metadata,
+microkernel timing, and the pinned optimized FLA baseline with per-run equivalence
+checking, producing RTX 4070 artifacts. Still open: full-model runs, a profiler pass
+covering occupancy, DRAM utilization, and warp efficiency, and the vLLM baselines,
+which need the serving runtime from Phase 3.
 
 Exit requirement: one command per target produces auditable artifacts from immutable inputs.
 

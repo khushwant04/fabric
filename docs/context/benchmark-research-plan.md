@@ -1,8 +1,8 @@
 # Benchmark and Research Plan
 
 **Status:** Partially implemented  
-**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema (v2) with a target/hardware guard, long-generation drift, compiled-kernel metadata, a value-tile sweep, and a one-command runner producing RTX 4070 development artifacts.  
-**Planned:** Private-profile cross-GPU scripts, optimized FLA/vLLM baselines, full-model comparisons, full profiler capture, A10/T4 artifacts, and paper analysis.
+**Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema (v3) with a target/hardware guard, long-generation drift, compiled-kernel metadata, a value-tile sweep, a pinned optimized FLA baseline with equivalence checking, and a one-command runner producing RTX 4070 development artifacts.  
+**Planned:** Private-profile cross-GPU scripts, pinned standard and Fabric-enabled vLLM baselines, full-model comparisons, full profiler capture, A10/T4 artifacts, and paper analysis.
 
 ## Existing local evidence
 
@@ -23,6 +23,13 @@ cd runtime
 # Phase controls
 .venv/bin/python -m harness.runner --target rtx4070-dev --drift-steps 4096
 .venv/bin/python -m harness.runner --target rtx4070-dev --drift-steps 0 --sweep-block-v
+.venv/bin/python -m harness.runner --target rtx4070-dev --no-baselines
+```
+
+The optimized baseline requires the pinned extra:
+
+```bash
+uv pip install --python .venv/bin/python -e '.[dev,baselines]'
 ```
 
 - Targets are `rtx4070-dev`, `a10-research`, and `t4-production`, matching the fixed environment roles below. Only the T4 release gate is marked `citable_as_production`.
@@ -31,9 +38,9 @@ cd runtime
 - Artifacts land in `runtime/artifacts/<target>/<timestamp>-<commit>.json`, and a run from a dirty worktree is marked `-dirty` in the filename so non-reproducible runs are obvious.
 - Dependencies are pinned in [`runtime/pyproject.toml`](../../runtime/pyproject.toml) (`torch==2.8.0`, `triton==3.4.0`) so an artifact names the exact inputs that produced it.
 
-Artifact-contract fields recorded today: source Git SHA and dirty flag, GPU product, memory, and compute capability, driver, CUDA runtime, PyTorch, and Triton versions, dtype and kernel configuration, workload shapes, seeds, warmup, repetitions, and timestamps, plus raw correctness and kernel results.
+Artifact-contract fields recorded today: source Git SHA and dirty flag, GPU product, memory, and compute capability, driver, CUDA runtime, PyTorch, Triton, FLA, and vLLM versions (the last two as `null` when absent), dtype and kernel configuration, workload shapes, seeds, warmup, repetitions, and timestamps, plus raw correctness, drift, tile-sweep, baseline, and kernel results.
 
-Still missing from the contract, pending the components that would supply them: signed image digest, model and tokenizer revision, GPU UUID, vLLM and FLA versions, and profiler summaries.
+Still missing from the contract, pending the components that would supply them: signed image digest, model and tokenizer revision, GPU UUID, and profiler summaries.
 
 ## Suite phases
 
@@ -43,14 +50,19 @@ A single run records four phases, all in one artifact:
 2. **Long-generation drift** — both recurrences run for N decode steps (default 1024) from a shared initial state on identical per-step inputs, sampling divergence at checkpoints. This is the phase that matters for a recurrence, because single-step agreement says nothing about accumulation, and the Triton path normalizes Q/K in FP32 while the authoritative reference normalizes in model dtype.
 3. **Value-tile sweep with compiled-kernel metadata** — every supported tile (8, 16, 32) is timed at every batch, and registers, spills, shared memory, warps, and stages are read from the compiled kernel. The sweep runs before other launches so each tile's metadata can be attributed to its own first compilation. Triton's compiled-kernel layout is an internal API, so every read is guarded and the artifact records `null` metadata rather than failing the run.
 4. **Microbenchmark** — eager versus Triton latency, speedup, and state-only effective bandwidth per batch.
+5. **Optimized baseline** — flash-linear-attention's `fused_recurrent_gated_delta_rule`, pinned at 0.5.2 in the `baselines` extra. Every timing is paired with an equivalence check against the authoritative eager reference, because a latency comparison against something computing a different function is meaningless. When the library is absent the suite still runs and the artifact records `baselines: null`.
 
-### Observations from the committed RTX 4070 artifact
+### Observations from the committed RTX 4070 artifacts
 
+- **Speedup against the eager reference is not a performance claim.** The eager path is a readable formulation, not a tuned implementation, and the 11–24x figures against it say little. Against the pinned FLA baseline on this GPU, the Fabric kernel is at parity for batches 1–4 (ratios 0.92–1.08 across four runs, inside run-to-run variance) and reproducibly faster at batch 8 (1.16–1.25x). Outputs are numerically identical to FLA (0 max abs difference), so the comparison is like-for-like.
+- FLA returns a new state tensor while the Fabric kernel updates state in place, so the baseline timing includes an allocation the Fabric timing does not. That asymmetry favors Fabric and is not corrected for.
 - Drift stays bounded: worst output error ~1.2e-4 over 1024 FP16 steps against a 2e-3 single-step tolerance, with final state divergence ~0.06% relative. The gated decay (`g < 0`) shrinks the state each step, which bounds accumulation rather than compounding it. This is a negative result — no numerical problem found at these synthetic shapes.
 - The kernel compiles without spills at every tile (37–40 registers, 128–1024 B shared).
 - Tile choice is batch-dependent. `block_v=8` degrades clearly at batch 8, while 16 and 32 differ by only a few percent at small batches, which is inside run-to-run variance on this GPU. One run is therefore not sufficient evidence to retune the kernel default, and the default remains 32.
 
 Metrics still not captured: occupancy, DRAM utilization, warp efficiency, and compile/first-use latency. Those need a profiler pass rather than compiled-kernel metadata.
+
+Baselines still missing: pinned standard vLLM, vLLM with individual Fabric optimizations, and vLLM with the promoted kernel set. Those are serving-level comparisons and need the runtime integration that does not exist yet.
 
 ## Evidence objective
 
@@ -78,12 +90,12 @@ Benchmarks run through manually invoked, reproducible scripts on each machine. F
 
 At minimum compare:
 
-1. Authoritative eager/reference operation for kernel correctness.
-2. Pinned Transformers/FLA optimized path.
-3. Pinned standard vLLM deployment.
-4. vLLM with each Fabric optimization enabled individually.
-5. vLLM with the promoted Fabric kernel set.
-6. Optional two-A10 independent replicas versus tensor parallel two.
+1. Authoritative eager/reference operation for kernel correctness. **Implemented.**
+2. Pinned Transformers/FLA optimized path. **Implemented at the kernel level** (`flash-linear-attention==0.5.2`, `fused_recurrent_gated_delta_rule`), with equivalence verified against the eager reference on every run.
+3. Pinned standard vLLM deployment. Planned; needs the serving runtime.
+4. vLLM with each Fabric optimization enabled individually. Planned.
+5. vLLM with the promoted Fabric kernel set. Planned.
+6. Optional two-A10 independent replicas versus tensor parallel two. Planned.
 
 ## Workload matrix
 

@@ -64,6 +64,8 @@ install the CUDA build matching your host.
 cd runtime
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e '.[dev]'
+# Optional: pinned optimized baseline for like-for-like comparison
+uv pip install --python .venv/bin/python -e '.[dev,baselines]'
 
 # One command per target; writes a versioned artifact under runtime/artifacts/
 .venv/bin/python -m harness.runner --target rtx4070-dev
@@ -78,7 +80,8 @@ Declaring a target that does not match the GPU present fails closed, so a
 development measurement cannot be recorded as A10 or T4 evidence. Every artifact
 records its environment, configuration, and a content hash, and states its own
 claim scope. One run covers single-step correctness, long-generation drift, a
-value-tile sweep with compiled-kernel metadata, and eager-versus-Triton timing.
+value-tile sweep with compiled-kernel metadata, eager-versus-Triton timing, and a
+comparison against the pinned optimized baseline.
 
 The underlying script can also be driven directly:
 
@@ -87,7 +90,10 @@ python runtime/benchmarks/gated_delta_decode_bench.py --check-only --dtype float
 python runtime/benchmarks/gated_delta_decode_bench.py --dtype float16 --block-v 32
 ```
 
-These timings compare against the local eager reference, not optimized FLA/vLLM, and must not be treated as full-model or production results.
+Timings against the eager reference are not a performance claim: the reference is a
+readable formulation, not a tuned implementation. Against the pinned FLA baseline on
+the development GPU the kernel is at parity for small batches and modestly faster at
+batch 8. No A10 or T4 measurement exists, so nothing here is a production result.
 
 ## Run the frontend scaffold
 
