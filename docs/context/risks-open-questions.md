@@ -22,7 +22,13 @@ Items remain open until resolved by code, experiment, review, or a new ADR.
 | Token-key rotation or cache policy is wrong | Authentication outage or stale access | Single-writer persistent rotation, overlap, bounded TTL, rollback drills |
 | Local resource map is stale | Wrong authorization/routing | Versioned config, fail-closed updates, convergence/readiness conditions |
 | Single-node k3s is presented as HA | Incorrect reliability expectations | Explicit one-failure-domain status and separate-stamp failover |
-| Operator scope grows into workflow engine | Slow delivery and fragile controller | One intent CRD and narrow reconciliation responsibility |
+| Operator scope grows into workflow engine | Slow delivery and fragile controller | Keep enrollment/connectivity/status in the agent, telemetry in the collector, and one intent CRD in the operator |
+| Agent applies stale or wrong-tenant desired state | Unauthorized or incorrect deployment | Stamp-bound credentials, monotonic generations, ownership checks, idempotent acknowledgement |
+| Capability discovery leaks customer metadata | BYOI privacy exposure | Allowlisted bounded schema; exclude Secrets, arbitrary labels, files, and content |
+| Telemetry outage/backpressure reaches inference | Latency or availability loss | Separate async collector path, bounded queues, explicit drop policy, outage tests |
+| Central metrics labels cause tenant leakage/cardinality explosion | Security and operational failure | Ingestion ownership checks and bounded control-plane-issued labels |
+| Dashboard status and metrics disagree | Misleading customer view | Separate schemas, timestamps/freshness indicators, desired/observed generation, reconciliation rules |
+| Single cluster credential compromises all components | Large blast radius | Separate/scoped agent and telemetry credentials; distinct ServiceAccounts; revocation tests |
 | A10 research environment drifts from production | Misleading claims | Immutable image/model plus exact environment artifacts; T4 remains release gate |
 
 ## Security risk
@@ -37,8 +43,8 @@ Items remain open until resolved by code, experiment, review, or a new ADR.
 
 ## Open product questions
 
-1. What exact organization/workspace role model is sufficient for MVP?
-2. Are service principals distinct records or API keys owned by workspace identities?
+1. Which account roles and permission scopes are sufficient for MVP?
+2. Should all automation keys belong to service principals, or are explicitly labeled human development keys also allowed?
 3. Which OpenAI-compatible endpoints and fields are mandatory for first clients?
 4. What launch context/output/concurrency limits preserve useful T4 economics?
 5. Is explicit cluster selection sufficient for MVP, or is basic policy placement required?

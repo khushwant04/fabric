@@ -1,40 +1,16 @@
 # Benchmark and Research Plan
 
 **Status:** Partially implemented  
-**Implemented:** Local exact-shape correctness and microbenchmark harness.  
-**Planned:** Reproducible cross-GPU scripts, full-model comparisons, artifacts, and paper analysis.
+**Implemented:** Shape-generic synthetic correctness and microbenchmark harness.  
+**Planned:** Reproducible private-profile cross-GPU scripts, full-model comparisons, artifacts, and paper analysis.
 
 ## Existing local evidence
 
-The implemented harness was exercised interactively on an RTX 4070 Laptop GPU (SM89) using Python 3.12, `torch==2.8.0`, and `triton==3.4.0`. The numbers below are an **unverified anecdotal session record**, not release evidence. Raw machine-readable artifacts were not committed. The current harness can generate new eager-reference timing measurements, but it cannot reproduce or verify this historical timing table as the same run; it also cannot reproduce the compiler-resource capture, AST-extracted authoritative comparison, or 128-step drift check without additional scripts. The timing baseline is the local eager fallback, not optimized FLA/vLLM.
-
-Selected local configuration: `BLOCK_V=32`, 8 warps, 48 registers per thread, no spills, and 1,024 bytes shared memory.
-
-| Dtype | Batch | Triton ms | Speedup vs eager |
-|---|---:|---:|---:|
-| FP16 | 1 | 0.0189 | 19.91x |
-| FP16 | 2 | 0.0316 | 9.54x |
-| FP16 | 4 | 0.0657 | 5.97x |
-| FP16 | 8 | 0.1137 | 4.99x |
-| FP16 | 16 | 0.2132 | 4.43x |
-| BF16 | 1 | 0.0207 | 16.77x |
-| BF16 | 2 | 0.0343 | 10.74x |
-| BF16 | 4 | 0.0657 | 6.27x |
-| BF16 | 8 | 0.1117 | 5.22x |
-| BF16 | 16 | 0.2134 | 4.26x |
-
-Direct comparison against AST-extracted authoritative recurrence functions passed FP32/FP16/BF16 for batches 1, 2, 4, 8, and 16 across seeds 0, 1, and 17. Representative maximum final-state errors were `1.19e-7` for FP32, approximately `4.57e-4` for FP16, and approximately `3.77e-3` for BF16. In a 128-step recurrence, observed maxima were:
-
-| Dtype | Output max | State max |
-|---|---:|---:|
-| FP16 | 6.10e-5 | 5.73e-4 |
-| BF16 | 4.88e-4 | 4.33e-3 |
-
-These observations must be regenerated through the artifact contract before citation in release notes or a paper. No A10 or T4 performance claim exists yet.
+The public harness runs configurable synthetic dimensions and compares the Triton recurrence with its eager reference. Prior private-profile measurements, compiler metadata, dimensions, and drift results are intentionally not published here. No versioned release artifact or A10/T4 performance result exists, so no production or paper performance claim is made.
 
 ## Evidence objective
 
-Determine whether Fabric runtime changes improve Qwen3.5-2B under identical quality and latency constraints, and produce reproducible evidence suitable for engineering release decisions and a research paper.
+Determine whether Fabric runtime changes improve the private supported launch model under identical quality and latency constraints, and produce reproducible evidence suitable for engineering release decisions and a research paper.
 
 ## Environments
 
@@ -78,9 +54,9 @@ At minimum compare:
 
 ### Full model
 
-- Prompt lengths: 128, 512, 2K, 8K, and 32K where supported.
-- Output lengths: 32, 128, and 512.
-- Concurrency: 1, 2, 4, 8, 16, 32, and saturation.
+- Prompt profiles: short, medium, long, and stress, with exact private lengths supplied by non-public run configuration.
+- Output profiles: short, medium, and long, with exact private lengths supplied by non-public run configuration.
+- Concurrency profiles: serial, low, medium, high, and saturation, with values recorded only in run artifacts.
 - Warm and cold model conditions reported separately.
 - Streaming and cancellation included.
 

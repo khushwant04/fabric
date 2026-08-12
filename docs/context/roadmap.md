@@ -12,7 +12,7 @@ Environment roles remain fixed throughout this roadmap: RTX 4070 is for local de
 
 Implemented today:
 
-- Exact-shape Qwen3.5-2B single-token GatedDelta Triton kernel.
+- Shape-generic single-token gated-delta Triton kernel with no public private-profile constants.
 - Eager reference and local correctness/microbenchmark harness.
 - Next.js frontend scaffold with starter page/metadata and UI dependencies only; no Fabric platform workflow.
 
@@ -30,7 +30,7 @@ Exit requirement: one command per target produces auditable artifacts from immut
 
 ## Phase 2: Runtime integration and target validation — weeks 2–3
 
-- Integrate GatedDelta dispatch and fallback into the model host.
+- Integrate gated-delta dispatch and fallback into the model host.
 - Implement/profile causal-convolution fusion.
 - Prototype packed projections using established GEMM machinery.
 - Validate A10 FP16/BF16 and T4 FP16.
@@ -45,7 +45,7 @@ Exit requirement: correctness and full-model evidence show which kernels merit p
 - Immutable image/model packaging.
 - Direct runtime smoke and load tests.
 
-Exit requirement: one-GPU Qwen3.5-2B endpoint serves repeatable workloads with safe fallback.
+Exit requirement: one-GPU private launch-model endpoint serves repeatable workloads with safe fallback.
 
 ## Phase 4: Identity and direct data plane — weeks 3–5
 
@@ -56,23 +56,26 @@ Exit requirement: one-GPU Qwen3.5-2B endpoint serves repeatable workloads with s
 
 Exit requirement: inference needs no Auth0, database, or control API call after token issuance.
 
-## Phase 5: Operator and stamps — weeks 4–6
+## Phase 5: Operator, agent, and stamps — weeks 4–6
 
-- Versioned `FabricModelDeployment` CRD.
-- Cluster-local controller with conditions and rollback.
-- AKS T4 deployment profile.
-- A10 VM Docker benchmark flow, then optional k3s bootstrap and operator smoke.
+- Versioned `FabricModelDeployment` CRD and cluster-local operator with conditions/rollback.
+- Cluster-agent enrollment, bounded capability discovery, outbound desired-state pull, heartbeat, and status return.
+- Managed-serverless AKS stamp registration.
+- BYOI Helm bundle for CRDs, agent, operator, RBAC/policies, and optional collector configuration.
+- A10 VM Docker benchmark flow, then optional k3s enrollment and operator/agent smoke.
 
-Exit requirement: same intent deploys a healthy runtime to AKS and k3s; existing workloads survive controller/control-plane loss.
+Exit requirement: the same intent deploys a healthy runtime to managed AKS and enrolled k3s/BYOI; existing workloads survive agent/controller/control-plane loss.
 
-## Phase 6: Narrow internal MVP — weeks 4–6
+## Phase 6: Dashboard telemetry and narrow internal MVP — weeks 4–6
 
-- Minimal deployment/key/status UI and API.
-- Explicit cluster placement.
-- Observability, audit, usage events, and operator status.
-- End-to-end security, failure, and rollout tests.
+- Minimal deployment/key/stamp/status UI and API.
+- Managed-serverless selection and explicit BYOI placement.
+- Runtime/operator/agent/GPU metrics through a local collector to a central Prometheus-compatible test store.
+- Dashboard charts for capacity, readiness, request latency/throughput/errors, and GPU health.
+- Separate status, telemetry, and usage/audit schemas with bounded failure behavior.
+- End-to-end enrollment, tenant isolation, outage, telemetry-drop, rollout, and rollback tests.
 
-Exit requirement: an internal user can create a key, deploy, infer, inspect health, and rollback.
+Exit requirement: an internal user can enroll a stamp, create a key, deploy, infer, inspect central status/charts, and rollback without central telemetry becoming an inference dependency.
 
 ## Phase 7: Hardened production/research release — weeks 8–12
 

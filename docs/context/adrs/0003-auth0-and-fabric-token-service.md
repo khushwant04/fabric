@@ -1,7 +1,7 @@
 # ADR 0003: Use Auth0 and a Fabric Token Service
 
 **Decision status:** Accepted  
-**Implementation status:** Planned  
+**Implementation status:** Implemented in the control plane — Auth0 validation, membership resolution, API-key exchange, and RS256 Fabric JWT issuance with JWKS publication run in [`control-plane/`](../../../control-plane/). No data plane verifies the issued inference tokens yet.  
 **Date:** 2026-08-11
 
 ## Context
@@ -11,11 +11,12 @@ Fabric needs human login, service credentials, tenant authorization, and a data 
 ## Decision
 
 - Auth0 authenticates human users.
-- Fabric owns organizations/workspaces, memberships, service principals, roles/scopes, deployment ownership, and API keys.
+- Fabric owns accounts, account memberships, service principals, roles/scopes, deployment ownership, and API keys.
 - A Fabric token endpoint validates an Auth0 assertion or Fabric API key and issues a short-lived JWT.
 - Control and inference tokens use distinct audiences: `fabric-control` and `fabric-inference`.
 - Data planes verify Fabric JWTs locally using cached/published keys and local resource configuration.
 - API-key secrets are high entropy, shown once, and stored only as verifiers plus metadata.
+- Account ownership, enrollment tokens, and stamp credentials follow [ADR 0008](0008-account-scoped-tenancy-and-stamp-credentials.md).
 
 The STS pattern is conceptual; Fabric is not adopting an unrelated existing STS codebase or Hexel CIAM.
 

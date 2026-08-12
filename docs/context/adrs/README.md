@@ -12,6 +12,8 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0004](0004-local-operator-and-single-intent-crd.md) | Use one local operator and one intent CRD | Planned |
 | [0005](0005-t4-production-a10-research.md) | T4 production, A10 research, RTX development | Planned deployment; RTX prototype exists |
 | [0006](0006-defer-agent-aware-state.md) | Defer agent-aware session/state caching | Deferred |
+| [0007](0007-cluster-agent-and-central-telemetry.md) | Use an outbound cluster agent and asynchronous central telemetry | Planned |
+| [0008](0008-account-scoped-tenancy-and-stamp-credentials.md) | Use account-scoped tenancy and stamp credentials | Planned |
 
 ## ADR status vocabulary
 

@@ -12,7 +12,7 @@ Fabric must deploy the same runtime contract to T4 AKS and GPU VM/k3s stamps wit
 
 Run one Fabric operator in each Kubernetes cluster. Use one high-level `FabricModelDeployment` CRD for MVP. The operator reconciles inference workload, Service, configuration, GPU placement, network policy, disruption policy, readiness, rollout/rollback, and status.
 
-The operator does not execute research benchmarks or own global placement, human identity, billing, or inference proxying. Benchmark scripts remain external and manual/reproducible.
+The operator does not execute research benchmarks or own cluster enrollment, central connectivity, global placement, dashboard telemetry ingestion, human identity, billing, or inference proxying. Benchmark scripts remain external and manual/reproducible. A separate cluster agent delivers intent and returns status, while a collector exports metrics as decided in [ADR 0007](0007-cluster-agent-and-central-telemetry.md).
 
 ## Consequences
 

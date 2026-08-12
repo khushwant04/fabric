@@ -12,7 +12,7 @@ Inference is latency-sensitive and must survive central product-service outages.
 
 Fabric will separate:
 
-- A **control plane** for product identity mapping, organizations/workspaces, API keys, deployment intent, cluster registry/placement, and aggregated status.
+- A **control plane** for Auth0 identity mapping, accounts/memberships, API keys, deployment intent, stamp registry/placement, and aggregated status.
 - A **data plane** for TLS ingress, local JWT/resource authorization, queuing, model scheduling, GPU execution, streaming, and asynchronous telemetry.
 
 Normal inference goes directly to the target stamp and is never proxied by the control plane. Existing deployments continue serving valid already-issued tokens when Auth0, PostgreSQL, the control API, or the operator is unavailable.

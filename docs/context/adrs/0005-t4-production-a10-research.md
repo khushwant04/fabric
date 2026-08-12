@@ -34,7 +34,7 @@ The default two-A10 aggregate-throughput configuration is two independent one-GP
 
 - **Use A10 as the initial production target:** rejected because current production requirement is T4 AKS.
 - **Treat A10 as a node pool in the T4 AKS cluster:** impossible across Azure regions; separate clusters are required.
-- **Use tensor parallelism by default:** rejected because Qwen3.5-2B fits on one GPU and communication can harm latency.
+- **Use tensor parallelism by default:** rejected because the supported launch profile fits on one GPU and communication can harm latency.
 
 ## Verification
 
