@@ -74,6 +74,35 @@ itself and never holds the telemetry credential.
 breakdown. Usage is operational, not billing-grade: delivery is at-least-once and a
 stamp that never reports contributes nothing.
 
+### Operator and CRD
+
+`FabricModelDeployment` is the cluster's declaration of one deployment placed on this
+stamp. With the operator enabled the agent creates those resources instead of writing
+the data plane's file, and the operator renders the file from them and reports what it
+observed. The agent then forwards the operator's verdict upward, so the control plane
+learns what the cluster did rather than what the agent asked for.
+
+Neither process holds both kinds of authority: the agent has central credentials and
+can only declare intent, the operator has Kubernetes permissions and no Fabric
+credentials. Status is a subresource, so the writer of intent is not the writer of
+observation. The operator's ConfigMap permission is restricted by name to the one
+object it manages, and the data plane mounts no service-account token at all.
+
+The reported reason is `DataPlaneConfigurationRendered`, which is what actually
+happened. No model host is created, so a reason implying a running workload would be
+false.
+
+The operator is implemented against the Kubernetes REST API using only the standard
+library. controller-runtime would have added a large dependency tree to a module that
+otherwise has none and an image that is 21 MB; the cost is no informers or caches,
+which a controller reconciling a handful of objects on an interval does not need.
+
+Both modes are verified on a real cluster. Without the operator the agent writes the
+file itself, which is a working stamp with one fewer moving part and no Kubernetes
+permissions.
+
+Not implemented: a model-host workload, rollback, and progressive rollout.
+
 ### Packaging
 
 `/deploy` holds container images for the agent, data plane, and control plane, and a
@@ -321,7 +350,7 @@ The repository currently has no implementation of:
 
 - A running vLLM host; the Fabric decode-op substitution exists and is verified against vLLM's kernel, but nothing registers it in a live instance and no model weights are loaded.
 - Request quotas, rate limiting, or mTLS between the inference ingress and a model host.
-- A Kubernetes CRD or operator. The cluster agent exists in `/agent`; nothing reconciles Kubernetes resources.
+- A model-host workload. The CRD and operator exist and reconcile the data plane's configuration, but nothing starts vLLM because no host exists to start.
 - Managed-serverless infrastructure provisioning or the BYOI Helm bundle.
 - AKS or k3s deployment manifests.
 - Kubernetes stamp provisioning scripts. The A10 research-host scripts in `/scripts` are implemented and provision a bare Ubuntu 22.04 host through the Azure GRID driver and CUDA 12.8; nothing provisions a k3s or AKS stamp.

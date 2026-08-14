@@ -21,6 +21,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CLUSTER="${FABRIC_KIND_CLUSTER:-fabric-e2e}"
+# With the operator, the agent declares FabricModelDeployment resources and the
+# operator renders the data plane's configuration. Without it, the agent writes that
+# file itself. Both paths ship, so both are exercised.
+OPERATOR="${FABRIC_E2E_OPERATOR:-0}"
 WORK="$(mktemp -d)"
 CONTROL_PID=""
 KEEP="${FABRIC_KEEP_CLUSTER:-0}"
@@ -67,8 +71,11 @@ done
 
 # Both images must run unprivileged; a chart asking for runAsNonRoot against an
 # image that only works as root fails at admission, not at build.
-docker run --rm --entrypoint /usr/local/bin/fabric-collector fabric/agent:e2e --version >/dev/null
-info "collector binary starts"
+for binary in fabric-agent fabric-collector fabric-operator; do
+    docker run --rm --entrypoint "/usr/local/bin/$binary" fabric/agent:e2e --version >/dev/null \
+        || die "$binary is missing from the image"
+done
+info "agent, collector, and operator binaries start"
 
 # --------------------------------------------------------------------------
 log "2. Create the cluster and load the images"
@@ -202,8 +209,17 @@ info "deployment $DEPLOYMENT_ID and a single-use enrollment token created"
 log "4. Install the chart"
 # --------------------------------------------------------------------------
 
+OPERATOR_ARGS=()
+if [ "$OPERATOR" = "1" ]; then
+    OPERATOR_ARGS=(--set operator.enabled=true --set operator.interval=5s)
+    info "operator enabled: intent is declared as custom resources"
+else
+    info "operator disabled: the agent writes the data plane's file directly"
+fi
+
 helm install stamp "$REPO_ROOT/deploy/helm/fabric-stamp" \
     --kube-context "kind-$CLUSTER" \
+    "${OPERATOR_ARGS[@]}" \
     --set controlPlane.url="$CONTROL_URL" \
     --set controlPlane.jwtIssuer="$CONTROL_URL" \
     --set modelHost.url=http://stub-model-host:8000 \
@@ -250,6 +266,35 @@ done
 # do until this was found in a cluster.
 [ "$(served)" = "1" ] || die "the placement never reached the running data plane"
 info "the running data plane picked up the placement without a restart"
+
+if [ "$OPERATOR" = "1" ]; then
+    # --------------------------------------------------------------------------
+    log "5b. The declaration and the operator's verdict"
+    # --------------------------------------------------------------------------
+
+    DECLARED=$("${KUBECTL[@]}" get fabricmodeldeployments -o json \
+        | "$CONTROL_PY" -c "import json,sys;print(len(json.load(sys.stdin)['items']))")
+    [ "$DECLARED" = "1" ] || die "expected one declared deployment, found $DECLARED"
+    info "the agent declared a FabricModelDeployment"
+
+    # The operator writes the ConfigMap; the agent has no permission to.
+    RENDERED_BY=$("${KUBECTL[@]}" get configmap fabric-deployments \
+        -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}')
+    [ "$RENDERED_BY" = "fabric-operator" ] \
+        || die "configuration was not rendered by the operator (managed-by=$RENDERED_BY)"
+    info "the operator rendered the data plane's ConfigMap"
+
+    for _ in $(seq 1 40); do
+        APPLIED=$("${KUBECTL[@]}" get fabricmodeldeployments -o jsonpath=\
+'{.items[0].status.conditions[?(@.type=="Applied")].status}' 2>/dev/null || true)
+        [ "$APPLIED" = "True" ] && break
+        sleep 2
+    done
+    [ "$APPLIED" = "True" ] || die "the operator never reported Applied"
+    REASON=$("${KUBECTL[@]}" get fabricmodeldeployments -o jsonpath=\
+'{.items[0].status.conditions[?(@.type=="Applied")].reason}')
+    info "operator status: Applied=True reason=$REASON"
+fi
 
 # --------------------------------------------------------------------------
 log "6. Inference through the Service"
@@ -325,15 +370,34 @@ assert body['input_tokens'] >= 13, body
 print(f\"     usage: events={body['events']} input={body['input_tokens']} \"
       f\"output={body['output_tokens']} stamp={body['stamps'][0]['stamp_id'][:8]}\")"
 
-api GET "/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID/status" \
-    | "$CONTROL_PY" -c "
-import json, sys
+# The reason must name whoever actually applied the configuration: the operator when
+# one runs, otherwise the agent itself.
+if [ "$OPERATOR" = "1" ]; then
+    EXPECTED_REASON="DataPlaneConfigurationRendered"
+else
+    EXPECTED_REASON="AgentAppliedLocalConfiguration"
+fi
+
+# In a file rather than a heredoc: a heredoc is stdin, so it would displace the piped
+# response the checker is meant to read.
+cat > "$WORK/check_status.py" <<'PYSTATUS'
+import json
+import sys
+
+expected = sys.argv[1]
 rows = json.load(sys.stdin)
-assert rows, 'the agent reported no status'
+assert rows, "the agent reported no status"
 row = rows[0]
-assert row['phase'] == 'ready', row
-reason = row['conditions'][0]['reason'] if row.get('conditions') else None
-print(f\"     status: phase={row['phase']} generation={row['observed_generation']} reason={reason}\")"
+assert row["phase"] == "ready", row
+reason = row["conditions"][0]["reason"] if row.get("conditions") else None
+# The control plane must learn what the cluster did, not what the agent asked for.
+assert reason == expected, f"reason={reason} expected={expected}"
+print(f"     status: phase={row['phase']} generation={row['observed_generation']} "
+      f"reason={reason}")
+PYSTATUS
+
+api GET "/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID/status" \
+    | "$CONTROL_PY" "$WORK/check_status.py" "$EXPECTED_REASON"
 
 # --------------------------------------------------------------------------
 log "8. A restarted pod recovers on its own"

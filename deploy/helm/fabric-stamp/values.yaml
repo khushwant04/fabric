@@ -58,6 +58,20 @@ agent:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
 
+# The operator turns the agent's declarations into cluster state. With it enabled the
+# agent creates FabricModelDeployment resources and the operator renders the data
+# plane's configuration, which keeps central credentials and Kubernetes permissions in
+# separate processes. Disabled, the agent writes the configuration file itself.
+operator:
+  enabled: false
+  installCRD: true
+  # The ConfigMap the operator renders and the data plane mounts.
+  configMapName: fabric-deployments
+  interval: 15s
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+
 collector:
   enabled: true
   interval: 60s

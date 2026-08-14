@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/khushwant04/fabric/agent/internal/agentcontract"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
 	"github.com/khushwant04/fabric/agent/internal/state"
 )
@@ -751,5 +753,183 @@ func TestAnEmptyConfigurationIsNotTreatedAsLoss(t *testing.T) {
 	}
 	if stub.lastAfter == "0" {
 		t.Fatal("an empty configuration was mistaken for a lost one")
+	}
+}
+
+// recordingSink stands in for the cluster publisher.
+type recordingSink struct {
+	applies [][]state.Deployment
+	err     error
+}
+
+func (s *recordingSink) Apply(_ context.Context, deployments []state.Deployment) error {
+	if s.err != nil {
+		return s.err
+	}
+	copied := make([]state.Deployment, len(deployments))
+	copy(copied, deployments)
+	s.applies = append(s.applies, copied)
+	return nil
+}
+
+func TestAssignmentsGoToTheSinkWhenOneIsConfigured(t *testing.T) {
+	// With an operator present the agent declares intent instead of writing the data
+	// plane's file, so the process holding central credentials never mutates the file
+	// a serving component reads.
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments: []controlplane.DesiredDeployment{
+				assignment(deployA, customerA, "alpha-model", 1, "release-a"),
+			},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &recordingSink{}
+
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            sink,
+	}
+	instance := New(config, discardLogger())
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(sink.applies) != 1 || len(sink.applies[0]) != 1 {
+		t.Fatalf("the sink did not receive the assignment: %+v", sink.applies)
+	}
+	if sink.applies[0][0].AccountID != customerA {
+		t.Fatalf("owning account did not reach the sink: %+v", sink.applies[0][0])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "deployments.json")); !os.IsNotExist(err) {
+		t.Fatal("the agent wrote the data plane's file even though an operator owns it")
+	}
+}
+
+func TestASinkFailureFailsThePassRatherThanLosingTheAssignment(t *testing.T) {
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments: []controlplane.DesiredDeployment{
+				assignment(deployA, customerA, "alpha-model", 1, "release-a"),
+			},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            &recordingSink{err: errors.New("api server unavailable")},
+	}
+	instance := New(config, discardLogger())
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err == nil {
+		t.Fatal("a failed declaration must fail the pass so the generation is not acknowledged")
+	}
+}
+
+// observingSink reports a cluster verdict that appears only after the first pass,
+// which is what an operator reconciling asynchronously looks like.
+type observingSink struct {
+	recordingSink
+	observed map[string]agentcontract.ObservedCondition
+}
+
+func (s *observingSink) ObservedConditions(
+	_ context.Context,
+) (map[string]agentcontract.ObservedCondition, error) {
+	return s.observed, nil
+}
+
+func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
+	// An operator reconciles after the agent declares intent, so the first pass can
+	// only report what the agent did. When the cluster answers, the control plane must
+	// learn that instead, or it keeps the agent's placeholder forever.
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments: []controlplane.DesiredDeployment{
+				assignment(deployA, customerA, "alpha-model", 1, "release-a"),
+			},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &observingSink{}
+
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            sink,
+	}
+	instance := New(config, discardLogger())
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if len(stub.statuses) != 1 {
+		t.Fatalf("expected one status, got %d", len(stub.statuses))
+	}
+	first := stub.statuses[0].Conditions[0]["reason"]
+	if first != "AgentAppliedLocalConfiguration" {
+		t.Fatalf("the first report should be the agent's own view, got %v", first)
+	}
+
+	// The operator finishes reconciling.
+	sink.observed = map[string]agentcontract.ObservedCondition{
+		deployA: {
+			Reason:             "DataPlaneConfigurationRendered",
+			Message:            "rendered",
+			Applied:            true,
+			ObservedGeneration: 1,
+		},
+	}
+
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(stub.statuses) != 2 {
+		t.Fatalf("the operator's verdict was never forwarded: %d statuses", len(stub.statuses))
+	}
+	if got := stub.statuses[1].Conditions[0]["reason"]; got != "DataPlaneConfigurationRendered" {
+		t.Fatalf("forwarded reason = %v", got)
+	}
+
+	// A verdict that has not changed is not resent every pass.
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if len(stub.statuses) != 2 {
+		t.Fatalf("an unchanged verdict was resent: %d statuses", len(stub.statuses))
 	}
 }
