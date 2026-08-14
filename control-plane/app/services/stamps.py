@@ -23,6 +23,7 @@ from app.core.credentials import (
     verify_credential,
 )
 from app.core.errors import BadRequest, Forbidden, NotFound, Unauthorized
+from app.core.tenancy import declare_system
 from app.core.timeutil import is_expired, utc_now
 from app.models import (
     MODE_BYOI,
@@ -144,6 +145,9 @@ async def enroll_stamp(
     capabilities: StampCapabilities,
 ) -> tuple[InferenceStamp, str, str]:
     """Register a stamp and mint separate agent and telemetry credentials."""
+    # The enrollment token names the account; the caller presents no account-scoped
+    # credential, so the token has to be found before tenancy can be declared.
+    await declare_system(session)
     token = await _consume_enrollment_token(session, raw_token)
     settings = get_settings()
 

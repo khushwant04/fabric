@@ -51,6 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 from app.core.auth0 import Auth0Identity, get_auth0_verifier  # noqa: E402
 from app.core.database import Base, dispose_engine, get_session_factory  # noqa: E402
 from app.core.errors import Unauthorized  # noqa: E402
+from app.core.tenancy import reset_context, system_context  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -98,14 +99,31 @@ def migrated_database() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def reset_tenant_context() -> Iterator[None]:
+    """Clear any tenant context a previous test left behind.
+
+    The ASGI transport runs the application in the test's own task, so a context
+    variable a request declared is still visible to the test afterwards. Production
+    is unaffected, where each request is its own task, but a test that inherited the
+    previous request's account would assert isolation while running as a tenant.
+    """
+    reset_context()
+    yield
+    reset_context()
+
+
+@pytest.fixture(autouse=True)
 async def clean_tables() -> AsyncIterator[None]:
     """Remove all rows between tests without dropping the migrated schema."""
     yield
     factory = get_session_factory()
     async with factory() as session:
-        for table in reversed(Base.metadata.sorted_tables):
-            await session.execute(delete(table))
-        await session.commit()
+        # Cleanup spans every account, and row-level security would otherwise delete
+        # nothing at all and leave tests inheriting each other's rows.
+        with system_context():
+            for table in reversed(Base.metadata.sorted_tables):
+                await session.execute(delete(table))
+            await session.commit()
 
     if USING_POSTGRES:
         # Each test runs in its own event loop, and asyncpg connections are bound

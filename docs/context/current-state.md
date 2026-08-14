@@ -15,7 +15,34 @@ Authorization details that hold today: an API key can never carry a control scop
 
 Verified locally: `ruff` reports no findings, 55 tests pass against a database built by the real Alembic migration, `alembic upgrade → downgrade → upgrade` reproduces 16 application tables, the app imports with 35 routes, and `openapi.json` matches the running app at 24 paths and 38 schemas, which a test enforces.
 
-Not implemented in the service: PostgreSQL row-level security policies, outbox
+### Row-level security
+
+Account isolation is enforced twice. The services filter every query by an account
+taken from verified credentials, and PostgreSQL policies refuse to return or write
+another account's row even when the SQL does not filter. A handler that forgets its
+`WHERE account_id` returns nothing instead of another tenant's data, which tests
+assert by issuing deliberately unfiltered queries.
+
+The declared account travels as a transaction-local setting, re-applied whenever a
+transaction begins. Session-level settings were rejected because they survive the
+connection returning to the pool and would hand the next request another tenant's
+context; per-tenant database roles were rejected because accounts are created at
+runtime and a pool cannot switch roles safely.
+
+Reads that legitimately cross accounts are elevated one at a time and drop back
+afterwards: resolving shared managed capacity, which the Fabric system account owns,
+and listing the accounts a person belongs to. Machine paths stay elevated for their
+transaction, because a stamp's own account is not the tenancy of its work; they remain
+scoped by the stamp and placement checks, which have their own tests.
+
+`FORCE ROW LEVEL SECURITY` is applied as well as `ENABLE`, because a table's owner
+bypasses policies otherwise. That is still not sufficient: a superuser or any role
+with `BYPASSRLS` ignores policies entirely while the catalog reports them as enabled
+and forced. Managed providers hand out such roles by default, so the control plane
+checks its own role at startup and logs the gap, and
+`control-plane/scripts/create-app-role.sql` creates a role the policies bind.
+
+Not implemented in the service: outbox
 delivery workers, request idempotency (the `idempotency_keys` table has no handler),
 agent/telemetry credential rotation, and managed-capacity entitlement management
 through the API.

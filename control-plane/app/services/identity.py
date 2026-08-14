@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.credentials import PREFIX_API_KEY, parse_credential, verify_credential
 from app.core.errors import BadRequest, Forbidden, Unauthorized
 from app.core.jwt_service import issue_token
+from app.core.tenancy import declare_system, elevated
 from app.core.timeutil import is_expired, utc_now
 from app.models import (
     PRINCIPAL_SERVICE,
@@ -61,17 +62,23 @@ async def ensure_user(session: AsyncSession, identity: Auth0Identity) -> User:
 async def active_memberships(
     session: AsyncSession, user_id: uuid.UUID
 ) -> list[tuple[AccountMembership, Account]]:
-    """Return active memberships joined to active accounts."""
-    rows = await session.execute(
-        select(AccountMembership, Account)
-        .join(Account, Account.id == AccountMembership.account_id)
-        .where(
-            AccountMembership.user_id == user_id,
-            AccountMembership.status == "active",
-            Account.status == "active",
+    """Return active memberships joined to active accounts.
+
+    Elevated: a person may belong to several accounts, and this answers which. Scoping
+    it to one account would make the answer circular, since the account being asked
+    about is what the caller is trying to discover.
+    """
+    async with elevated(session):
+        rows = await session.execute(
+            select(AccountMembership, Account)
+            .join(Account, Account.id == AccountMembership.account_id)
+            .where(
+                AccountMembership.user_id == user_id,
+                AccountMembership.status == "active",
+                Account.status == "active",
+            )
+            .order_by(Account.slug)
         )
-        .order_by(Account.slug)
-    )
     return [(membership, account) for membership, account in rows.all()]
 
 
@@ -93,6 +100,9 @@ async def exchange_auth0_token(
     Selection rules: zero active memberships is an error, exactly one may be
     selected implicitly, and multiple require an explicit valid selection.
     """
+    # Runs before an account is known: the caller's accounts are discovered from
+    # memberships, which cannot be read under an account that is not yet known.
+    await declare_system(session)
     user = await ensure_user(session, identity)
     memberships = await active_memberships(session, user.id)
 
@@ -154,6 +164,9 @@ async def exchange_api_key(
     Any client-supplied account selector is ignored; the account and scopes come
     from the stored key record.
     """
+    # Runs before an account is known: the key is found by its hash, and only then
+    # does its owning account exist as a fact.
+    await declare_system(session)
     parsed = parse_credential(raw_key, expected_prefix=PREFIX_API_KEY)
     if parsed is None:
         raise Unauthorized("invalid_api_key", "API key is malformed")

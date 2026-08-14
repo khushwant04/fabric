@@ -1,6 +1,10 @@
 # Security and Identity Design
 
-**Status:** Implemented for the control plane and the inference ingress — the human flow, API-key flow, Fabric JWT contract, credential classes, and local inference-token verification described here run in [`control-plane/`](../../control-plane/) and [`data-plane/`](../../data-plane/). Telemetry ingestion authorization and cluster-side credential handling remain planned because those components do not exist yet.
+**Status:** Implemented for the control plane, the inference ingress, and the stamp — the human flow, API-key flow, Fabric JWT contract, credential classes, local inference-token verification, usage-ingestion authorization, and the agent's and collector's credential separation described here run in [`control-plane/`](../../control-plane/), [`data-plane/`](../../data-plane/), and [`agent/`](../../agent/).
+
+**Defence in depth:** PostgreSQL row-level security isolates accounts behind the service checks, so an unfiltered query returns nothing rather than another tenant's rows. It binds only to a database role without `BYPASSRLS`, which the control plane verifies at startup. See [Current State](current-state.md) for the context model and the paths that are deliberately elevated.
+
+**Not implemented:** machine-credential rotation, mTLS between the data plane and a model host, and quotas or rate limiting.
 
 ## Trust model
 

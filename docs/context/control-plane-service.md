@@ -205,6 +205,9 @@ then use the returned control token as `Authorization: Bearer <token>`.
   telemetry credential; ownership comes from that credential and the placement.
   `GET /v1/accounts/{account_id}/deployments/{deployment_id}/usage` reads totals back.
   The `fabric-collector` binary performs the drain-and-forward.
+- Row-level security policies isolate accounts in PostgreSQL as defence in depth
+  behind the service checks. They require a database role without `BYPASSRLS`; the
+  control plane checks its role at startup and logs loudly when policies cannot bind.
 - Outbox delivery workers are defined in the schema but have no publisher yet.
 - Pooled PostgreSQL connections are recycled below the usual idle timeout. Managed
   offerings close idle connections, and pre-ping alone leaves a race in which a

@@ -75,6 +75,11 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Return the process-wide session factory."""
     global _session_factory
     if _session_factory is None:
+        # Registered here so every entry point gets tenant context applied: the API,
+        # the CLI, and the tests all obtain sessions from this factory.
+        from app.core.tenancy import install_session_context
+
+        install_session_context()
         _session_factory = async_sessionmaker(
             bind=get_engine(),
             expire_on_commit=False,
