@@ -23,6 +23,7 @@ def test_capture_reports_versions_and_repository_state() -> None:
         "driver_version",
         "fla_version",
         "vllm_version",
+        "thermal",
         "git",
     }
     assert captured["python_version"].startswith("3.")
