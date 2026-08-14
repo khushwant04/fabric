@@ -36,13 +36,33 @@ def _command_output(args: list[str]) -> str | None:
     return completed.stdout.strip() or None
 
 
+#: Paths whose contents can change a measurement. Scoped deliberately: an artifact
+#: is marked dirty to say "this result does not correspond to any commit", and an
+#: edit to the frontend or to documentation cannot change a kernel timing. Checking
+#: the whole tree marked every artifact dirty on any machine with unrelated work in
+#: progress, which made the flag useless precisely when it mattered.
+MEASUREMENT_PATHS = ("runtime", "serving")
+
+
 def _git_state() -> dict[str, Any]:
     commit = _command_output(["git", "rev-parse", "HEAD"])
-    status = _command_output(["git", "status", "--porcelain"])
+    # Untracked artifacts are excluded: writing a result must not make the result
+    # that is being written look untrustworthy.
+    status = _command_output(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            *MEASUREMENT_PATHS,
+        ]
+    )
     return {
         "commit": commit,
         # ``None`` status means git was unavailable, which is not the same as clean.
         "dirty": None if status is None and commit is None else bool(status),
+        "dirty_scope": list(MEASUREMENT_PATHS),
     }
 
 
