@@ -9,6 +9,7 @@ module only fixes the inputs, records the environment, and writes the artifact.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import pathlib
@@ -69,6 +70,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Value tiles to sweep with compiled-kernel metadata (empty disables)",
     )
     parser.add_argument(
+        "--vllm-sequences",
+        type=int,
+        nargs="+",
+        default=[1, 16, 32],
+        help="Sequence counts for the vLLM decode-op comparison",
+    )
+    parser.add_argument(
         "--no-baselines",
         dest="baselines",
         action="store_false",
@@ -89,7 +97,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run", action="store_true", help="Print the artifact instead of writing it"
     )
-    parser.add_argument("--artifact-root", type=pathlib.Path, default=DEFAULT_ARTIFACT_ROOT)
+    parser.add_argument(
+        "--artifact-root",
+        # Resolved immediately: a relative root is convenient on the command line but
+        # the run summary reports the path relative to the repository, which cannot be
+        # computed from a relative one. That failed only after all the measurement
+        # work was already done.
+        type=lambda value: pathlib.Path(value).resolve(),
+        default=DEFAULT_ARTIFACT_ROOT,
+    )
     return parser.parse_args(argv)
 
 
@@ -110,6 +126,7 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
         "drift_batch": args.batches[0],
         "sweep_block_v": list(args.sweep_block_v),
         "baselines_requested": bool(args.baselines),
+        "vllm_sequences": list(args.vllm_sequences),
         "profile_requested": bool(args.profile),
         "compile_probe_requested": bool(args.compile_probe),
         "shapes_are_synthetic": True,
@@ -165,32 +182,86 @@ def fastest_tile_per_batch(tile_sweep: list[dict[str, Any]]) -> dict[str, int]:
     return {batch: block_v for batch, (_ms, block_v) in best.items()}
 
 
-def run_baselines(args: argparse.Namespace, dtype: Any) -> list[dict[str, Any]] | None:
+def run_baselines(args: argparse.Namespace, dtype: Any) -> list[dict[str, Any]]:
     """Compare the Fabric kernel against pinned optimized libraries.
 
-    Returns ``None`` when no baseline library is installed, which is recorded on
-    the artifact so a reader can tell "not compared" from "compared and equal".
+    Every known baseline appears in the result, including ones that could not run.
+    An absent library and an equal comparison are different facts, and a reader of
+    the artifact must be able to tell them apart without inferring it from a missing
+    key.
+
+    The vLLM comparison is discovered rather than imported directly: it lives in the
+    serving component because vLLM does, and the harness must keep working in the
+    runtime environment where vLLM is not installed.
     """
     from benchmarks import baselines
     from benchmarks.gated_delta_decode_bench import make_inputs, tolerances
 
-    if not baselines.is_available():
-        return None
-
+    entries: list[dict[str, Any]] = []
     atol, _rtol = tolerances(dtype)
-    inputs = make_inputs(args.batches[0], args.heads, args.key_dim, args.value_dim, dtype, seed=3)
-    entry = {
-        "name": baselines.FLA_BASELINE,
-        "version": baselines.fla_version(),
-        "equivalence": baselines.equivalence(*inputs, atol=atol),
-        "timings": [
-            baselines.benchmark_against_fabric(
-                batch, args.heads, args.key_dim, args.value_dim, dtype, args.block_v
-            )
-            for batch in args.batches
-        ],
-    }
-    return [entry]
+
+    if baselines.is_available():
+        inputs = make_inputs(
+            args.batches[0], args.heads, args.key_dim, args.value_dim, dtype, seed=3
+        )
+        entries.append(
+            {
+                "name": baselines.FLA_BASELINE,
+                "version": baselines.fla_version(),
+                "available": True,
+                "equivalence": baselines.equivalence(*inputs, atol=atol),
+                "timings": [
+                    baselines.benchmark_against_fabric(
+                        batch, args.heads, args.key_dim, args.value_dim, dtype, args.block_v
+                    )
+                    for batch in args.batches
+                ],
+            }
+        )
+    else:
+        entries.append(
+            {
+                "name": baselines.FLA_BASELINE,
+                "version": None,
+                "available": False,
+                "reason": "flash-linear-attention is not installed in this environment",
+            }
+        )
+
+    entries.append(_vllm_baseline(args, dtype))
+    return entries
+
+
+def _vllm_baseline(args: argparse.Namespace, dtype: Any) -> dict[str, Any]:
+    """The vLLM decode-op comparison, when this environment can run it."""
+    try:
+        module = importlib.import_module("fabric_serving.baseline")
+    except ImportError:
+        return {
+            "name": "vllm:fused_recurrent_gated_delta_rule",
+            "version": None,
+            "available": False,
+            "reason": (
+                "the serving component is not installed in this environment; run the "
+                "harness from serving/.venv to include the vLLM comparison"
+            ),
+        }
+
+    if not module.is_available():
+        return {
+            "name": module.NAME,
+            "version": module.version(),
+            "available": False,
+            "reason": "vLLM is present but its gated-delta decode op could not be imported",
+        }
+
+    return module.measure(
+        sequences=args.vllm_sequences,
+        heads=args.heads,
+        key_dim=args.key_dim,
+        value_dim=args.value_dim,
+        dtype=dtype,
+    )
 
 
 def _compile_probe(args: argparse.Namespace, *, cache_dir: str | None) -> dict[str, Any] | None:

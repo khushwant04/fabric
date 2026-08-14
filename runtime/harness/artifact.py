@@ -22,10 +22,13 @@ from typing import Any
 
 #: Current artifact schema. v2 added long-generation drift, compiled-kernel
 #: metadata, and the value-tile sweep; v3 added optimized-library baselines; v4
-#: adds occupancy, bandwidth utilization, and compile latency. Older versions
-#: stay readable so previously committed evidence remains verifiable.
-SCHEMA_VERSION = 4
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+#: adds occupancy, bandwidth utilization, and compile latency; v5 records every
+#: known baseline including ones that could not run, so "not compared" and
+#: "compared and equal" are distinguishable, and carries the vLLM decode-op
+#: comparison. Older versions stay readable so previously committed evidence
+#: remains verifiable.
+SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
 
 #: Claim scope recorded on every artifact produced by the microbenchmark suite.
 MICROBENCH_CLAIM_SCOPE = (
