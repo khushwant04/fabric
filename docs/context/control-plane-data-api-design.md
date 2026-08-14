@@ -1,6 +1,6 @@
 # Control-Plane Data and API Design
 
-**Status:** Implemented (initial version) for the control-plane service in [`control-plane/`](../../control-plane/), including usage ingestion; the cluster agent, operator, RLS policies, and outbox workers described here remain planned.
+**Status:** Implemented (initial version) for the control-plane service in [`control-plane/`](../../control-plane/), including usage ingestion, and the cluster agent in [`agent/`](../../agent/); the operator, the telemetry collector, RLS policies, and outbox workers described here remain planned.
 
 This document describes the design. Where it once described unbuilt behavior, the
 implemented parts are now reconciled against the code, which is the source of
@@ -255,7 +255,9 @@ customer account is entitled to managed capacity
 
 The supported-distribution allowlist is server-side (`aks`, `k3s`); an agent-reported distribution outside it cannot receive managed placement.
 
-The agent receives only assignments authorized for its authenticated `stamp_id`. Desired-state and status APIs use monotonic generations and idempotent acknowledgements. A revoked stamp is denied heartbeat, capability refresh, desired-state reads, and status writes, and revoking a stamp revokes its agent and telemetry credentials in the same transaction.
+The agent receives only assignments authorized for its authenticated `stamp_id`. Desired-state and status APIs use monotonic generations and idempotent acknowledgements.
+
+Each assignment carries the owning customer `account_id`, taken from the placement. A managed stamp serves several accounts at once, so an agent cannot infer ownership from its own credential, and the data plane needs it to enforce per-account access. A revoked stamp is denied heartbeat, capability refresh, desired-state reads, and status writes, and revoking a stamp revokes its agent and telemetry credentials in the same transaction.
 
 ## Trusted Kubernetes metadata
 

@@ -2099,6 +2099,11 @@
             "format": "uuid",
             "title": "Deployment Id"
           },
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
           "name": {
             "type": "string",
             "title": "Name"
@@ -2124,12 +2129,14 @@
         "type": "object",
         "required": [
           "deployment_id",
+          "account_id",
           "name",
           "model_alias",
           "desired_generation",
           "spec"
         ],
-        "title": "DesiredDeployment"
+        "title": "DesiredDeployment",
+        "description": "One assignment an agent must reconcile.\n\n``account_id`` is the owning customer account, taken from the placement. A\nmanaged stamp serves several accounts at once, so an agent cannot infer\nownership from its own credential and the data plane needs it to enforce\nper-account access."
       },
       "DesiredStateResponse": {
         "properties": {

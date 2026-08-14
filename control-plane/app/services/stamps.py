@@ -365,6 +365,9 @@ async def build_desired_state(
         deployments.append(
             DesiredDeployment(
                 deployment_id=deployment.id,
+                # From the placement, which is the ownership anchor: a managed
+                # stamp's assignments belong to different customer accounts.
+                account_id=placement.account_id,
                 name=deployment.name,
                 model_alias=deployment.model_alias,
                 desired_generation=placement.desired_generation,

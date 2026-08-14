@@ -89,7 +89,7 @@ Exit requirement: inference needs no Auth0, database, or control API call after 
 ## Phase 5: Operator, agent, and stamps — weeks 4–6
 
 - Versioned `FabricModelDeployment` CRD and cluster-local operator with conditions/rollback.
-- Cluster-agent enrollment, bounded capability discovery, outbound desired-state pull, heartbeat, and status return.
+- Cluster-agent enrollment, bounded capability discovery, outbound desired-state pull, heartbeat, and status return. **Implemented** in `agent/`, verified end to end against a real control plane and data plane; it renders local configuration rather than Kubernetes resources, because the operator does not exist.
 - Managed-serverless AKS stamp registration.
 - BYOI Helm bundle for CRDs, agent, operator, RBAC/policies, and optional collector configuration.
 - A10 VM Docker benchmark flow, then optional k3s enrollment and operator/agent smoke.
