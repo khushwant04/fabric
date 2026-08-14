@@ -52,6 +52,36 @@ model host, and telemetry export. Usage is buffered locally in a bounded queue
 with no exporter, and nothing writes the deployments file yet because the cluster
 agent does not exist.
 
+### Cluster agent
+
+`/agent` is a Go binary that enrolls a stamp with a single-use token, persists its
+credentials at 0600, heartbeats with a bounded capability report, pulls desired
+state by monotonic generation, renders the `deployments.json` the data plane reads,
+and reports observed status. 11 Go tests pass, plus `go vet` and `gofmt`.
+
+Ordering is deliberate: configuration is written before the acknowledged generation
+advances, so a crash replays an assignment rather than losing it; a failed status
+write does not discard configuration already applied; and a permanent rejection
+(revoked credential or stamp, spent enrollment token) stops the loop instead of
+retrying forever. The agent never presents the telemetry credential, which it
+persists for a collector that does not exist yet.
+
+Building it exposed a gap in the control plane: desired state carried no
+`account_id`, so an agent on a managed stamp could not tell the data plane which
+customer owns a deployment. The contract now carries the placement's account, and a
+control-plane test asserts a managed stamp's assignment names the customer account
+rather than the system account that owns the stamp.
+
+`agent/scripts/e2e.sh` runs the whole loop with real components: a control plane
+over HTTP, the compiled agent, and the data plane loading the file the agent wrote.
+That run showed enrollment consuming a single-use token, an empty configuration
+before any placement, the placement appearing with its owning account and release,
+the reported status readable through the control API, the data plane serving that
+model for the account, and a forged token refused.
+
+Not implemented: creating Kubernetes resources, telemetry export, and the Helm
+bundle.
+
 ### Frontend
 
 `/v1` is a Next.js 16 frontend scaffold with UI dependencies and a `TooltipProvider`, while its home page and metadata retain Create Next App starter content. It implements no Fabric authentication, deployment, cluster, model, usage, or inference workflow.
@@ -188,7 +218,7 @@ The repository currently has no implementation of:
 
 - A running vLLM host; the Fabric decode-op substitution exists and is verified against vLLM's kernel, but nothing registers it in a live instance and no model weights are loaded.
 - Request quotas, rate limiting, or mTLS between the inference ingress and a model host.
-- A Kubernetes CRD, operator, or cluster agent.
+- A Kubernetes CRD or operator. The cluster agent exists in `/agent`; nothing reconciles Kubernetes resources.
 - Managed-serverless infrastructure provisioning or the BYOI Helm bundle.
 - AKS or k3s deployment manifests.
 - Kubernetes stamp provisioning scripts. The A10 research-host scripts in `/scripts` are implemented and provision a bare Ubuntu 22.04 host through the Azure GRID driver and CUDA 12.8; nothing provisions a k3s or AKS stamp.

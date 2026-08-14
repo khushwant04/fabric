@@ -283,7 +283,16 @@ class HeartbeatResponse(BaseModel):
 
 
 class DesiredDeployment(BaseModel):
+    """One assignment an agent must reconcile.
+
+    ``account_id`` is the owning customer account, taken from the placement. A
+    managed stamp serves several accounts at once, so an agent cannot infer
+    ownership from its own credential and the data plane needs it to enforce
+    per-account access.
+    """
+
     deployment_id: uuid.UUID
+    account_id: uuid.UUID
     name: str
     model_alias: str
     desired_generation: int

@@ -1,0 +1,4 @@
+# Build output and local state
+bin/
+credentials.json
+deployments.json

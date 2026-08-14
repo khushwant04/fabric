@@ -1,7 +1,7 @@
 # ADR 0007: Use a Cluster Agent and Asynchronous Central Telemetry
 
 **Decision status:** Accepted  
-**Implementation status:** Planned  
+**Implementation status:** Partially implemented — the cluster agent ships in [`agent/`](../../../agent/) with outbound enrollment, heartbeat, desired-state pull, and status writes. Central telemetry ingestion and the collector do not exist.  
 **Date:** 2026-08-11
 
 ## Context

@@ -200,6 +200,8 @@ async def test_placement_and_desired_state_round_trip(client: AsyncClient) -> No
     assert len(body["deployments"]) == 1
     assert body["deployments"][0]["deployment_id"] == deployment["id"]
     assert body["deployments"][0]["deleted"] is False
+    # An agent needs the owning account to render per-account data-plane config.
+    assert body["deployments"][0]["account_id"] == account_id
 
     # Acknowledged generations are not resent.
     empty = await client.get(
@@ -533,3 +535,40 @@ async def test_credential_classes_are_not_interchangeable(
     with pytest.raises(Unauthorized) as collector_as_agent:
         await require_agent_credential(_bearer_request(telemetry), db_session)
     assert collector_as_agent.value.code == "invalid_credential"
+
+
+async def test_managed_desired_state_names_the_customer_account(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A managed stamp is owned by the system account but serves customers.
+
+    Without the account on each assignment an agent could not tell the data plane
+    who owns a deployment, and could only guess its own account, which is wrong
+    for every managed placement.
+    """
+    account_id, token = await onboard(client, "mgd-desired", "mgd-desired-account")
+    deployment = await create_deployment(client, account_id, token)
+    enrolled, system_account = await _enroll_managed_stamp(client, db_session)
+    stamp_id = enrolled["stamp"]["id"]
+
+    await db_session.execute(
+        update(Account)
+        .where(Account.id == uuid.UUID(account_id))
+        .values(managed_capacity_enabled=True)
+    )
+    await db_session.commit()
+
+    placed = await client.post(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}/placements",
+        json={"stamp_id": stamp_id},
+        headers=bearer(token),
+    )
+    assert placed.status_code == 201
+
+    desired = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state", headers=bearer(enrolled["agent_credential"])
+    )
+    entry = desired.json()["deployments"][0]
+    # The customer owns the deployment, not the system account that owns the stamp.
+    assert entry["account_id"] == account_id
+    assert entry["account_id"] != str(system_account.id)
