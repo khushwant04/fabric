@@ -24,7 +24,11 @@ Credential classes are separate and non-interchangeable:
 - Revocable agent credential authorizes heartbeat, bounded capabilities, desired-state reads, and status writes only.
 - Separate write-only telemetry credential authorizes collector export in every environment, including testing.
 
-During enrollment, the server derives `account_id` from the enrollment record and ignores caller-supplied ownership. The agent stores its credential in an agent-only Kubernetes Secret, while the collector receives a distinct write-only telemetry credential in a collector-only Secret. The operator receives only Kubernetes RBAC and no central account/API credential.
+During enrollment, the server derives `account_id` from the enrollment record and ignores caller-supplied ownership. The agent stores its credential in an agent-only Kubernetes Secret, while the collector receives a distinct write-only telemetry credential in a collector-only Secret.
+
+Usage ingestion now enforces this: the telemetry credential is the only credential accepted there, ownership is resolved from that credential and the placement rather than the payload, and a stamp reporting for a deployment it does not serve is rejected. Tests cover the agent credential and a control token both being refused.
+
+The separate Secret is implemented as a separate file: the agent writes the telemetry credential to its own 0600 path for the collector, and the collector reads only that, so it cannot obtain the agent credential. The end-to-end run confirms the telemetry credential is refused when it attempts to read desired state. The operator receives only Kubernetes RBAC and no central account/API credential.
 
 Placement authorization requires customer ownership of the deployment/placement, same-account ownership for BYOI stamps, or explicit eligibility for a managed stamp owned by the Fabric system account.
 

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "fabric-stamp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: inference
+      port: {{ .Values.service.port }}
+      targetPort: inference
+      protocol: TCP
+  # The administrative port is deliberately absent: it drains usage and exposes
+  # internal state, and only the collector in the same pod may reach it.

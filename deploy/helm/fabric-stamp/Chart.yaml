@@ -1,0 +1,15 @@
+apiVersion: v2
+name: fabric-stamp
+description: |
+  A Fabric inference stamp: cluster agent, inference data plane, and usage
+  collector. Installs no CRD and no operator, because neither exists yet; the
+  agent renders the data plane's configuration directly.
+type: application
+# Chart version tracks the packaging; appVersion tracks the images it defaults to.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - inference
+  - llm
+home: https://github.com/khushwant04/fabric

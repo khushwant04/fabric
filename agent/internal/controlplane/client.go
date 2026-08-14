@@ -235,3 +235,59 @@ func (c *Client) ReportStatus(ctx context.Context, stampID string, report Status
 	path := "/v1/stamps/" + url.PathEscape(stampID) + "/status"
 	return c.do(ctx, http.MethodPost, path, report, nil, true)
 }
+
+// MaxUsageBatch matches the server's per-request limit, so a larger backlog is
+// chunked rather than rejected wholesale.
+const MaxUsageBatch = 500
+
+// UsageRecord is one record as the ingestion contract expects it.
+//
+// It deliberately carries no account and no stamp. The server derives both from
+// the telemetry credential and the placement, and rejects a record that tries to
+// carry them, so ownership cannot originate at the edge.
+type UsageRecord struct {
+	DeploymentID     string `json:"deployment_id"`
+	InputTokens      int    `json:"input_tokens"`
+	OutputTokens     int    `json:"output_tokens"`
+	OccurredAt       string `json:"occurred_at"`
+	DeduplicationKey string `json:"deduplication_key"`
+}
+
+// UsageRejection identifies a record the server refused, by position in the batch.
+type UsageRejection struct {
+	Index        int    `json:"index"`
+	Code         string `json:"code"`
+	DeploymentID string `json:"deployment_id,omitempty"`
+}
+
+// UsageIngestResult is the server's per-batch accounting.
+type UsageIngestResult struct {
+	Accepted   int              `json:"accepted"`
+	Duplicates int              `json:"duplicates"`
+	Rejected   int              `json:"rejected"`
+	Rejections []UsageRejection `json:"rejections"`
+}
+
+// ReportUsage submits a batch of usage records.
+//
+// Authentication uses whatever credential the client holds, which for a collector
+// is the write-only telemetry credential. A collector must never be constructed
+// with the agent credential: the server refuses it, but the separation is the
+// caller's to maintain.
+func (c *Client) ReportUsage(ctx context.Context, records []UsageRecord) (*UsageIngestResult, error) {
+	if len(records) == 0 {
+		return nil, errors.New("no records to report")
+	}
+	if len(records) > MaxUsageBatch {
+		return nil, fmt.Errorf("batch of %d exceeds the limit of %d", len(records), MaxUsageBatch)
+	}
+	body := struct {
+		Records []UsageRecord `json:"records"`
+	}{Records: records}
+
+	var result UsageIngestResult
+	if err := c.do(ctx, http.MethodPost, "/v1/telemetry/usage", body, &result, true); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}

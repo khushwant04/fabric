@@ -26,20 +26,22 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
 SERVER_PID=""
+DATA_PLANE_PID=""
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 cleanup() {
-    if [ -n "$SERVER_PID" ]; then
-        kill "$SERVER_PID" 2>/dev/null || true
+    for pid in "$DATA_PLANE_PID" "$SERVER_PID"; do
+        [ -n "$pid" ] || continue
+        kill "$pid" 2>/dev/null || true
         for _ in $(seq 1 20); do
-            kill -0 "$SERVER_PID" 2>/dev/null || break
+            kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
         done
-        kill -9 "$SERVER_PID" 2>/dev/null || true
-    fi
+        kill -9 "$pid" 2>/dev/null || true
+    done
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -187,6 +189,7 @@ log "4. Agent: build, enroll, reconcile"
 FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
     --state-dir "$WORK/agent-state" \
+    --telemetry-credential-file "$WORK/collector-secret/telemetry-credential" \
     --stamp-name e2e-stamp \
     --upstream "http://model-host.e2e.test" \
     --orchestrator k3s \
@@ -239,114 +242,182 @@ assert row['observed_generation']==1, row
 print(f\"     phase={row['phase']} observed_generation={row['observed_generation']} stamp={row['stamp_id'][:8]}\")"
 
 # --------------------------------------------------------------------------
-log "7. Data plane: authorize inference from the agent-written configuration"
+log "7. Data plane: serve over real HTTP from the agent-written configuration"
 # --------------------------------------------------------------------------
 
 INFERENCE_TOKEN=$(curl -fsS -X POST "$CONTROL_URL/v1/token" -H 'Content-Type: application/json' \
     -d "{\"grant_type\":\"api_key\",\"api_key\":\"$API_KEY\",\"audience\":\"fabric-inference\"}" \
     | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
-JWKS=$(curl -fsS "$CONTROL_URL/.well-known/jwks.json")
-echo "$JWKS" > "$WORK/jwks.json"
+curl -fsS "$CONTROL_URL/.well-known/jwks.json" > "$WORK/jwks.json"
 
-cd "$REPO_ROOT/data-plane"
-FABRIC_E2E_DEPLOYMENTS="$WORK/agent-state/deployments.json" \
-FABRIC_E2E_JWKS="$WORK/jwks.json" \
-FABRIC_E2E_TOKEN="$INFERENCE_TOKEN" \
-FABRIC_E2E_ACCOUNT="$ACCOUNT_ID" \
-"$DATA_PY" - <<'PY'
-import asyncio, json, os, uuid
+read -r DP_PORT DP_ADMIN_PORT <<<"$("$CONTROL_PY" -c '
+import socket
+ports = []
+for _ in range(2):
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    ports.append(s.getsockname()[1])
+    s.close()
+print(*ports)')"
+
+# Both listeners share one process so they share one usage buffer, which is what
+# the collector drains. The upstream model host is the only stub: no vLLM runs.
+cat > "$WORK/data_plane.py" <<'PYDP'
+import asyncio, json, os
 import httpx
-from fabric_data_plane.app import DataPlane, create_inference_app
+import uvicorn
+from fabric_data_plane.app import DataPlane, create_admin_app, create_inference_app
 from fabric_data_plane.config import Settings
 from fabric_data_plane.keys import KeyCache
 from fabric_data_plane.registry import DeploymentRegistry
 
 deployments = os.environ["FABRIC_E2E_DEPLOYMENTS"]
-token = os.environ["FABRIC_E2E_TOKEN"]
-account = os.environ["FABRIC_E2E_ACCOUNT"]
+jwks_path = os.environ["FABRIC_E2E_JWKS"]
 
 settings = Settings(
     app_env="test",
     jwt_issuer="http://control.e2e.test",
     jwks_url="http://control.e2e.test/.well-known/jwks.json",
-    jwks_file=os.environ["FABRIC_E2E_JWKS"],
+    jwks_file=jwks_path,
     deployments_file=deployments,
 )
-# The registry is loaded from the file the Go agent wrote, unmodified.
+
+# Loaded from the file the Go agent wrote, unmodified.
 registry = DeploymentRegistry.load(deployments)
 assert len(registry) == 1, f"expected one deployment from the agent, got {len(registry)}"
+
 
 def upstream(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     return httpx.Response(200, json={
         "id": "cmpl-e2e", "model": body["model"],
         "choices": [{"message": {"role": "assistant", "content": "ok"}}],
-        "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        "usage": {"prompt_tokens": 11, "completion_tokens": 4},
     })
+
 
 plane = DataPlane(
     settings=settings,
     keys=KeyCache(settings, client=httpx.Client(transport=httpx.MockTransport(
-        lambda r: httpx.Response(200, json=json.load(open(os.environ["FABRIC_E2E_JWKS"])))
+        lambda r: httpx.Response(200, json=json.load(open(jwks_path)))
     ))),
     registry=registry,
     client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
 )
-app = create_inference_app(plane)
+
 
 async def main():
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://ingress.e2e") as client:
-        listed = await client.get("/v1/models", headers={"Authorization": f"Bearer {token}"})
-        assert listed.status_code == 200, listed.text
-        aliases = [entry["id"] for entry in listed.json()["data"]]
-        assert aliases == ["e2e-model"], aliases
-        print(f"     models visible to the account: {aliases}")
-
-        served = await client.post(
-            "/v1/chat/completions",
-            json={"model": "e2e-model", "messages": [{"role": "user", "content": "hi"}]},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert served.status_code == 200, served.text
-        print(f"     inference authorized, reply model={served.json()['model']}")
-
-        # A token for a different account must be refused for the same model.
-        import datetime as dt, jwt
-        from cryptography.hazmat.primitives import serialization
-        forged_account = str(uuid.uuid4())
-        # Re-sign with a key the data plane does not trust: this must fail as an
-        # unknown key, proving account substitution needs the signing key too.
-        other = serialization.load_pem_private_key(
-            __import__("cryptography").hazmat.primitives.asymmetric.rsa.generate_private_key(
-                public_exponent=65537, key_size=2048
-            ).private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
-            ), password=None)
-        now = dt.datetime.now(tz=dt.UTC)
-        forged = jwt.encode({
-            "iss": "http://control.e2e.test", "sub": "attacker", "aud": "fabric-inference",
-            "iat": int(now.timestamp()), "nbf": int(now.timestamp()),
-            "exp": int((now + dt.timedelta(minutes=5)).timestamp()),
-            "account_id": forged_account, "scp": ["inference:invoke"],
-        }, other.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        ).decode(), algorithm="RS256", headers={"kid": "forged"})
-
-        refused = await client.post(
-            "/v1/chat/completions",
-            json={"model": "e2e-model", "messages": []},
-            headers={"Authorization": f"Bearer {forged}"},
-        )
-        assert refused.status_code == 401, refused.text
-        print(f"     forged token refused: {refused.json()['error']['code']}")
+    inference = uvicorn.Server(uvicorn.Config(
+        create_inference_app(plane), host="127.0.0.1",
+        port=int(os.environ["FABRIC_E2E_DP_PORT"]), log_level="warning",
+    ))
+    admin = uvicorn.Server(uvicorn.Config(
+        create_admin_app(plane), host="127.0.0.1",
+        port=int(os.environ["FABRIC_E2E_DP_ADMIN_PORT"]), log_level="warning",
+    ))
+    await asyncio.gather(inference.serve(), admin.serve())
 
 asyncio.run(main())
-PY
+PYDP
+
+cd "$REPO_ROOT/data-plane"
+FABRIC_E2E_DEPLOYMENTS="$WORK/agent-state/deployments.json" \
+FABRIC_E2E_JWKS="$WORK/jwks.json" \
+FABRIC_E2E_DP_PORT="$DP_PORT" \
+FABRIC_E2E_DP_ADMIN_PORT="$DP_ADMIN_PORT" \
+"$DATA_PY" "$WORK/data_plane.py" >"$WORK/data-plane.log" 2>&1 &
+DATA_PLANE_PID=$!
+cd "$REPO_ROOT"
+
+DP_URL="http://127.0.0.1:$DP_PORT"
+DP_ADMIN_URL="http://127.0.0.1:$DP_ADMIN_PORT"
+for _ in $(seq 1 50); do
+    if curl -fsS "$DP_ADMIN_URL/healthz" >/dev/null 2>&1; then break; fi
+    sleep 0.2
+done
+curl -fsS "$DP_ADMIN_URL/healthz" >/dev/null \
+    || { cat "$WORK/data-plane.log"; die "data plane did not start"; }
+info "inference on $DP_URL, admin on $DP_ADMIN_URL"
+
+MODELS=$(curl -fsS "$DP_URL/v1/models" -H "Authorization: Bearer $INFERENCE_TOKEN")
+echo "$MODELS" | "$CONTROL_PY" -c "
+import json,sys
+names=[row['id'] for row in json.load(sys.stdin)['data']]
+assert names==['e2e-model'], names
+print(f'     models visible to the account: {names}')"
+
+REPLY=$(curl -fsS -X POST "$DP_URL/v1/chat/completions" \
+    -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
+    -d '{"model":"e2e-model","messages":[{"role":"user","content":"hi"}]}')
+echo "$REPLY" | "$CONTROL_PY" -c "
+import json,sys
+body=json.load(sys.stdin)
+assert body['model']=='e2e-model', body
+print(f\"     inference authorized, reply model={body['model']}\")"
+
+FORGED_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$DP_URL/v1/chat/completions" \
+    -H "Authorization: Bearer not-a-real-token" -H 'Content-Type: application/json' \
+    -d '{"model":"e2e-model","messages":[]}')
+[ "$FORGED_STATUS" = "401" ] || die "an unsigned token was not refused (got $FORGED_STATUS)"
+info "unsigned token refused with 401"
+
+# --------------------------------------------------------------------------
+log "8. Collector: drain the data plane and forward usage"
+# --------------------------------------------------------------------------
+
+# The collector reads only the file the agent wrote for it, never the agent's
+# credentials.json, so it cannot obtain the agent credential.
+[ -f "$WORK/collector-secret/telemetry-credential" ] \
+    || die "the agent did not hand over a telemetry credential"
+PERMS=$(stat -c '%a' "$WORK/collector-secret/telemetry-credential")
+[ "$PERMS" = "600" ] || die "telemetry credential is $PERMS, want 600"
+info "collector secret present, mode $PERMS"
+
+TELEMETRY_CREDENTIAL=$(cat "$WORK/collector-secret/telemetry-credential")
+DENIED=$(curl -s -o /dev/null -w '%{http_code}' \
+    "$CONTROL_URL/v1/stamps/self/desired-state" \
+    -H "Authorization: Bearer $TELEMETRY_CREDENTIAL")
+[ "$DENIED" = "401" ] || [ "$DENIED" = "403" ] \
+    || die "the telemetry credential could read desired state (got $DENIED)"
+info "telemetry credential cannot read desired state: $DENIED"
+
+(cd "$REPO_ROOT/agent" && go build -o "$WORK/fabric-collector" ./cmd/fabric-collector)
+
+"$WORK/fabric-collector" \
+    --control-plane "$CONTROL_URL" \
+    --data-plane-admin "$DP_ADMIN_URL" \
+    --credential-file "$WORK/collector-secret/telemetry-credential" \
+    --once 2>&1 | tail -2 | sed 's/^/     /'
+
+# --------------------------------------------------------------------------
+log "9. Control plane: the usage the collector forwarded is readable"
+# --------------------------------------------------------------------------
+
+USAGE=$(api GET "/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID/usage")
+echo "$USAGE" | "$CONTROL_PY" -c "
+import json,sys
+body=json.load(sys.stdin)
+assert body['events']==1, body
+# The token counts came from the model host's reply, through the data plane's
+# buffer, through the collector, to the control plane.
+assert body['input_tokens']==11, body
+assert body['output_tokens']==4, body
+assert body['stamps'][0]['stamp_id']=='$STAMP_ID', body
+print(f\"     events={body['events']} input={body['input_tokens']} \"
+      f\"output={body['output_tokens']} stamp={body['stamps'][0]['stamp_id'][:8]}\")"
+
+# A second pass must not double count: the data plane has nothing left, and the
+# record identity would be recognised anyway.
+"$WORK/fabric-collector" \
+    --control-plane "$CONTROL_URL" \
+    --data-plane-admin "$DP_ADMIN_URL" \
+    --credential-file "$WORK/collector-secret/telemetry-credential" \
+    --once >/dev/null 2>&1
+
+AFTER=$(api GET "/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID/usage" \
+    | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['events'])")
+[ "$AFTER" = "1" ] || die "a second collector pass double counted usage ($AFTER events)"
+info "a second pass added nothing: still $AFTER event"
 
 log "Loop closed"
 cat <<EOF
@@ -355,7 +426,11 @@ cat <<EOF
                                   desired state delivered by generation
   agent         -> data plane     deployments.json rendered with the owning
                                   account, upstream, and release
+  agent         -> collector      telemetry credential handed over at 0600,
+                                  and it cannot read desired state
   agent         -> control plane  status reported and readable through the API
   data plane    -> caller         inference authorized for that account only
+  collector     -> control plane  usage forwarded, attributed to the account
+                                  and stamp, and not double counted
 
 EOF

@@ -31,6 +31,12 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://fabric:fabric@localhost:5432/fabric"
 
+    #: Discard pooled connections older than this. Managed PostgreSQL (Neon, RDS
+    #: Proxy, pgbouncer) closes idle connections, and a pooled connection the
+    #: server has already dropped fails mid-statement rather than at checkout, so
+    #: pre-ping alone leaves a race. Kept below typical idle timeouts.
+    database_pool_recycle_seconds: int = 240
+
     auth0_issuer: str = "https://fabric.jp.auth0.com/"
     auth0_audience: str = ""
     auth0_algorithms: list[str] = Field(default_factory=lambda: ["RS256"])

@@ -1,0 +1,31 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fabric-stamp.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the inference port is reachable. The administrative port is omitted, so
+    # even a caller inside the cluster cannot drain usage or read internal state.
+    - ports:
+        - port: inference
+          protocol: TCP
+      {{- with .Values.networkPolicy.allowedNamespaces }}
+      from:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      {{- end }}
+  # Egress is unrestricted: the agent and collector call the control plane
+  # outbound, and the data plane calls the model host. Restricting it needs the
+  # customer's own CIDRs and belongs in their policy, not this chart's default.
+{{- end }}

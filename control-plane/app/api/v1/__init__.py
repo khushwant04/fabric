@@ -11,6 +11,7 @@ from app.api.v1 import (
     service_principals,
     stamps,
     system,
+    telemetry,
     tokens,
 )
 
@@ -22,5 +23,6 @@ api_router.include_router(service_principals.router)
 api_router.include_router(api_keys.router)
 api_router.include_router(deployments.router)
 api_router.include_router(stamps.router)
+api_router.include_router(telemetry.router)
 
 __all__ = ["api_router"]

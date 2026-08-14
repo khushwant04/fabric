@@ -1,0 +1,228 @@
+{{- include "fabric-stamp.validate" . }}
+apiVersion: apps/v1
+# A StatefulSet, not a Deployment: the agent holds a durable identity. Enrollment
+# tokens are single use, so credentials that do not survive a restart would leave
+# the stamp unable to rejoin without an operator issuing a new token.
+kind: StatefulSet
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "fabric-stamp.fullname" . }}
+  # One replica: the stamp's identity is one enrolled stamp. Scaling the data plane
+  # horizontally needs a separate Deployment reading the same rendered config, which
+  # this chart does not yet model.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fabric-stamp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-stamp.labels" . | nindent 8 }}
+      annotations:
+        # Roll the pod when the rendered configuration inputs change.
+        checksum/config: {{ printf "%s|%s|%s" .Values.controlPlane.url .Values.modelHost.url (include "fabric-stamp.jwksUrl" .) | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "fabric-stamp.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        # ------------------------------------------------------------------
+        # Agent: enrols, pulls desired state, renders the data plane's config.
+        # ------------------------------------------------------------------
+        - name: agent
+          image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
+          args:
+            - --control-plane={{ .Values.controlPlane.url }}
+            - --stamp-name={{ include "fabric-stamp.stampName" . }}
+            - --orchestrator={{ .Values.stamp.orchestrator }}
+            {{- with .Values.stamp.region }}
+            - --region={{ . }}
+            {{- end }}
+            - --upstream={{ .Values.modelHost.url }}
+            - --gpus={{ .Values.stamp.gpus }}
+            - --poll={{ .Values.agent.pollInterval }}
+            # Secret state stays on the agent's own volume; the rendered
+            # configuration goes to a volume the data plane mounts read-only. Two
+            # mounts rather than one is what stops the data plane's container from
+            # being able to read the agent credential at all.
+            - --credentials-file=/var/lib/fabric-agent/credentials.json
+            - --deployments-file=/etc/fabric/config/deployments.json
+            {{- if .Values.collector.enabled }}
+            - --telemetry-credential-file=/etc/fabric/collector/telemetry-credential
+            {{- end }}
+          env:
+            # Read from the environment rather than a flag so the token never
+            # appears in a process listing.
+            - name: FABRIC_AGENT_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fabric-stamp.enrollmentSecretName" . }}
+                  key: {{ .Values.enrollment.existingSecretKey }}
+                  # Absent after the token is cleaned up, which is expected: an
+                  # enrolled agent reuses its credentials and never re-enrols.
+                  optional: true
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: agent-state
+              mountPath: /var/lib/fabric-agent
+            - name: rendered-config
+              mountPath: /etc/fabric/config
+            {{- if .Values.collector.enabled }}
+            - name: collector-secret
+              mountPath: /etc/fabric/collector
+            {{- end }}
+        # ------------------------------------------------------------------
+        # Data plane: verifies tokens locally and proxies to the model host.
+        # ------------------------------------------------------------------
+        - name: data-plane
+          image: "{{ .Values.image.dataPlane.repository }}:{{ .Values.image.dataPlane.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.dataPlane.pullPolicy }}
+          # Both listeners in one process: the usage buffer is in memory, so a
+          # separate administrative process would drain a buffer that never saw a
+          # request and report no usage at all.
+          command: ["python", "-m", "fabric_data_plane.serve"]
+          # FABRIC_DP_, not FABRIC_: the data plane and the control plane use
+          # distinct prefixes so that running both on one host cannot cross
+          # configuration. Using the wrong prefix is silently ignored, which once
+          # produced a pod that answered liveness while verifying tokens against
+          # the default issuer.
+          env:
+            - name: FABRIC_DP_APP_ENV
+              value: production
+            - name: FABRIC_DP_LOG_LEVEL
+              value: {{ .Values.dataPlane.logLevel | quote }}
+            - name: FABRIC_DP_JWT_ISSUER
+              value: {{ .Values.controlPlane.jwtIssuer | quote }}
+            - name: FABRIC_DP_JWKS_URL
+              value: {{ include "fabric-stamp.jwksUrl" . | quote }}
+            - name: FABRIC_DP_DEPLOYMENTS_FILE
+              value: /etc/fabric/config/deployments.json
+            - name: FABRIC_DP_USAGE_BUFFER_SIZE
+              value: {{ .Values.dataPlane.usageBufferSize | quote }}
+            - name: FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS
+              value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
+          ports:
+            - name: inference
+              containerPort: 8080
+              protocol: TCP
+            # Declared for clarity but not published by the Service.
+            - name: admin
+              containerPort: 8081
+              protocol: TCP
+          # Probes target the inference port: the administrative listener binds to
+          # localhost, so the kubelet cannot reach it from the pod's address, and
+          # widening that bind would expose the usage drain to the cluster.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: inference
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            # Readiness requires verification keys, which are fetched on first use,
+            # so a cold pod needs a few attempts before it is ready.
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: inference
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.dataPlane.resources | nindent 12 }}
+          volumeMounts:
+            # Read-only, and the agent's credential volume is not mounted here at
+            # all, so this container cannot reach it.
+            - name: rendered-config
+              mountPath: /etc/fabric/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+        {{- if .Values.collector.enabled }}
+        # ------------------------------------------------------------------
+        # Collector: drains the local administrative listener, forwards usage.
+        # ------------------------------------------------------------------
+        - name: collector
+          image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
+          command: ["/usr/local/bin/fabric-collector"]
+          args:
+            - --control-plane={{ .Values.controlPlane.url }}
+            # Localhost: the administrative listener is bound inside the pod and is
+            # not reachable from outside it.
+            - --data-plane-admin=http://127.0.0.1:8081
+            - --credential-file=/etc/fabric/collector/telemetry-credential
+            - --interval={{ .Values.collector.interval }}
+            - --queue-capacity={{ .Values.collector.queueCapacity }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.collector.resources | nindent 12 }}
+          volumeMounts:
+            # Only the telemetry credential. The agent's state volume is not
+            # mounted, so the collector cannot obtain the agent credential and with
+            # it desired-state reads or status writes.
+            - name: collector-secret
+              mountPath: /etc/fabric/collector
+              readOnly: true
+        {{- end }}
+      volumes:
+        # Rendered configuration: written by the agent, read by the data plane. It
+        # holds no secret, and it is recreated on every reconcile pass, so it does
+        # not need to survive a restart.
+        - name: rendered-config
+          emptyDir: {}
+        {{- if .Values.collector.enabled }}
+        - name: collector-secret
+          emptyDir:
+            medium: Memory
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if not .Values.persistence.enabled }}
+        # Without persistence a restart loses the credentials, and the single-use
+        # enrollment token cannot be replayed. Suitable only for throwaway testing.
+        - name: agent-state
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: agent-state
+      spec:
+        accessModes: [{{ .Values.persistence.accessMode }}]
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

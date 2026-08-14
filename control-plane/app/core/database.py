@@ -54,7 +54,18 @@ def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         settings = get_settings()
-        _engine = create_async_engine(settings.database_url, pool_pre_ping=True, future=True)
+        engine_options: dict[str, object] = {
+            # Verifies a connection at checkout, which catches most server-side
+            # disconnects.
+            "pool_pre_ping": True,
+            "future": True,
+        }
+        if not settings.is_sqlite:
+            # Recycling closes the remaining window: a connection the server has
+            # already dropped can otherwise be handed out and fail mid-statement,
+            # which surfaces to a caller as a 500 rather than a retry.
+            engine_options["pool_recycle"] = settings.database_pool_recycle_seconds
+        _engine = create_async_engine(settings.database_url, **engine_options)
         if settings.is_sqlite:
             _enable_sqlite_foreign_keys(_engine)
     return _engine

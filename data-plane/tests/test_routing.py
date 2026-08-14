@@ -5,11 +5,13 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import (
+    ACCOUNT_A,
     ACCOUNT_B,
     DEPLOYMENT_A,
     ControlPlaneStub,
     SigningKey,
     UpstreamStub,
+    make_settings,
 )
 
 
@@ -214,8 +216,9 @@ async def test_usage_buffer_is_bounded_and_reports_drops(plane) -> None:
     assert state["buffered"] == 2
     assert state["recorded"] == 5
     assert state["dropped"] == 3
-    # No exporter exists yet, and the state says so rather than implying one.
-    assert state["exporter"] is None
+    # The data plane is drained, never pushing, so a growing buffer means no
+    # collector is running rather than a broken exporter.
+    assert state["export_mode"] == "drain"
 
 
 async def test_admin_listener_carries_no_inference_routes(admin_app, inference_app) -> None:
@@ -225,8 +228,14 @@ async def test_admin_listener_carries_no_inference_routes(admin_app, inference_a
 
     assert "/v1/chat/completions" in inference_paths
     assert "/v1/chat/completions" not in admin_paths
-    assert "/healthz" in admin_paths and "/healthz" not in inference_paths
+    # Administrative endpoints never appear on the public listener. This is the
+    # direction that matters: the drain is destructive and the state endpoints
+    # describe internals.
+    assert not {path for path in inference_paths if path.startswith("/admin")}
     assert "/admin/keys" in admin_paths
+    # Probes are deliberately on both. The administrative listener binds to
+    # localhost, so a kubelet probing the pod address can only reach the public one.
+    assert "/healthz" in admin_paths and "/healthz" in inference_paths
 
 
 async def test_admin_reports_readiness_and_state(admin_client, plane, signing_key) -> None:
@@ -250,3 +259,128 @@ async def test_both_openai_paths_are_served(
     response = await client.post(path, json=chat(), headers=auth(signing_key.issue()))
     assert response.status_code == 200
     assert upstream.requests[-1]["url"].endswith(path)
+
+
+async def test_draining_usage_returns_records_and_empties_the_buffer(
+    client, admin_client, signing_key: SigningKey
+) -> None:
+    """A collector takes records once; a second drain must not replay them."""
+    reply = await client.post(
+        "/v1/chat/completions", json=chat(), headers=auth(signing_key.issue())
+    )
+    assert reply.status_code == 200, reply.text
+
+    first = await admin_client.post("/admin/usage/drain")
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["count"] == 1
+    record = body["records"][0]
+    # Ownership on an exported record comes from the verified token and the local
+    # registry, so a collector never decides who is billed.
+    assert record["account_id"] == str(ACCOUNT_A)
+    assert record["deployment_id"] == str(DEPLOYMENT_A)
+    assert record["record_id"]
+
+    second = await admin_client.post("/admin/usage/drain")
+    assert second.json() == {"records": [], "count": 0}
+
+
+async def test_each_call_is_independently_deduplicable(
+    client, admin_client, signing_key: SigningKey
+) -> None:
+    for _ in range(2):
+        await client.post("/v1/chat/completions", json=chat(), headers=auth(signing_key.issue()))
+
+    records = (await admin_client.post("/admin/usage/drain")).json()["records"]
+    assert len({record["record_id"] for record in records}) == 2
+
+
+async def test_the_inference_listener_cannot_drain_usage(
+    client, signing_key: SigningKey
+) -> None:
+    """Draining is administrative: a caller on the inference path cannot take usage."""
+    response = await client.post("/admin/usage/drain", headers=auth(signing_key.issue()))
+    assert response.status_code == 404
+
+
+async def test_both_listeners_share_one_usage_buffer(tmp_path, monkeypatch) -> None:
+    """The drained buffer must be the buffer that served the request.
+
+    Running the administrative listener in its own process would drain a buffer
+    that never saw any traffic and report no usage, silently. This asserts the
+    deployment entrypoint builds one plane for both applications.
+    """
+    from fabric_data_plane import serve
+    from fabric_data_plane.app import create_admin_app, create_inference_app
+
+    built: list = []
+    real_build = serve.build_plane
+
+    def record(settings=None):
+        plane = real_build(settings)
+        built.append(plane)
+        return plane
+
+    monkeypatch.setattr(serve, "build_plane", record)
+
+    # Stand in for uvicorn so no socket is opened by the test.
+    class DummyServer:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+
+        async def serve(self):
+            return None
+
+    monkeypatch.setattr(serve.uvicorn, "Server", DummyServer)
+    monkeypatch.setattr(serve.uvicorn, "Config", lambda app, **kwargs: app)
+
+    settings = make_settings(deployments_file=str(tmp_path / "deployments.json"))
+    (tmp_path / "deployments.json").write_text('{"deployments": []}')
+
+    await serve.serve(settings)
+
+    assert len(built) == 1, "each listener built its own plane, so usage would be lost"
+    inference_app = create_inference_app(built[0])
+    admin_app = create_admin_app(built[0])
+    assert inference_app is not admin_app
+
+
+async def test_inference_listener_exposes_probes(client, signing_key: SigningKey) -> None:
+    """A kubelet cannot reach the localhost-bound administrative listener."""
+    alive = await client.get("/healthz")
+    assert alive.status_code == 200
+    assert alive.json() == {"status": "ok"}
+
+    # Keys are fetched on first use, so a data plane that has never served a request
+    # is legitimately not ready yet.
+    assert (await client.get("/readyz")).status_code == 503
+
+    served = await client.post(
+        "/v1/chat/completions", json=chat(), headers=auth(signing_key.issue())
+    )
+    assert served.status_code == 200, served.text
+
+    ready = await client.get("/readyz")
+    assert ready.status_code == 200
+    # Only a status: key and deployment counts stay on the administrative listener.
+    assert ready.json() == {"status": "ready"}
+
+
+async def test_readiness_fails_with_a_status_code_when_no_keys_are_held(
+    plane, client, admin_client
+) -> None:
+    """A probe reads the status code, not the body.
+
+    Returning 200 with "unavailable" would let Kubernetes send traffic to a data
+    plane that rejects every request.
+    """
+    plane.keys._keys.clear()
+
+    public = await client.get("/readyz")
+    assert public.status_code == 503
+    assert public.json() == {"status": "unavailable"}
+
+    admin = await admin_client.get("/readyz")
+    assert admin.status_code == 503
+    assert admin.json()["status"] == "unavailable"

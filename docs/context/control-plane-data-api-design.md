@@ -1,6 +1,6 @@
 # Control-Plane Data and API Design
 
-**Status:** Implemented (initial version) for the control-plane service in [`control-plane/`](../../control-plane/) and the cluster agent in [`agent/`](../../agent/); the operator, telemetry ingestion, RLS policies, and outbox workers described here remain planned.
+**Status:** Implemented (initial version) for the control-plane service in [`control-plane/`](../../control-plane/), including usage ingestion, and the cluster agent in [`agent/`](../../agent/); the operator, RLS policies, and outbox workers described here remain planned.
 
 This document describes the design. Where it once described unbuilt behavior, the
 implemented parts are now reconciled against the code, which is the source of
@@ -347,7 +347,14 @@ POST /v1/stamps/{stamp_id}/status
 
 For stamp endpoints, the authenticated credential—not the URL alone—determines authoritative stamp and account identity.
 
-Planned and not implemented: telemetry ingestion, usage publication, outbox delivery workers, request idempotency (the `idempotency_keys` table exists but no handler consumes it), machine-credential rotation, and managed-capacity entitlement management.
+Implemented: usage ingestion on `POST /v1/telemetry/usage`, authenticated by the
+telemetry credential, with ownership resolved from that credential and the placement
+rather than the payload, per-stamp deduplication key namespacing, and an
+account-scoped read of totals.
+
+Planned and not implemented: metrics ingestion, outbox delivery workers, request idempotency (the `idempotency_keys` table
+exists but no handler consumes it), machine-credential rotation, and managed-capacity
+entitlement management.
 
 ## Deferred
 

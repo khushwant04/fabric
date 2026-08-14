@@ -4,6 +4,9 @@
 // Two files, with different audiences and permissions:
 //
 //	credentials.json  the stamp id and machine credentials. 0600, agent only.
+//	telemetry-credential  the write-only telemetry credential. 0600, for the
+//	                      collector's own Secret, so the collector never reads
+//	                      the agent's file and cannot obtain the agent credential.
 //	                  In Kubernetes this is a Secret mounted for the agent alone.
 //	deployments.json  the deployments assigned here and who owns each one.
 //	                  Readable by the data plane; contains no secret.
@@ -14,10 +17,12 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Credentials is the agent's durable identity.
@@ -141,4 +146,36 @@ func ReadDeployments(path string) (*DeploymentsFile, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return file, nil
+}
+
+// TelemetryCredentialFile is the file name the agent writes for the collector.
+const TelemetryCredentialFile = "telemetry-credential"
+
+// WriteTelemetryCredential hands the telemetry credential to the collector.
+//
+// It is written separately from credentials.json rather than shared, because that
+// file also holds the agent credential: a collector able to read it could pull
+// desired state and write status, which the credential separation exists to
+// prevent. Only this file belongs in the collector's Secret.
+func WriteTelemetryCredential(path, credential string) error {
+	if credential == "" {
+		return errors.New("refusing to write an empty telemetry credential")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	return writeAtomic(path, []byte(credential+"\n"), 0o600)
+}
+
+// ReadTelemetryCredential reads the credential the collector was given.
+func ReadTelemetryCredential(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read telemetry credential: %w", err)
+	}
+	credential := strings.TrimSpace(string(raw))
+	if credential == "" {
+		return "", fmt.Errorf("telemetry credential at %s is empty", path)
+	}
+	return credential, nil
 }

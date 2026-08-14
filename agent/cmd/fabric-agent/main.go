@@ -36,6 +36,13 @@ func envOr(name, fallback string) string {
 func main() {
 	stateDir := flag.String("state-dir", envOr("FABRIC_AGENT_STATE_DIR", "/var/lib/fabric-agent"),
 		"directory holding credentials.json (0600) and deployments.json")
+	credentialsPath := flag.String("credentials-file", envOr("FABRIC_AGENT_CREDENTIALS_FILE", ""),
+		"path to credentials.json (default <state-dir>/credentials.json)")
+	deploymentsPath := flag.String("deployments-file", envOr("FABRIC_AGENT_DEPLOYMENTS_FILE", ""),
+		"path to deployments.json (default <state-dir>/deployments.json)")
+	telemetryCredentialPath := flag.String("telemetry-credential-file",
+		envOr("FABRIC_AGENT_TELEMETRY_CREDENTIAL_FILE", ""),
+		"write the collector's telemetry credential here (0600); empty runs no hand-off")
 	controlPlane := flag.String("control-plane", envOr("FABRIC_AGENT_CONTROL_PLANE", ""),
 		"control-plane base URL")
 	stampName := flag.String("stamp-name", envOr("FABRIC_AGENT_STAMP_NAME", ""),
@@ -71,10 +78,16 @@ func main() {
 		ControlPlaneURL: *controlPlane,
 		EnrollmentToken: token,
 		StampName:       *stampName,
-		CredentialsPath: filepath.Join(*stateDir, "credentials.json"),
-		DeploymentsPath: filepath.Join(*stateDir, "deployments.json"),
-		UpstreamURL:     *upstream,
-		PollInterval:    *poll,
+		// Kept separable because the two files have different audiences: the
+		// credentials are secret and belong on the agent's own volume, while the
+		// rendered configuration is published to the data plane. In Kubernetes they
+		// are different mounts, which is what stops the data plane's container from
+		// being able to read the agent's credential at all.
+		CredentialsPath:         orDefault(*credentialsPath, filepath.Join(*stateDir, "credentials.json")),
+		DeploymentsPath:         orDefault(*deploymentsPath, filepath.Join(*stateDir, "deployments.json")),
+		TelemetryCredentialPath: *telemetryCredentialPath,
+		UpstreamURL:             *upstream,
+		PollInterval:            *poll,
 		Capabilities: controlplane.Capabilities{
 			Orchestrator:    *orchestrator,
 			Region:          *region,
@@ -108,4 +121,12 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("agent stopped")
+}
+
+// orDefault returns value when set, otherwise fallback.
+func orDefault(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }

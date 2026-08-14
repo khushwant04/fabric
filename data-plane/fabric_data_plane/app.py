@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, FastAPI, Header, Request
+from fastapi import APIRouter, FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from fabric_data_plane.auth import (
@@ -35,7 +35,7 @@ from fabric_data_plane.errors import (
     UpstreamUnavailable,
     api_error_handler,
 )
-from fabric_data_plane.registry import Deployment, DeploymentRegistry
+from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.usage import UsageBuffer, UsageRecord
 
 logger = logging.getLogger("fabric.data_plane")
@@ -52,7 +52,9 @@ class DataPlane:
         self,
         settings: Settings,
         keys: Any,
-        registry: DeploymentRegistry,
+        # Either a DeploymentRegistry or a ReloadingRegistry: the data plane only
+        # reads, so anything with resolve/for_account/__len__ serves.
+        registry: Any,
         client: httpx.AsyncClient,
     ) -> None:
         self.settings = settings
@@ -201,11 +203,15 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
         return {"status": "ok"}
 
     @router.get("/readyz", summary="Readiness probe")
-    async def readyz() -> dict[str, Any]:
+    async def readyz(response: Response) -> dict[str, Any]:
         # Readiness requires usable key material; without it no token can be
-        # verified, so the listener must not receive traffic.
+        # verified, so the listener must not receive traffic. The status code has to
+        # say so: a probe reads the code, not the body, so returning 200 with
+        # "unavailable" would send traffic to a data plane that rejects everything.
         keys = plane.keys.snapshot()
         ready = keys["keys_held"] > 0
+        if not ready:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": "ready" if ready else "unavailable",
             "keys_held": keys["keys_held"],
@@ -220,6 +226,24 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     async def usage_state() -> dict[str, Any]:
         return plane.usage.snapshot()
 
+    @router.post("/admin/usage/drain", summary="Remove and return buffered usage")
+    async def drain_usage() -> dict[str, Any]:
+        """Hand buffered records to a collector.
+
+        Draining is destructive, so it is a POST on the administrative listener
+        rather than a GET on the inference listener: only the collector should be
+        able to take records, and taking them must not look like a cacheable read.
+
+        The data plane does not export usage itself. It never holds the telemetry
+        credential, which belongs to a collector-only Secret, so the credential
+        classes stay separate even though the usage data originates here.
+        """
+        records = plane.usage.drain()
+        return {
+            "records": [record.as_dict() for record in records],
+            "count": len(records),
+        }
+
     return router
 
 
@@ -230,9 +254,41 @@ def build_plane(settings: Settings | None = None, keys: Any = None) -> DataPlane
     return DataPlane(
         settings=resolved,
         keys=keys or KeyCache(resolved),
-        registry=DeploymentRegistry.load(resolved.deployments_file),
+        # Follows the file the agent rewrites rather than reading it once.
+        registry=ReloadingRegistry(resolved.deployments_file),
         client=httpx.AsyncClient(),
     )
+
+
+def _probe_router(plane: DataPlane) -> APIRouter:
+    """Health probes on the inference listener.
+
+    These exist here as well as on the administrative listener because the
+    administrative listener binds to localhost only, so a Kubernetes kubelet
+    probing the pod's address cannot reach it. Binding that listener wider to make
+    probes work would expose a destructive usage drain to the whole cluster, so the
+    probes come to the public listener instead.
+
+    They are unauthenticated, which is what a probe requires, and therefore report
+    only liveness and readiness. Key and deployment counts stay on the
+    administrative listener.
+    """
+    router = APIRouter(tags=["health"])
+
+    @router.get("/healthz", summary="Liveness probe")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @router.get("/readyz", summary="Readiness probe")
+    async def readyz(response: Response) -> dict[str, str]:
+        # Without verification keys every request would be rejected, so the pod
+        # must not be sent traffic.
+        if plane.keys.snapshot()["keys_held"] == 0:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {"status": "unavailable"}
+        return {"status": "ready"}
+
+    return router
 
 
 def create_inference_app(plane: DataPlane | None = None) -> FastAPI:
@@ -246,6 +302,7 @@ def create_inference_app(plane: DataPlane | None = None) -> FastAPI:
     app.state.plane = resolved
     app.add_exception_handler(ApiError, api_error_handler)
     app.include_router(build_inference_router(resolved))
+    app.include_router(_probe_router(resolved))
     return app
 
 

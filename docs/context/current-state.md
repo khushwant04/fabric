@@ -15,7 +15,70 @@ Authorization details that hold today: an API key can never carry a control scop
 
 Verified locally: `ruff` reports no findings, 55 tests pass against a database built by the real Alembic migration, `alembic upgrade → downgrade → upgrade` reproduces 16 application tables, the app imports with 35 routes, and `openapi.json` matches the running app at 24 paths and 38 schemas, which a test enforces.
 
-Not implemented in the service: PostgreSQL row-level security policies, telemetry ingestion endpoints, outbox delivery workers, usage publication, request idempotency (the `idempotency_keys` table has no handler), agent/telemetry credential rotation, and managed-capacity entitlement management through the API.
+Not implemented in the service: PostgreSQL row-level security policies, outbox
+delivery workers, request idempotency (the `idempotency_keys` table has no handler),
+agent/telemetry credential rotation, and managed-capacity entitlement management
+through the API.
+
+### Usage ingestion
+
+`POST /v1/telemetry/usage` accepts usage records authenticated by the write-only
+telemetry credential, which until now was issued at enrollment and accepted nowhere.
+The agent credential and a control token are both refused there.
+
+A record carries no account and no stamp. Ownership is resolved from the credential
+and the placement: the deployment must be assigned to the reporting stamp, and the
+owning account is read from the placement row, so a managed stamp reports for several
+customers without naming an account and cannot report for a deployment it does not
+serve. The request contract forbids unknown fields, so a record cannot smuggle
+ownership past it and have it silently ignored.
+
+Records in a batch are independent, because collectors retry whole batches and
+partial progress must survive. Deduplication keys are namespaced by stamp, so one
+stamp cannot block another's records by claiming their keys first. Records dated more
+than seven days old or more than five minutes ahead are refused.
+
+The data plane exposes `POST /admin/usage/drain` on its administrative listener and
+assigns each record a stable identifier at record time, so a collector's retry is
+deduplicated centrally rather than double counted. The data plane never sends usage
+itself and never holds the telemetry credential.
+
+`GET /v1/accounts/{id}/deployments/{id}/usage` returns totals with a per-stamp
+breakdown. Usage is operational, not billing-grade: delivery is at-least-once and a
+stamp that never reports contributes nothing.
+
+### Packaging
+
+`/deploy` holds container images for the agent, data plane, and control plane, and a
+Helm chart that installs a stamp as one StatefulSet: agent, data plane, and collector
+in one pod with three separate volumes, so the data plane cannot read the agent's
+credential and the collector receives only the telemetry credential.
+`deploy/scripts/kind-e2e.sh` installs it on a throwaway cluster and drives the whole
+loop, including a pod restart. Details and the defects that only appeared on
+Kubernetes are in [Packaging and Deployment](packaging-deployment.md).
+
+Not implemented: a CRD, an operator, a control-plane chart, GPU scheduling, ingress
+or TLS, and any model host.
+
+### Usage collector
+
+`agent/cmd/fabric-collector` drains the data plane's administrative listener and
+forwards records to the control plane. It is a separate process from the agent so the
+two credentials live in separate Secrets: the agent writes the write-only telemetry
+credential to its own 0600 file, and the collector reads only that. A test asserts the
+agent credential never lands there, and the end-to-end run confirms the telemetry
+credential cannot read desired state.
+
+Draining is destructive, so a failed forward would lose records. Drained records stay
+in a bounded pending queue and are retried on the next pass; when the queue overflows
+the oldest are dropped and counted, because an outage must not grow memory without
+limit. A permanent rejection stops the collector rather than retrying a backlog that
+can never be accepted. Per-record rejections are permanent by nature — an unplaced
+deployment or an out-of-window timestamp — so they are logged and discarded rather
+than resent forever. 10 Go tests cover this.
+
+Not implemented: runtime and GPU metrics collection, and any store or dashboard that
+consumes usage.
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 
@@ -64,7 +127,7 @@ advances, so a crash replays an assignment rather than losing it; a failed statu
 write does not discard configuration already applied; and a permanent rejection
 (revoked credential or stamp, spent enrollment token) stops the loop instead of
 retrying forever. The agent never presents the telemetry credential, which it
-persists for a collector that does not exist yet.
+hands to the collector through a separate 0600 file.
 
 Building it exposed a gap in the control plane: desired state carried no
 `account_id`, so an agent on a managed stamp could not tell the data plane which

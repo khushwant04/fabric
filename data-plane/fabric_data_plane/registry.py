@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import pathlib
+import threading
+import time
 import uuid
 from typing import Any
 
 from fabric_data_plane.errors import Forbidden, NotFound
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -107,3 +112,110 @@ class DeploymentRegistry:
             (d for d in self._by_id.values() if d.account_id == account_id),
             key=lambda d: d.model_alias,
         )
+
+
+class ReloadingRegistry:
+    """A registry that follows the file the cluster agent rewrites.
+
+    The agent re-renders ``deployments.json`` whenever placement changes, so a
+    registry read once at startup would serve a snapshot from boot: a newly placed
+    deployment would return ``model_not_found`` until the pod restarted, and a
+    withdrawn one would keep being served. Both are wrong and neither is visible
+    locally, where the file is written before the process starts.
+
+    The file is re-read only when its modification time or size changes, and at most
+    once per ``min_interval``, so the common path costs one ``stat``.
+
+    A read that fails keeps the last good registry rather than emptying it. The agent
+    writes atomically, so a partial read should not occur; if the file is
+    nevertheless unreadable, continuing to serve what was last valid is better than
+    refusing traffic the stamp is placed to handle. This mirrors the key cache, which
+    also never discards good material on a failed refresh.
+    """
+
+    def __init__(self, path: str | pathlib.Path, *, min_interval: float = 1.0) -> None:
+        self._path = pathlib.Path(path)
+        self._min_interval = min_interval
+        self._lock = threading.Lock()
+        self._registry = DeploymentRegistry.load(self._path)
+        self._signature = self._stat()
+        self._checked_at = time.monotonic()
+        self._reloads = 0
+        self._failures = 0
+        self._last_error: str | None = None
+
+    def _stat(self) -> tuple[float, int] | None:
+        try:
+            info = self._path.stat()
+        except OSError:
+            return None
+        return (info.st_mtime, info.st_size)
+
+    def _current(self) -> DeploymentRegistry:
+        now = time.monotonic()
+        with self._lock:
+            if now - self._checked_at < self._min_interval:
+                return self._registry
+            self._checked_at = now
+
+            signature = self._stat()
+            if signature == self._signature:
+                return self._registry
+
+            if signature is None:
+                # The file vanished. That is not how the agent says "nothing is
+                # placed here": it writes an empty list for that. A missing file
+                # means the volume or the writer is in trouble, so the last good
+                # registry is kept rather than dropping every deployment.
+                self._failures += 1
+                self._last_error = f"{self._path} is missing"
+                logger.warning(
+                    "%s is missing, keeping %d known deployments",
+                    self._path,
+                    len(self._registry),
+                )
+                return self._registry
+
+            try:
+                loaded = DeploymentRegistry.load(self._path)
+            except (OSError, ValueError) as error:
+                self._failures += 1
+                self._last_error = str(error)
+                # The signature is recorded even though the parse failed, so the
+                # same broken content is not re-parsed on every request. A later
+                # write changes it and is retried.
+                self._signature = signature
+                logger.warning(
+                    "could not reload %s, keeping %d known deployments: %s",
+                    self._path,
+                    len(self._registry),
+                    error,
+                )
+                return self._registry
+
+            self._registry = loaded
+            self._signature = signature
+            self._reloads += 1
+            logger.info("reloaded %s: %d deployments", self._path, len(loaded))
+            return self._registry
+
+    # The data plane treats this like a registry, so the read surface matches.
+    def resolve(self, model: str, *, account_id: uuid.UUID) -> Deployment:
+        return self._current().resolve(model, account_id=account_id)
+
+    def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
+        return self._current().for_account(account_id)
+
+    def __len__(self) -> int:
+        return len(self._current())
+
+    def snapshot(self) -> dict[str, Any]:
+        self._current()
+        with self._lock:
+            return {
+                "path": str(self._path),
+                "deployments": len(self._registry),
+                "reloads": self._reloads,
+                "reload_failures": self._failures,
+                "last_error": self._last_error,
+            }

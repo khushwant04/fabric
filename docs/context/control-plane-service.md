@@ -27,7 +27,7 @@
 | Stamp and enrollment-token revocation | Implemented |
 | Audit events and transactional outbox rows | Implemented |
 | Row-level security policies | Not implemented; application and composite keys enforce tenancy |
-| Telemetry ingestion endpoints | Not implemented; the collector credential class exists and is verified by tests |
+| Usage ingestion | Implemented; authenticated by the telemetry credential, ownership from the placement |
 | Managed-capacity entitlement management API | Not implemented; the flag is set directly in the database |
 | Request idempotency | Not implemented; `idempotency_keys` exists with no handler |
 | Machine-credential rotation | Not implemented; credentials are revocable but not rotatable |
@@ -201,6 +201,14 @@ then use the returned control token as `Authorization: Bearer <token>`.
 - Outside `local`/`test` the service refuses to start without a signing key, and also without a real `FABRIC_CREDENTIAL_PEPPER` — the default and the `.env.example` placeholder are both rejected, because every credential verifier derives from it.
 - Managed capacity is gated by `accounts.managed_capacity_enabled`, which is currently set directly in the database.
 - Managed placement additionally requires a supported Kubernetes distribution (`aks`, `k3s`).
-- Usage events, telemetry ingestion, and outbox delivery workers are defined in the schema but have no publisher yet.
+- Usage ingestion is implemented on `POST /v1/telemetry/usage`, authenticated by the
+  telemetry credential; ownership comes from that credential and the placement.
+  `GET /v1/accounts/{account_id}/deployments/{deployment_id}/usage` reads totals back.
+  The `fabric-collector` binary performs the drain-and-forward.
+- Outbox delivery workers are defined in the schema but have no publisher yet.
+- Pooled PostgreSQL connections are recycled below the usual idle timeout. Managed
+  offerings close idle connections, and pre-ping alone leaves a race in which a
+  dropped connection fails mid-statement and surfaces as a 500. Observed against a
+  managed instance while an agent reported status.
 - Stamp revocation is available through the API; agent and telemetry credential rotation is not.
 - Verified locally: `ruff` clean, 55 tests passing, `alembic upgrade → downgrade → upgrade` reproducing 16 application tables, 35 routes, and `openapi.json` matching the running app (24 paths, 38 schemas) — enforced by a test.
