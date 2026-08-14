@@ -19,6 +19,39 @@ Not implemented in the service: PostgreSQL row-level security policies, telemetr
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 
+### Inference data plane
+
+`/data-plane` is a FastAPI inference ingress that verifies Fabric inference JWTs
+locally and proxies OpenAI-compatible chat and text completions, including
+streaming, to a model host. 32 tests pass, plus a cross-component test that runs
+when both the control plane and data plane are importable.
+
+- Signing keys come from the control plane's JWKS document and are cached. A
+  request performs no control-plane call once a usable key set is held; an unknown
+  `kid` triggers at most one refresh; a fetch failure never discards cached keys,
+  so already-issued tokens keep working during a control-plane outage. The cache
+  can be seeded from a local file for a restart mid-outage.
+- A token must carry `aud=fabric-inference`, the configured issuer, valid time
+  claims, an `account_id`, and `inference:invoke`. A control-audience token is
+  rejected.
+- Deployments are read from a local file the cluster agent would write. Model name
+  selects a candidate; ownership is decided from the verified token's account, so
+  naming another account's model returns a refusal and never reaches the host.
+- Client `Authorization` and `X-Fabric-*` ownership headers are dropped before
+  proxying, and the reply reports the customer's alias rather than the internal
+  release name.
+- Health, readiness, key-cache state, and usage state live on a separate
+  administrative application from the inference listener.
+
+Verified against the real control plane: a token issued by `POST /v1/token` with
+`audience=fabric-inference` is accepted with the matching account, and a
+control-audience token from the same issuer is rejected as `wrong_audience`.
+
+Not implemented: request quotas and rate limiting, mTLS or network policy to the
+model host, and telemetry export. Usage is buffered locally in a bounded queue
+with no exporter, and nothing writes the deployments file yet because the cluster
+agent does not exist.
+
 ### Frontend
 
 `/v1` is a Next.js 16 frontend scaffold with UI dependencies and a `TooltipProvider`, while its home page and metadata retain Create Next App starter content. It implements no Fabric authentication, deployment, cluster, model, usage, or inference workflow.
@@ -153,9 +186,8 @@ claim.
 
 The repository currently has no implementation of:
 
-- An inference ingress, router, or authorization layer.
-- An OpenAI-compatible serving endpoint.
 - A running vLLM host; the Fabric decode-op substitution exists and is verified against vLLM's kernel, but nothing registers it in a live instance and no model weights are loaded.
+- Request quotas, rate limiting, or mTLS between the inference ingress and a model host.
 - A Kubernetes CRD, operator, or cluster agent.
 - Managed-serverless infrastructure provisioning or the BYOI Helm bundle.
 - AKS or k3s deployment manifests.
