@@ -8,8 +8,8 @@ usage and never holds the telemetry credential, which keeps the inference path f
 any export credential. Each record is given a stable identifier at record time so a
 retried forward is deduplicated centrally.
 
-**Not included yet:** quotas and rate limiting, mTLS or network policy to the model
-host, and the collector process that drains and forwards usage.
+**Not included yet:** quotas and rate limiting, and mTLS or network policy to the
+model host.
 
 ## What runs today
 

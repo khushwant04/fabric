@@ -1,9 +1,10 @@
 # Observability, Central Telemetry, and SLOs
 
-**Status:** Mostly planned. Usage ingestion is implemented: the control plane accepts
-usage on `POST /v1/telemetry/usage` and the data plane buffers records for a collector
-to drain. No collector process, metrics pipeline, Prometheus-compatible store,
-dashboard, or SLO implementation exists. See [Current State](current-state.md).
+**Status:** Partly implemented. The usage path works end to end: the data plane
+buffers records, `fabric-collector` drains and forwards them, and the control plane
+attributes them to an account and stamp. No runtime or GPU metrics pipeline,
+Prometheus-compatible store, dashboard, or SLO implementation exists. See
+[Current State](current-state.md).
 
 ## Objectives
 

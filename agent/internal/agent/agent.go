@@ -29,6 +29,10 @@ type Config struct {
 	StampName       string
 	CredentialsPath string
 	DeploymentsPath string
+	// TelemetryCredentialPath receives the write-only telemetry credential for
+	// the collector. Empty disables the hand-off, for a stamp running no
+	// collector.
+	TelemetryCredentialPath string
 
 	// UpstreamURL is the model host this stamp serves from. The agent records it
 	// in the data plane's configuration; it does not start the host.
@@ -117,6 +121,17 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		// strand the stamp.
 		return fmt.Errorf("persist credentials for stamp %s: %w", enrolled.Stamp.ID, err)
 	}
+	if a.config.TelemetryCredentialPath != "" {
+		if err := state.WriteTelemetryCredential(
+			a.config.TelemetryCredentialPath, enrolled.TelemetryCredential,
+		); err != nil {
+			// Not fatal: usage export is degraded, but inference and status
+			// reporting work, and refusing to run would be a worse outcome.
+			a.log.Error("could not hand the telemetry credential to the collector",
+				"path", a.config.TelemetryCredentialPath, "error", err)
+		}
+	}
+
 	a.client.Credential = enrolled.AgentCredential
 	a.log.Info("enrolled",
 		"stamp_id", enrolled.Stamp.ID, "mode", enrolled.Stamp.Mode,

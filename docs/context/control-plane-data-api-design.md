@@ -1,6 +1,6 @@
 # Control-Plane Data and API Design
 
-**Status:** Implemented (initial version) for the control-plane service in [`control-plane/`](../../control-plane/), including usage ingestion, and the cluster agent in [`agent/`](../../agent/); the operator, the telemetry collector, RLS policies, and outbox workers described here remain planned.
+**Status:** Implemented (initial version) for the control-plane service in [`control-plane/`](../../control-plane/), including usage ingestion, and the cluster agent in [`agent/`](../../agent/); the operator, RLS policies, and outbox workers described here remain planned.
 
 This document describes the design. Where it once described unbuilt behavior, the
 implemented parts are now reconciled against the code, which is the source of
@@ -352,8 +352,7 @@ telemetry credential, with ownership resolved from that credential and the place
 rather than the payload, per-stamp deduplication key namespacing, and an
 account-scoped read of totals.
 
-Planned and not implemented: the collector process that forwards usage, metrics
-ingestion, outbox delivery workers, request idempotency (the `idempotency_keys` table
+Planned and not implemented: metrics ingestion, outbox delivery workers, request idempotency (the `idempotency_keys` table
 exists but no handler consumes it), machine-credential rotation, and managed-capacity
 entitlement management.
 

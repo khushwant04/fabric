@@ -36,6 +36,9 @@ func envOr(name, fallback string) string {
 func main() {
 	stateDir := flag.String("state-dir", envOr("FABRIC_AGENT_STATE_DIR", "/var/lib/fabric-agent"),
 		"directory holding credentials.json (0600) and deployments.json")
+	telemetryCredentialPath := flag.String("telemetry-credential-file",
+		envOr("FABRIC_AGENT_TELEMETRY_CREDENTIAL_FILE", ""),
+		"write the collector's telemetry credential here (0600); empty runs no hand-off")
 	controlPlane := flag.String("control-plane", envOr("FABRIC_AGENT_CONTROL_PLANE", ""),
 		"control-plane base URL")
 	stampName := flag.String("stamp-name", envOr("FABRIC_AGENT_STAMP_NAME", ""),
@@ -68,13 +71,14 @@ func main() {
 	token := os.Getenv("FABRIC_AGENT_ENROLLMENT_TOKEN")
 
 	config := agent.Config{
-		ControlPlaneURL: *controlPlane,
-		EnrollmentToken: token,
-		StampName:       *stampName,
-		CredentialsPath: filepath.Join(*stateDir, "credentials.json"),
-		DeploymentsPath: filepath.Join(*stateDir, "deployments.json"),
-		UpstreamURL:     *upstream,
-		PollInterval:    *poll,
+		ControlPlaneURL:         *controlPlane,
+		EnrollmentToken:         token,
+		StampName:               *stampName,
+		CredentialsPath:         filepath.Join(*stateDir, "credentials.json"),
+		DeploymentsPath:         filepath.Join(*stateDir, "deployments.json"),
+		TelemetryCredentialPath: *telemetryCredentialPath,
+		UpstreamURL:             *upstream,
+		PollInterval:            *poll,
 		Capabilities: controlplane.Capabilities{
 			Orchestrator:    *orchestrator,
 			Region:          *region,

@@ -47,9 +47,25 @@ itself and never holds the telemetry credential.
 breakdown. Usage is operational, not billing-grade: delivery is at-least-once and a
 stamp that never reports contributes nothing.
 
-Not implemented: the collector process that performs the drain-and-forward. A
-control-plane test drives the mapping with the data plane's real buffer, so the
-collector has a specification rather than an inference.
+### Usage collector
+
+`agent/cmd/fabric-collector` drains the data plane's administrative listener and
+forwards records to the control plane. It is a separate process from the agent so the
+two credentials live in separate Secrets: the agent writes the write-only telemetry
+credential to its own 0600 file, and the collector reads only that. A test asserts the
+agent credential never lands there, and the end-to-end run confirms the telemetry
+credential cannot read desired state.
+
+Draining is destructive, so a failed forward would lose records. Drained records stay
+in a bounded pending queue and are retried on the next pass; when the queue overflows
+the oldest are dropped and counted, because an outage must not grow memory without
+limit. A permanent rejection stops the collector rather than retrying a backlog that
+can never be accepted. Per-record rejections are permanent by nature — an unplaced
+deployment or an out-of-window timestamp — so they are logged and discarded rather
+than resent forever. 10 Go tests cover this.
+
+Not implemented: runtime and GPU metrics collection, and any store or dashboard that
+consumes usage.
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 
@@ -98,7 +114,7 @@ advances, so a crash replays an assignment rather than losing it; a failed statu
 write does not discard configuration already applied; and a permanent rejection
 (revoked credential or stamp, spent enrollment token) stops the loop instead of
 retrying forever. The agent never presents the telemetry credential, which it
-persists for a collector that does not exist yet.
+hands to the collector through a separate 0600 file.
 
 Building it exposed a gap in the control plane: desired state carried no
 `account_id`, so an agent on a managed stamp could not tell the data plane which

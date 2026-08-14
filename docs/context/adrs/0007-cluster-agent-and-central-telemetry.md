@@ -1,7 +1,7 @@
 # ADR 0007: Use a Cluster Agent and Asynchronous Central Telemetry
 
 **Decision status:** Accepted  
-**Implementation status:** Partially implemented — the cluster agent ships in [`agent/`](../../../agent/) with outbound enrollment, heartbeat, desired-state pull, and status writes. Central telemetry ingestion and the collector do not exist.  
+**Implementation status:** Implemented for usage — the cluster agent and the usage collector both ship in [`agent/`](../../../agent/), with outbound enrollment, heartbeat, desired-state pull, status writes, and usage forwarded to `POST /v1/telemetry/usage` under a separate write-only credential. Runtime and GPU metrics collection, and any store or dashboard consuming them, do not exist.  
 **Date:** 2026-08-11
 
 ## Context

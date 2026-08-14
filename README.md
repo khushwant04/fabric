@@ -11,13 +11,15 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A CUDA correctness and microbenchmark harness in [`runtime/benchmarks/gated_delta_decode_bench.py`](runtime/benchmarks/gated_delta_decode_bench.py).
 - A host-facing kernel dispatch and fallback layer in [`runtime/integration/dispatch.py`](runtime/integration/dispatch.py) implementing the `auto`/`fabric`/`standard` kernel modes; no model host calls it yet.
 - A Go cluster agent in [`agent/`](agent/) that enrolls a stamp, pulls desired state, renders the data plane's local configuration, and reports status; it creates no Kubernetes resources.
+- A Go usage collector in [`agent/cmd/fabric-collector/`](agent/cmd/fabric-collector/) that drains the data plane and forwards usage with a write-only telemetry credential it cannot use for anything else.
 - An inference data plane in [`data-plane/`](data-plane/) that verifies Fabric inference JWTs locally, enforces account ownership of deployments, and proxies OpenAI-compatible requests to a model host.
 - A vLLM decode-op substitution in [`serving/`](serving/) that computes the same function as vLLM's own gated-delta kernel and is 1.0–1.4x faster than it on the development GPU; it is not registered in a live vLLM instance.
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
 - A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
 
-The control plane accepts usage on `/v1/telemetry/usage` and the data plane buffers
-records for a collector to drain, but no collector process runs them.
+Usage flows end to end: the data plane buffers records, the `fabric-collector`
+binary drains and forwards them, and the control plane attributes them to the
+account and stamp. No metrics pipeline or dashboard consumes them yet.
 
 There is currently no running vLLM host, Kubernetes operator, AKS/k3s deployment,
 metrics pipeline, dashboard, or A10/T4 benchmark result.
@@ -60,7 +62,7 @@ Agent-aware session caching, multimodal serving, quantization, speculative decod
 | [`runtime/kernels/`](runtime/kernels/) | Fabric GPU kernel prototypes | One gated-delta kernel implemented |
 | [`runtime/integration/`](runtime/integration/) | Host-facing kernel dispatch, fallback, and telemetry | Implemented; no host calls it yet |
 | [`runtime/benchmarks/`](runtime/benchmarks/) | Correctness and microbenchmark harnesses | Local prototype implemented |
-| [`agent/`](agent/) | Go cluster agent: enrollment, desired state, status, local config | Implemented; creates no Kubernetes resources |
+| [`agent/`](agent/) | Go cluster agent and usage collector | Implemented; creates no Kubernetes resources |
 | [`data-plane/`](data-plane/) | Inference ingress: local token verification, routing, proxying | Implemented; no model host wired to it |
 | [`serving/`](serving/) | vLLM host integration and decode-op substitution | Verified against vLLM's kernel; not registered in a live host |
 | [`scripts/`](scripts/) | A10 research-host provisioning (driver, CUDA, envs) and measurement runbook | Implemented |
@@ -129,7 +131,7 @@ Start with the [project context index](docs/context/README.md).
 - [Control-plane data and API design](docs/context/control-plane-data-api-design.md)
 - [Control-plane service](docs/context/control-plane-service.md)
 - [Inference data plane](docs/context/data-plane-service.md)
-- [Cluster agent](docs/context/cluster-agent-service.md)
+- [Cluster agent and usage collector](docs/context/cluster-agent-service.md)
 - [System design](docs/context/system-design.md)
 - [Runtime design](docs/context/runtime-design.md)
 - [Benchmark and research plan](docs/context/benchmark-research-plan.md)

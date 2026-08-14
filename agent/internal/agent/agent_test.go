@@ -119,12 +119,13 @@ func newAgent(t *testing.T, url string) (*Agent, string) {
 	t.Helper()
 	dir := t.TempDir()
 	config := Config{
-		ControlPlaneURL: url,
-		EnrollmentToken: "fab_enroll_token_secret",
-		StampName:       "test-stamp",
-		CredentialsPath: filepath.Join(dir, "credentials.json"),
-		DeploymentsPath: filepath.Join(dir, "deployments.json"),
-		UpstreamURL:     "http://model-host:8000",
+		ControlPlaneURL:         url,
+		EnrollmentToken:         "fab_enroll_token_secret",
+		StampName:               "test-stamp",
+		CredentialsPath:         filepath.Join(dir, "credentials.json"),
+		DeploymentsPath:         filepath.Join(dir, "deployments.json"),
+		TelemetryCredentialPath: filepath.Join(dir, state.TelemetryCredentialFile),
+		UpstreamURL:             "http://model-host:8000",
 	}
 	return New(config, discardLogger()), dir
 }
@@ -453,5 +454,65 @@ func TestReconcileRequiresEnrollment(t *testing.T) {
 	instance, _ := newAgent(t, "http://unused.invalid")
 	if _, err := instance.ReconcileOnce(context.Background()); err == nil {
 		t.Fatal("expected reconcile to refuse before enrollment")
+	}
+}
+
+func TestEnrollmentHandsTheCollectorOnlyTheTelemetryCredential(t *testing.T) {
+	// The collector's Secret must not contain the agent credential: that would let
+	// it read desired state and write status, which the separation exists to stop.
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	path := filepath.Join(dir, state.TelemetryCredentialFile)
+	written, err := state.ReadTelemetryCredential(path)
+	if err != nil {
+		t.Fatalf("read telemetry credential: %v", err)
+	}
+
+	credentials, err := state.LoadCredentials(filepath.Join(dir, "credentials.json"))
+	if err != nil {
+		t.Fatalf("load credentials: %v", err)
+	}
+	if written != credentials.TelemetryCredential {
+		t.Fatalf("wrong credential handed over: %q", written)
+	}
+	if written == credentials.AgentCredential {
+		t.Fatal("the agent credential must never be handed to the collector")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	// The collector's own Secret, not shared with the agent.
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("telemetry credential is %o, want 0600", perm)
+	}
+}
+
+func TestTheTelemetryHandOffIsOptional(t *testing.T) {
+	// A stamp running no collector must still enrol.
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	dir := t.TempDir()
+	instance := New(Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+	}, discardLogger())
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, state.TelemetryCredentialFile)); !os.IsNotExist(err) {
+		t.Fatal("no telemetry credential file should exist when the hand-off is disabled")
 	}
 }
