@@ -1,0 +1,50 @@
+# A stub OpenAI-compatible model host, for validating the packaging only.
+#
+# This is NOT part of the product: Fabric does not deploy a model host, and no vLLM
+# host exists yet. It returns one canned completion so a stamp can be exercised end
+# to end in a throwaway cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stub-model-host
+data:
+  default.conf: |
+    server {
+      listen 8000;
+      location / {
+        default_type application/json;
+        # Fixed token counts so a test can assert exactly what should be reported.
+        return 200 '{"id":"cmpl-stub","object":"chat.completion","model":"stub","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":13,"completion_tokens":7,"total_tokens":20}}';
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stub-model-host
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: stub-model-host}
+  template:
+    metadata:
+      labels: {app: stub-model-host}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{containerPort: 8000}]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: config
+          configMap: {name: stub-model-host}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stub-model-host
+spec:
+  selector: {app: stub-model-host}
+  ports: [{port: 8000, targetPort: 8000}]

@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     app_env: str = "local"
     log_level: str = "INFO"
 
+    #: Inference listener. Published by the Service and reachable by customers.
+    host: str = "0.0.0.0"  # noqa: S104 - a container binds its own namespace
+    port: int = 8080
+
+    #: Administrative listener: usage drain and internal state. Bound inside the
+    #: pod only and never published, so a collector sharing the network namespace
+    #: reaches it and nothing else does.
+    admin_host: str = "127.0.0.1"
+    admin_port: int = 8081
+
     #: Issuer claim Fabric-signed tokens must carry.
     jwt_issuer: str = "https://control.fabric.local"
 

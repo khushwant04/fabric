@@ -53,6 +53,9 @@ type Agent struct {
 	// known tracks assignments seen so far, because desired state is delivered
 	// incrementally by generation and a later pass returns only what changed.
 	known map[string]state.Deployment
+	// Status reports the control plane has not accepted yet, retried on later
+	// passes because desired state will not mention them again.
+	pendingStatus map[string]controlplane.DesiredDeployment
 }
 
 // New builds an agent. It does not perform any network call.
@@ -64,10 +67,11 @@ func New(config Config, log *slog.Logger) *Agent {
 		config.RequestTimeout = 30 * time.Second
 	}
 	return &Agent{
-		config: config,
-		client: controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
-		log:    log,
-		known:  map[string]state.Deployment{},
+		config:        config,
+		client:        controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
+		log:           log,
+		known:         map[string]state.Deployment{},
+		pendingStatus: map[string]controlplane.DesiredDeployment{},
 	}
 }
 
@@ -92,6 +96,41 @@ func (a *Agent) Ensure(ctx context.Context) error {
 	if existing != nil {
 		a.credentials = existing
 		a.client.Credential = existing.AgentCredential
+		// The collector's copy may live on an ephemeral volume, so it is rewritten
+		// on every start rather than only when the credential was first issued.
+		a.handOffTelemetryCredential()
+		// A restart also loses unreported status, and desired state will not
+		// mention already-acknowledged assignments again. What is on disk is what
+		// this agent has applied, so it is reported at the acknowledged generation.
+		existingDeployments, readErr := state.ReadDeployments(a.config.DeploymentsPath)
+		switch {
+		case readErr == nil:
+			for _, deployment := range existingDeployments.Deployments {
+				a.known[deployment.DeploymentID] = deployment
+				a.pendingStatus[deployment.DeploymentID] = controlplane.DesiredDeployment{
+					DeploymentID:      deployment.DeploymentID,
+					AccountID:         deployment.AccountID,
+					ModelAlias:        deployment.ModelAlias,
+					DesiredGeneration: existing.AckedGeneration,
+				}
+			}
+		case a.credentials.AckedGeneration > 0:
+			// The rendered configuration is gone while the acknowledged generation
+			// says assignments were applied. Desired state is delivered
+			// incrementally, so asking for changes after that generation would
+			// return nothing and this stamp would serve nothing for as long as it
+			// ran. Credentials are durable and the rendered file usually is not, so
+			// this is the normal consequence of a restart, not a rare corruption.
+			//
+			// Forgetting the acknowledgement asks for the full set again. It is safe
+			// because rendering is idempotent: the same assignments produce the same
+			// file.
+			a.log.Warn("rendered configuration is missing, rebuilding from full desired state",
+				"path", a.config.DeploymentsPath,
+				"acked_generation", a.credentials.AckedGeneration,
+				"error", readErr)
+			a.credentials.AckedGeneration = 0
+		}
 		a.log.Info("using persisted stamp identity",
 			"stamp_id", existing.StampID, "acked_generation", existing.AckedGeneration)
 		return nil
@@ -121,22 +160,33 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		// strand the stamp.
 		return fmt.Errorf("persist credentials for stamp %s: %w", enrolled.Stamp.ID, err)
 	}
-	if a.config.TelemetryCredentialPath != "" {
-		if err := state.WriteTelemetryCredential(
-			a.config.TelemetryCredentialPath, enrolled.TelemetryCredential,
-		); err != nil {
-			// Not fatal: usage export is degraded, but inference and status
-			// reporting work, and refusing to run would be a worse outcome.
-			a.log.Error("could not hand the telemetry credential to the collector",
-				"path", a.config.TelemetryCredentialPath, "error", err)
-		}
-	}
+	a.handOffTelemetryCredential()
 
 	a.client.Credential = enrolled.AgentCredential
 	a.log.Info("enrolled",
 		"stamp_id", enrolled.Stamp.ID, "mode", enrolled.Stamp.Mode,
 		"stamp_account", enrolled.Stamp.AccountID)
 	return nil
+}
+
+// handOffTelemetryCredential writes the collector's credential if one is wanted.
+//
+// This runs on every start, not only after enrollment. Credentials persist on a
+// volume that survives restarts, while the collector's copy usually lives on an
+// ephemeral one, so a restarted agent that only wrote at enrollment would leave the
+// collector with no credential and usage would stop being reported.
+func (a *Agent) handOffTelemetryCredential() {
+	if a.config.TelemetryCredentialPath == "" || a.credentials == nil {
+		return
+	}
+	if err := state.WriteTelemetryCredential(
+		a.config.TelemetryCredentialPath, a.credentials.TelemetryCredential,
+	); err != nil {
+		// Not fatal: usage export is degraded, but inference and status reporting
+		// still work, and refusing to run would be the worse outcome.
+		a.log.Error("could not hand the telemetry credential to the collector",
+			"path", a.config.TelemetryCredentialPath, "error", err)
+	}
 }
 
 // ReconcileOnce performs one pass and returns the assignments now configured.
@@ -205,13 +255,23 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		}
 	}
 
+	// Desired state is requested after the acknowledged generation, so a later
+	// pass returns nothing new. A status write that failed here would never be
+	// attempted again, leaving a serving deployment with no reported status at all,
+	// so unaccepted reports are held and retried.
 	for _, assignment := range desired.Deployments {
+		a.pendingStatus[assignment.DeploymentID] = assignment
+	}
+
+	for id, assignment := range a.pendingStatus {
 		if err := a.reportStatus(ctx, assignment); err != nil {
 			// A status write failing does not invalidate the configuration that
 			// was already applied, so the pass is not aborted.
-			a.log.Warn("status report failed",
+			a.log.Warn("status report failed, will retry",
 				"deployment_id", assignment.DeploymentID, "error", err)
+			continue
 		}
+		delete(a.pendingStatus, id)
 	}
 	return configured, nil
 }

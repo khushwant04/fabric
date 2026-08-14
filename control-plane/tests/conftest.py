@@ -1,8 +1,20 @@
 """Shared test fixtures.
 
-Tests run against a migrated SQLite database so the Alembic history is exercised
-on every run. Auth0 is replaced by a deterministic verifier; bearer tokens of the
-form ``user:<subject>`` represent an authenticated human.
+Tests run against a migrated database so the Alembic history is exercised on every
+run. SQLite is the default because it needs no service. Setting
+``FABRIC_TEST_DATABASE_URL`` to a PostgreSQL URL runs the same suite against the
+engine production uses, which is the only way to exercise behaviour SQLite cannot
+represent: row-level security, real savepoint semantics after a constraint
+violation, and timezone-aware timestamps.
+
+    FABRIC_TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host/db?ssl=require \
+        .venv/bin/python -m pytest -q
+
+The schema is rebuilt at session start, so the target database must be one whose
+contents can be discarded.
+
+Auth0 is replaced by a deterministic verifier; bearer tokens of the form
+``user:<subject>`` represent an authenticated human.
 """
 
 from __future__ import annotations
@@ -16,8 +28,14 @@ import pytest
 
 TEST_DB_PATH = pathlib.Path(tempfile.gettempdir()) / "fabric_control_plane_test.db"
 
+#: A PostgreSQL URL here runs the suite against the production engine instead.
+TEST_DATABASE_URL = os.environ.get(
+    "FABRIC_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{TEST_DB_PATH}"
+)
+USING_POSTGRES = TEST_DATABASE_URL.startswith("postgresql")
+
 os.environ["FABRIC_APP_ENV"] = "test"
-os.environ["FABRIC_DATABASE_URL"] = f"sqlite+aiosqlite:///{TEST_DB_PATH}"
+os.environ["FABRIC_DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["FABRIC_AUTH0_ISSUER"] = "https://fabric.jp.auth0.com/"
 os.environ["FABRIC_AUTH0_AUDIENCE"] = "https://api.fabric.test/control"
 os.environ["FABRIC_JWT_ISSUER"] = "https://control.fabric.test"
@@ -58,11 +76,21 @@ class FakeAuth0Verifier:
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database() -> Iterator[None]:
     """Apply the Alembic migration history once per test session."""
-    if TEST_DB_PATH.exists():
-        TEST_DB_PATH.unlink()
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
-    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{TEST_DB_PATH}")
+    config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
+
+    if USING_POSTGRES:
+        # A shared database may hold a schema from an earlier run, and migrating
+        # onto it would test nothing. Rebuilding also exercises the downgrade path,
+        # which the file-based SQLite run never does because it deletes the file.
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+        yield
+        return
+
+    if TEST_DB_PATH.exists():
+        TEST_DB_PATH.unlink()
     command.upgrade(config, "head")
     yield
     if TEST_DB_PATH.exists():
@@ -78,6 +106,13 @@ async def clean_tables() -> AsyncIterator[None]:
         for table in reversed(Base.metadata.sorted_tables):
             await session.execute(delete(table))
         await session.commit()
+
+    if USING_POSTGRES:
+        # Each test runs in its own event loop, and asyncpg connections are bound
+        # to the loop that opened them. A pooled connection reused by the next test
+        # fails with "attached to a different loop", so the pool is released here.
+        # SQLite is unaffected because aiosqlite proxies through a thread.
+        await dispose_engine()
 
 
 @pytest.fixture

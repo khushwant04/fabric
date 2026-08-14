@@ -130,6 +130,20 @@ func newAgent(t *testing.T, url string) (*Agent, string) {
 	return New(config, discardLogger()), dir
 }
 
+func newAgentAt(t *testing.T, url, dir, token string) (*Agent, string) {
+	t.Helper()
+	config := Config{
+		ControlPlaneURL:         url,
+		EnrollmentToken:         token,
+		StampName:               "test-stamp",
+		CredentialsPath:         filepath.Join(dir, "credentials.json"),
+		DeploymentsPath:         filepath.Join(dir, "deployments.json"),
+		TelemetryCredentialPath: filepath.Join(dir, state.TelemetryCredentialFile),
+		UpstreamURL:             "http://model-host:8000",
+	}
+	return New(config, discardLogger()), dir
+}
+
 func assignment(id, account, alias string, generation int, release string) controlplane.DesiredDeployment {
 	return controlplane.DesiredDeployment{
 		DeploymentID:      id,
@@ -514,5 +528,228 @@ func TestTheTelemetryHandOffIsOptional(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, state.TelemetryCredentialFile)); !os.IsNotExist(err) {
 		t.Fatal("no telemetry credential file should exist when the hand-off is disabled")
+	}
+}
+
+func TestRestartRewritesTheCollectorCredential(t *testing.T) {
+	// Found by deploying to Kubernetes: credentials live on a volume that survives
+	// restarts, while the collector's copy is on an ephemeral one. An agent that
+	// wrote the hand-off only at enrollment left the collector with no credential
+	// after any restart, and usage silently stopped being reported.
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("first ensure: %v", err)
+	}
+
+	telemetryPath := filepath.Join(dir, state.TelemetryCredentialFile)
+	first, err := state.ReadTelemetryCredential(telemetryPath)
+	if err != nil {
+		t.Fatalf("read after enrollment: %v", err)
+	}
+
+	// Simulate the ephemeral volume being emptied by a restart.
+	if err := os.Remove(telemetryPath); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	// A restart with no enrollment token: credentials are reused, not reissued.
+	restarted, _ := newAgentAt(t, server.URL, dir, "")
+	if err := restarted.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure after restart: %v", err)
+	}
+
+	again, err := state.ReadTelemetryCredential(telemetryPath)
+	if err != nil {
+		t.Fatalf("the hand-off was not rewritten after a restart: %v", err)
+	}
+	if again != first {
+		t.Fatalf("credential changed across restart: %q then %q", first, again)
+	}
+}
+
+func TestAFailedStatusReportIsRetriedOnTheNextPass(t *testing.T) {
+	// Found in a cluster: a transient control-plane error lost the status for good.
+	// Desired state is requested after the acknowledged generation, so the next pass
+	// returns nothing and the report would never be attempted again, leaving a
+	// serving deployment with no status at all.
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments: []controlplane.DesiredDeployment{
+				assignment(deployA, customerA, "alpha-model", 1, "release-a"),
+			},
+		}},
+		failStatus: http.StatusInternalServerError,
+		failCode:   "internal_error",
+	}
+	server := stub.server(t)
+	instance, _ := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("a failed status write must not fail the pass: %v", err)
+	}
+	if len(stub.statuses) != 0 {
+		t.Fatalf("the stub refused the write, so nothing should be recorded")
+	}
+
+	// The control plane recovers, and desired state now has nothing new to say:
+	// the assignment was already acknowledged.
+	stub.failStatus = 0
+
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(stub.statuses) != 1 {
+		t.Fatalf("the failed status report was never retried: %d recorded", len(stub.statuses))
+	}
+	if stub.statuses[0].DeploymentID != deployA {
+		t.Fatalf("wrong deployment reported: %s", stub.statuses[0].DeploymentID)
+	}
+
+	// Once accepted it is not resent on every later pass.
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if len(stub.statuses) != 1 {
+		t.Fatalf("an accepted status report is resent every pass: %d", len(stub.statuses))
+	}
+}
+
+func TestARestartReportsStatusForConfigurationOnDisk(t *testing.T) {
+	// A restart loses in-memory pending reports, and desired state will not mention
+	// an acknowledged assignment again, so what is on disk must be reported.
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments: []controlplane.DesiredDeployment{
+				assignment(deployA, customerA, "alpha-model", 1, "release-a"),
+			},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	delivered := len(stub.statuses)
+
+	// Restart over the same state directory, with nothing new to deliver.
+	restarted, _ := newAgentAt(t, server.URL, dir, "")
+	if err := restarted.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure after restart: %v", err)
+	}
+	if _, err := restarted.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("pass after restart: %v", err)
+	}
+
+	if len(stub.statuses) <= delivered {
+		t.Fatal("a restarted agent reported no status for the deployment it serves")
+	}
+	last := stub.statuses[len(stub.statuses)-1]
+	if last.DeploymentID != deployA {
+		t.Fatalf("wrong deployment reported after restart: %s", last.DeploymentID)
+	}
+	if last.ObservedGeneration == nil || *last.ObservedGeneration != 1 {
+		t.Fatalf("observed generation must be what was acknowledged, got %v", last.ObservedGeneration)
+	}
+}
+
+func TestLostRenderedConfigurationIsRebuiltFromFullDesiredState(t *testing.T) {
+	// Found in a cluster: credentials are durable but the rendered configuration
+	// usually is not. After a restart the agent held acked_generation=1 while the
+	// file was gone, so desired state returned nothing and the data plane served
+	// nothing for as long as the pod ran.
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments: []controlplane.DesiredDeployment{
+				assignment(deployA, customerA, "alpha-model", 1, "release-a"),
+			},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	configured, err := instance.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if len(configured) != 1 {
+		t.Fatalf("expected one deployment, got %d", len(configured))
+	}
+
+	// The ephemeral volume is emptied by a restart while credentials survive.
+	if err := os.Remove(filepath.Join(dir, "deployments.json")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	// The control plane still has the assignment, and will send it when asked from
+	// the beginning rather than for changes after generation 1.
+	stub.desiredIndex = 0
+	restarted, _ := newAgentAt(t, server.URL, dir, "")
+	if err := restarted.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure after restart: %v", err)
+	}
+	rebuilt, err := restarted.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("pass after restart: %v", err)
+	}
+
+	if len(rebuilt) != 1 {
+		t.Fatalf("configuration was not rebuilt: %d deployments", len(rebuilt))
+	}
+	if stub.lastAfter != "0" {
+		t.Fatalf("expected a full desired-state request, asked after generation %q", stub.lastAfter)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "deployments.json")); err != nil {
+		t.Fatalf("the data plane's configuration was not rewritten: %v", err)
+	}
+}
+
+func TestAnEmptyConfigurationIsNotTreatedAsLoss(t *testing.T) {
+	// Withdrawing every placement is a legitimate state the agent records by
+	// writing an empty list. That must not be mistaken for a lost file, or the
+	// agent would re-request everything on every pass forever.
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{StampID: stampID, MaxGeneration: 3}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if err := state.WriteDeployments(filepath.Join(dir, "deployments.json"), nil); err != nil {
+		t.Fatalf("write empty: %v", err)
+	}
+
+	restarted, _ := newAgentAt(t, server.URL, dir, "")
+	if err := restarted.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure after restart: %v", err)
+	}
+	if _, err := restarted.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("pass after restart: %v", err)
+	}
+	if stub.lastAfter == "0" {
+		t.Fatal("an empty configuration was mistaken for a lost one")
 	}
 }

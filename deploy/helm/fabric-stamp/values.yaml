@@ -1,0 +1,123 @@
+# Fabric inference stamp.
+#
+# Minimum required values:
+#   controlPlane.url, controlPlane.jwtIssuer, enrollment.token (first install only),
+#   modelHost.url
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # Agent and collector ship in one image and run as separate containers.
+  agent:
+    repository: fabric/agent
+    tag: ""            # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  dataPlane:
+    repository: fabric/data-plane
+    tag: ""
+    pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+controlPlane:
+  # Base URL the agent and collector call outbound. No inbound path is opened.
+  url: ""
+  # Issuer and JWKS the data plane verifies inference tokens against. The JWKS URL
+  # defaults to the control-plane URL, which is correct unless a separate
+  # discovery host is used.
+  jwtIssuer: ""
+  jwksUrl: ""
+
+enrollment:
+  # Single-use token from POST /v1/accounts/{id}/stamp-enrollment-tokens.
+  # Needed only until the stamp has enrolled; the Secret can be deleted after.
+  token: ""
+  # Use an existing Secret instead of templating the token into one.
+  existingSecret: ""
+  existingSecretKey: enrollment-token
+
+stamp:
+  # Defaults to the release name.
+  name: ""
+  orchestrator: k3s
+  region: ""
+  # GPUs this stamp offers, reported as a capability during enrollment. It does not
+  # reserve anything: scheduling GPUs is the model host's concern, not the agent's.
+  gpus: 1
+
+modelHost:
+  # The OpenAI-compatible host the data plane proxies to. Fabric does not deploy
+  # it: no vLLM host exists in this chart.
+  url: ""
+  # Optional model name override; normally the control plane's release supplies it.
+  model: ""
+
+agent:
+  pollInterval: 15s
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+
+collector:
+  enabled: true
+  interval: 60s
+  # Records held while the control plane is unreachable. Oldest are dropped when
+  # full, and drops are logged.
+  queueCapacity: 10000
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+
+dataPlane:
+  replicas: 1
+  logLevel: INFO
+  usageBufferSize: 10000
+  upstreamTimeoutSeconds: 300
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 1, memory: 1Gi}
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# The agent's credentials must survive a restart: enrollment tokens are single use,
+# so a stamp that loses them needs operator intervention to rejoin.
+persistence:
+  enabled: true
+  size: 128Mi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Restricts ingress to the inference port. The administrative port is never
+# published by the Service; this also stops direct pod access to it.
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach the inference port. Empty allows the whole cluster.
+  allowedNamespaces: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+extraLabels: {}

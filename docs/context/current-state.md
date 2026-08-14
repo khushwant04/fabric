@@ -47,6 +47,19 @@ itself and never holds the telemetry credential.
 breakdown. Usage is operational, not billing-grade: delivery is at-least-once and a
 stamp that never reports contributes nothing.
 
+### Packaging
+
+`/deploy` holds container images for the agent, data plane, and control plane, and a
+Helm chart that installs a stamp as one StatefulSet: agent, data plane, and collector
+in one pod with three separate volumes, so the data plane cannot read the agent's
+credential and the collector receives only the telemetry credential.
+`deploy/scripts/kind-e2e.sh` installs it on a throwaway cluster and drives the whole
+loop, including a pod restart. Details and the defects that only appeared on
+Kubernetes are in [Packaging and Deployment](packaging-deployment.md).
+
+Not implemented: a CRD, an operator, a control-plane chart, GPU scheduling, ingress
+or TLS, and any model host.
+
 ### Usage collector
 
 `agent/cmd/fabric-collector` drains the data plane's administrative listener and

@@ -2,6 +2,23 @@
 
 **Status:** Implemented (initial version) — the ingress in [`data-plane/`](../../data-plane/) verifies Fabric inference tokens locally and proxies OpenAI-compatible requests.
 **Design reference:** [Security and Identity](security-identity.md), [Architecture Requirements](architecture-requirements.md) AR-DP01/02/03 and AR-ID03/04/05.
+Configuration is re-read while running. The agent rewrites `deployments.json`
+whenever placement changes, so a registry read once at startup would serve a snapshot
+from boot: a new placement would return `model_not_found` until the pod restarted and
+a withdrawn one would keep being served. The file is re-read only when its
+modification time or size changes. A read that fails keeps the last good set rather
+than emptying it, and a missing file is treated as a fault rather than as "nothing is
+placed here", which the agent expresses by writing an empty list.
+
+Both listeners run in one process (`fabric_data_plane.serve`). The usage buffer is in
+memory, so an administrative listener in another process would drain a buffer that
+never saw a request and report no usage at all. Health probes exist on both
+listeners: the administrative one binds to localhost, so a Kubernetes kubelet
+probing the pod address can only reach the public one. Readiness requires verification
+keys and answers 503 without them, because a probe reads the status code and a data
+plane with no keys rejects every request. Keys are fetched at startup and retried, so
+readiness does not wait for traffic that will not arrive.
+
 Usage is buffered locally and taken by a collector through
 `POST /admin/usage/drain` on the administrative listener. The data plane never pushes
 usage and never holds the telemetry credential, which keeps the inference path free of

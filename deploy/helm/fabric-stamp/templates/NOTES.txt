@@ -1,0 +1,30 @@
+Fabric inference stamp {{ include "fabric-stamp.fullname" . }} installed.
+
+The agent enrols outbound; nothing needs to reach into this cluster.
+
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "fabric-stamp.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs statefulset/{{ include "fabric-stamp.fullname" . }} -c agent
+
+Inference is served in-cluster at:
+
+  http://{{ include "fabric-stamp.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/v1/chat/completions
+
+Callers present a Fabric inference token; the stamp serves only deployments the
+control plane has placed on it, and only for the account that owns them.
+
+{{ if and .Values.enrollment.token (not .Values.enrollment.existingSecret) }}
+The enrollment token is single use. Once the agent reports enrolment, delete it:
+
+  kubectl -n {{ .Release.Namespace }} delete secret {{ include "fabric-stamp.enrollmentSecretName" . }}
+{{ end }}
+{{- if not .Values.persistence.enabled }}
+WARNING: persistence is disabled. A restart loses the stamp's credentials, and the
+enrollment token cannot be reused, so the stamp will need a new token to rejoin.
+{{- end }}
+{{- if not .Values.collector.enabled }}
+NOTE: the collector is disabled, so usage accumulates in the data plane's buffer and
+is dropped when the buffer fills. Nothing will be reported centrally.
+{{- end }}
+
+No Kubernetes resources are created for placed deployments: there is no operator
+yet, so the agent renders the data plane's configuration file instead.

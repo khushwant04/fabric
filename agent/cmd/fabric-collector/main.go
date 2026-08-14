@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -45,7 +46,9 @@ func main() {
 		interval = flag.Duration("interval", 60*time.Second, "Forwarding interval")
 		capacity = flag.Int("queue-capacity", 10000,
 			"Maximum records held while the control plane is unreachable")
-		timeout     = flag.Duration("timeout", 30*time.Second, "Per-request timeout")
+		timeout        = flag.Duration("timeout", 30*time.Second, "Per-request timeout")
+		credentialWait = flag.Duration("credential-wait", 5*time.Minute,
+			"How long to wait for the credential file to appear before giving up")
 		once        = flag.Bool("once", false, "Run a single pass and exit")
 		showVersion = flag.Bool("version", false, "Print the version and exit")
 	)
@@ -58,6 +61,9 @@ func main() {
 
 	logger := log.New(os.Stderr, "fabric-collector ", log.LstdFlags|log.LUTC)
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	if *controlPlane == "" {
 		logger.Fatal("--control-plane is required")
 	}
@@ -69,7 +75,7 @@ func main() {
 		if *credentialFile == "" {
 			logger.Fatal("supply --credential-file or FABRIC_COLLECTOR_TELEMETRY_CREDENTIAL")
 		}
-		loaded, err := state.ReadTelemetryCredential(*credentialFile)
+		loaded, err := awaitCredential(ctx, logger, *credentialFile, *credentialWait)
 		if err != nil {
 			logger.Fatalf("telemetry credential: %v", err)
 		}
@@ -82,9 +88,6 @@ func main() {
 	worker := collector.New(
 		client, collector.NewDataPlane(*dataPlane, *timeout), logger, *capacity,
 	)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	if *once {
 		stats, err := worker.RunOnce(ctx)
@@ -102,5 +105,42 @@ func main() {
 	logger.Printf("forwarding usage from %s to %s every %s", *dataPlane, *controlPlane, *interval)
 	if err := worker.Run(ctx, *interval); err != nil && ctx.Err() == nil {
 		logger.Fatalf("collector stopped: %v", err)
+	}
+}
+
+// awaitCredential waits for the agent to write the telemetry credential.
+//
+// Containers in a pod start in parallel, so the collector usually starts before the
+// agent has enrolled or rewritten the hand-off file. Exiting immediately turns a
+// normal startup race into a crash loop, so it polls instead and reports what it is
+// waiting for.
+func awaitCredential(
+	ctx context.Context, logger *log.Logger, path string, limit time.Duration,
+) (string, error) {
+	deadline := time.Now().Add(limit)
+	announced := false
+
+	for {
+		credential, err := state.ReadTelemetryCredential(path)
+		if err == nil {
+			return credential, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) && !os.IsNotExist(errors.Unwrap(err)) {
+			// A malformed or unreadable file is not a race; report it.
+			return "", err
+		}
+		if !announced {
+			logger.Printf("waiting for the agent to write %s", path)
+			announced = true
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no credential at %s after %s", path, limit)
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
 }

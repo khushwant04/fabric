@@ -117,6 +117,16 @@ class KeyCache:
 
     # -- lookup ------------------------------------------------------------
 
+    def refresh(self) -> bool:
+        """Fetch the document now, regardless of staleness.
+
+        Used to warm the cache at startup. Readiness requires key material, and
+        keys were previously fetched only while verifying a token, so a pod could
+        never become ready: it needed traffic to fetch keys, and it received no
+        traffic until it was ready.
+        """
+        return self._fetch()
+
     def key_for(self, key_id: str | None) -> Any:
         """Return the verification key for a token's ``kid``.
 

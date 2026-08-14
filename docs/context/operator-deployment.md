@@ -1,6 +1,6 @@
 # Operator, Cluster Agent, and Deployment Design
 
-**Status:** Partly implemented — the cluster agent in [`agent/`](../../agent/) and the A10 research-host scripts in [`scripts/`](../../scripts/) are implemented. No CRD, operator, Helm bundle, or telemetry collector configuration exists. See [Cluster Agent](cluster-agent-service.md).
+**Status:** Partly implemented — the cluster agent and usage collector in [`agent/`](../../agent/), the packaging in [`deploy/`](../../deploy/), and the A10 research-host scripts in [`scripts/`](../../scripts/) are implemented. A stamp installs on Kubernetes today through the Helm chart and was verified on a real cluster. No CRD or operator exists, so the agent renders the data plane's configuration rather than creating Kubernetes resources. See [Packaging and Deployment](packaging-deployment.md) and [Cluster Agent](cluster-agent-service.md).
 
 ## Inference stamp definition
 

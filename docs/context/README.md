@@ -13,6 +13,7 @@ Fabric is not yet a complete managed inference platform. The implemented project
 - An inference data plane under `/data-plane` that verifies Fabric inference tokens locally and proxies OpenAI-compatible requests; no model host is wired to it.
 - A Go cluster agent under `/agent` that enrolls a stamp, pulls desired state, renders the data plane's configuration, and reports status; it does not create Kubernetes resources.
 - A Go usage collector under `/agent/cmd/fabric-collector` that drains the data plane and forwards usage under a separate write-only credential; the control plane accepts it on `/v1/telemetry/usage`.
+- Container images and a Helm chart under `/deploy` that install a working stamp on Kubernetes, verified on a real cluster; no CRD or operator exists.
 - A Next.js 16 frontend scaffold under `/v1`; its home page and metadata retain starter content, and its UI dependencies/provider scaffolding do not implement a Fabric workflow.
 - A shape-generic single-token gated-delta Triton prototype at `/runtime/kernels/gated_delta_decode.py`; private launch-profile dispatch is not published.
 - A local correctness and microbenchmark harness at `/runtime/benchmarks/gated_delta_decode_bench.py`.
@@ -31,6 +32,7 @@ See [Current State](current-state.md) for exact implemented and unimplemented bo
 | [Control-Plane Service](control-plane-service.md) | Implemented | Running FastAPI service, configuration, Auth0 setup, and endpoints |
 | [Inference Data Plane](data-plane-service.md) | Implemented | Running ingress, token verification, routing, and configuration |
 | [Cluster Agent and Usage Collector](cluster-agent-service.md) | Implemented | Enrollment, desired-state pull, local configuration, status writes, usage forwarding |
+| [Packaging and Deployment](packaging-deployment.md) | Implemented for a stamp | Container images, Helm chart, cluster verification |
 | [System Design](system-design.md) | Partial | Intended control-plane and data-plane component design |
 | [Runtime Design](runtime-design.md) | Partial | Implemented kernel plus planned vLLM runtime work |
 | [Benchmark and Research Plan](benchmark-research-plan.md) | Partial | Existing harness and planned RTX 4070/A10/T4 evidence |

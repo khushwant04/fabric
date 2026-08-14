@@ -206,5 +206,9 @@ then use the returned control token as `Authorization: Bearer <token>`.
   `GET /v1/accounts/{account_id}/deployments/{deployment_id}/usage` reads totals back.
   The `fabric-collector` binary performs the drain-and-forward.
 - Outbox delivery workers are defined in the schema but have no publisher yet.
+- Pooled PostgreSQL connections are recycled below the usual idle timeout. Managed
+  offerings close idle connections, and pre-ping alone leaves a race in which a
+  dropped connection fails mid-statement and surfaces as a 500. Observed against a
+  managed instance while an agent reported status.
 - Stamp revocation is available through the API; agent and telemetry credential rotation is not.
 - Verified locally: `ruff` clean, 55 tests passing, `alembic upgrade → downgrade → upgrade` reproducing 16 application tables, 35 routes, and `openapi.json` matching the running app (24 paths, 38 schemas) — enforced by a test.
