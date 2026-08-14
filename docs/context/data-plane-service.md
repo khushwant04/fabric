@@ -1,0 +1,127 @@
+# Inference Data Plane
+
+**Status:** Implemented (initial version) — the ingress in [`data-plane/`](../../data-plane/) verifies Fabric inference tokens locally and proxies OpenAI-compatible requests.
+**Design reference:** [Security and Identity](security-identity.md), [Architecture Requirements](architecture-requirements.md) AR-DP01/02/03 and AR-ID03/04/05.
+**Not included yet:** quotas and rate limiting, mTLS or network policy to the model host, telemetry export, and anything that writes the deployments file (the cluster agent does not exist).
+
+## What runs today
+
+| Capability | State |
+|---|---|
+| Local inference-JWT verification against cached JWKS | Implemented |
+| Audience split enforced (`fabric-inference` only) | Implemented |
+| `inference:invoke` scope required | Implemented |
+| Account ownership of deployments from local configuration | Implemented |
+| Serving continues during a control-plane outage | Implemented |
+| Key cache seeded from a local file | Implemented |
+| Client ownership headers stripped before proxying | Implemented |
+| OpenAI-compatible chat and text completions, streaming | Implemented |
+| Customer-facing model alias in replies | Implemented |
+| Separate administrative listener | Implemented |
+| Local bounded usage buffer | Implemented |
+| Telemetry export, quotas, rate limiting, mTLS to the host | Not implemented |
+
+## Authorization model
+
+Two independent facts decide a request, and neither comes from the caller:
+
+```text
+verified token  ->  account_id
+local config    ->  deployment -> account_id, upstream
+
+serve only when the two accounts match
+```
+
+The `model` field selects a candidate deployment, which is ordinary
+OpenAI-compatible behaviour and carries no authority. Naming a deployment owned by
+another account returns `model_not_available` and never reaches a model host.
+
+## Configuration
+
+Copy [`data-plane/.env.example`](../../data-plane/.env.example) to `.env`:
+
+| Variable | Purpose |
+|---|---|
+| `FABRIC_DP_JWT_ISSUER` | Must match the control plane's `FABRIC_JWT_ISSUER` exactly |
+| `FABRIC_DP_JWKS_URL` | Where signing keys are published |
+| `FABRIC_DP_JWKS_REFRESH_SECONDS` | Cache lifetime; a stale cache still serves |
+| `FABRIC_DP_JWKS_FILE` | Optional public key set on disk for a restart during an outage |
+| `FABRIC_DP_DEPLOYMENTS_FILE` | Local deployment configuration |
+| `FABRIC_DP_LEEWAY_SECONDS` | Clock skew allowance on time claims |
+| `FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS` | Model host timeout, bounding long generations |
+| `FABRIC_DP_USAGE_BUFFER_SIZE` | Bounded local usage buffer |
+
+Deployments are described by [`data-plane/deployments.example.json`](../../data-plane/deployments.example.json).
+A populated file names real accounts and model releases and is gitignored.
+
+## Local commands
+
+```bash
+cd data-plane
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e '.[dev]'
+
+cp .env.example .env                          # set issuer and JWKS URL
+cp deployments.example.json deployments.json  # set accounts and upstreams
+
+# Inference listener: the only one a customer network should reach.
+.venv/bin/python -m uvicorn fabric_data_plane.main:inference --host 0.0.0.0 --port 8080
+
+# Administrative listener, separate process and port (AR-DP03).
+.venv/bin/python -m uvicorn fabric_data_plane.main:admin --host 127.0.0.1 --port 8081
+
+# Quality gates
+.venv/bin/ruff check fabric_data_plane tests
+.venv/bin/python -m pytest -q
+```
+
+The cross-component test needs both packages importable, so it skips in the
+data-plane environment alone and runs from one that has both:
+
+```bash
+PYTHONPATH=data-plane:control-plane \
+    control-plane/.venv/bin/python -m pytest data-plane/tests/test_control_plane_interop.py
+```
+
+## Endpoints
+
+```text
+inference listener
+  GET  /v1/models
+  POST /v1/chat/completions
+  POST /v1/completions
+
+administrative listener
+  GET  /healthz
+  GET  /readyz
+  GET  /admin/keys
+  GET  /admin/usage
+```
+
+Readiness reports unavailable until the process holds verification keys, because
+until then no token can be checked.
+
+## Error envelope
+
+Same shape as the control plane:
+
+```json
+{ "error": { "code": "model_not_available", "message": "...", "details": {} } }
+```
+
+Notable codes: `missing_credentials` (401), `invalid_token` (401),
+`token_expired` (401), `wrong_audience` (401), `unknown_signing_key` (401),
+`insufficient_scope` (403), `model_not_available` (403), `model_not_found` (404),
+`model_required` (400), `invalid_json` (400), `upstream_unavailable` (503).
+
+## Operational notes
+
+- The ingress performs TLS termination nowhere; run it behind a proxy.
+- A control-plane outage does not stop inference. `GET /admin/keys` reports
+  `serving_from_cache`, refresh counts, and the last fetch error so the condition
+  is visible rather than silent.
+- Usage records accumulate in memory and the oldest are dropped when the buffer is
+  full; `dropped` is reported. There is no exporter, so these records are not
+  evidence of billable usage.
+- Verified locally: `ruff` clean, 32 tests, and interop against a real
+  control-plane-issued token.

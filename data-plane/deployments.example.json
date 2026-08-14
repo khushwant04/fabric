@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Local deployment configuration for one inference stamp.",
+    "The cluster agent writes this file from desired state it pulled from the",
+    "control plane while it had connectivity. Serving a request never consults",
+    "the control plane, so this file is the data plane's authority on which",
+    "deployments exist here and which account owns each one.",
+    "Copy to deployments.json and edit. Never commit a populated file: it names",
+    "real accounts and model releases."
+  ],
+  "deployments": [
+    {
+      "deployment_id": "00000000-0000-0000-0000-000000000000",
+      "account_id": "11111111-1111-1111-1111-111111111111",
+      "model_alias": "launch-model",
+      "upstream_url": "http://127.0.0.1:8000",
+      "upstream_model": "<model name the vLLM host serves>"
+    }
+  ]
+}

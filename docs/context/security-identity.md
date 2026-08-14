@@ -1,6 +1,6 @@
 # Security and Identity Design
 
-**Status:** Implemented for the control plane — the human flow, API-key flow, Fabric JWT contract, and credential classes described here run in [`control-plane/`](../../control-plane/). Inference-token enforcement at a data plane, telemetry ingestion authorization, and cluster-side credential handling remain planned because those components do not exist yet.
+**Status:** Implemented for the control plane and the inference ingress — the human flow, API-key flow, Fabric JWT contract, credential classes, and local inference-token verification described here run in [`control-plane/`](../../control-plane/) and [`data-plane/`](../../data-plane/). Telemetry ingestion authorization and cluster-side credential handling remain planned because those components do not exist yet.
 
 ## Trust model
 
@@ -48,6 +48,34 @@ account_id, scp, principal_type
 ## Data-plane authorization
 
 Ingress/router validates token signature and claims locally. It derives account identity from verified claims and deployment identity from the matched route. Client ownership headers are stripped or overwritten. Runtime Services are reachable only from the authorized ingress/router identity through network and workload policy.
+
+Implemented in [`data-plane/`](../../data-plane/):
+
+- Verification is local. Signing keys are fetched from the control plane's JWKS
+  document and cached; a request performs no control-plane call once a usable key
+  set is held, and an unknown `kid` triggers at most one refresh. A fetch failure
+  never discards cached keys, so already-issued tokens keep working through a
+  control-plane outage (AR-DP02). The cache can also be seeded from a local file
+  so a restart mid-outage can still verify.
+- A token must carry `aud=fabric-inference`, the configured issuer, valid time
+  claims, an `account_id`, and the `inference:invoke` scope. A control-audience
+  token is rejected outright.
+- Deployments come from a local file the cluster agent writes, never from a
+  control-plane lookup. A caller selects a deployment by model name, which carries
+  no authority: ownership is decided by comparing the verified token's account
+  against the account recorded for that deployment, so naming another account's
+  model is refused rather than served.
+- `Authorization` and any `X-Fabric-Account-Id`, `X-Fabric-Deployment-Id`,
+  `X-Fabric-Stamp-Id`, or `X-Fabric-Principal` header a client sends is dropped
+  before the request reaches the model host (AR-ID05).
+- The response reports the customer's model alias, not the internal release name
+  the model host is addressed by.
+- The administrative listener (health, readiness, key-cache and usage state) is a
+  separate application on a separate port from the inference listener (AR-DP03).
+
+Not implemented: request quotas and rate limiting, mTLS or network policy between
+the ingress and the model host, and central telemetry export. Usage is buffered
+locally in a bounded queue with no exporter.
 
 ## Control-plane authorization
 

@@ -76,6 +76,14 @@ Exit requirement: one-GPU private launch-model endpoint serves repeatable worklo
 - Separate control/inference audiences and JWKS rotation.
 - Local data-plane authorization and backend network isolation.
 
+Implemented: all of the above except backend network isolation. The ingress in
+`data-plane/` verifies inference tokens against cached JWKS, enforces the audience
+split and account ownership of deployments from local configuration, and proxies
+to a model host. A test asserts that inference continues while the control plane is
+unreachable, which is this phase's exit requirement; network and workload policy
+between the ingress and the model host is still open, as are quotas and rate
+limiting.
+
 Exit requirement: inference needs no Auth0, database, or control API call after token issuance.
 
 ## Phase 5: Operator, agent, and stamps — weeks 4–6
