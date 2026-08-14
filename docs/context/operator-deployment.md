@@ -1,6 +1,6 @@
 # Operator, Cluster Agent, and Deployment Design
 
-**Status:** Mostly planned — the A10 research-host bootstrap and measurement scripts in [`scripts/`](../../scripts/) are implemented. No CRD, operator, cluster agent, Helm bundle, or telemetry collector configuration exists.
+**Status:** Partly implemented — the cluster agent in [`agent/`](../../agent/) and the A10 research-host scripts in [`scripts/`](../../scripts/) are implemented. No CRD, operator, Helm bundle, or telemetry collector configuration exists. See [Cluster Agent](cluster-agent-service.md).
 
 ## Inference stamp definition
 
