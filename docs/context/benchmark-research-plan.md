@@ -4,6 +4,26 @@
 **Implemented:** Shape-generic synthetic correctness and microbenchmark harness, pinned runtime dependencies, environment capture, a versioned artifact schema (v4) with a target/hardware guard, long-generation drift, compiled-kernel metadata, a value-tile sweep, a pinned optimized FLA baseline with equivalence checking, theoretical occupancy, bandwidth utilization, cold/warm first-use latency, and a one-command runner producing RTX 4070 development artifacts.  
 **Planned:** Private-profile cross-GPU scripts, pinned standard and Fabric-enabled vLLM baselines, full-model comparisons, counter-based profiling, A10/T4 artifacts, and paper analysis.
 
+## How the vLLM comparison is recorded
+
+The comparison runs as a harness phase and lands in the same versioned artifact as the
+flash-linear-attention baseline, so it carries an environment capture, a content hash,
+and the fail-closed hardware guard. It requires the serving environment, because vLLM
+lives there:
+
+```bash
+cd serving
+.venv/bin/python -m harness.runner --target rtx4070-dev
+```
+
+Run from `runtime/.venv` instead, the artifact records the vLLM baseline as
+unavailable with the reason, rather than omitting it. Every known baseline appears
+either way, so "not compared" and "compared and equal" cannot be confused.
+
+Artifacts also record SM clock, temperature, and power, because measurements on the
+development laptop vary with sustained load: spaced runs and back-to-back runs
+disagreed by more than the difference being measured.
+
 ## Existing local evidence
 
 The public harness runs configurable synthetic dimensions and compares the Triton recurrence with its eager reference. Prior private-profile measurements, compiler metadata, dimensions, and drift results are intentionally not published here.

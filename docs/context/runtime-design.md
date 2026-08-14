@@ -91,11 +91,13 @@ reason retained.
 
 Two findings from building it:
 
-- **The Fabric kernel and vLLM's kernel compute the same function.** On identical
-  inputs with a shuffled slot table, outputs agree to ≤1.5e-5 in FP16 and are
-  frequently bit-identical, and both agree with the eager reference. That makes a
-  latency comparison between them meaningful, and it is the plan's "pinned
-  standard vLLM" baseline at the kernel level.
+- **The Fabric kernel returns the same outputs as vLLM's kernel.** On identical
+  inputs with a shuffled slot table the outputs are identical, and both agree with
+  the eager reference. The state cache agrees to 1.2e-7 rather than exactly, so the
+  substitution is not bit-identical, which earlier notes claimed before the
+  comparison was recorded in an artifact. That makes a latency comparison between
+  them meaningful, and it is the plan's "pinned standard vLLM" baseline at the kernel
+  level.
 - **Gating must not touch device memory.** The first version of the adapter
   validated `cu_seqlens` values with `torch.all(...)`, which forced a device
   synchronization on every call and cost ~0.2 ms — roughly twenty times the kernel
