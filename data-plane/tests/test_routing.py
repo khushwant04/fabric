@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import (
+    ACCOUNT_A,
     ACCOUNT_B,
     DEPLOYMENT_A,
     ControlPlaneStub,
@@ -214,8 +215,9 @@ async def test_usage_buffer_is_bounded_and_reports_drops(plane) -> None:
     assert state["buffered"] == 2
     assert state["recorded"] == 5
     assert state["dropped"] == 3
-    # No exporter exists yet, and the state says so rather than implying one.
-    assert state["exporter"] is None
+    # The data plane is drained, never pushing, so a growing buffer means no
+    # collector is running rather than a broken exporter.
+    assert state["export_mode"] == "drain"
 
 
 async def test_admin_listener_carries_no_inference_routes(admin_app, inference_app) -> None:
@@ -250,3 +252,45 @@ async def test_both_openai_paths_are_served(
     response = await client.post(path, json=chat(), headers=auth(signing_key.issue()))
     assert response.status_code == 200
     assert upstream.requests[-1]["url"].endswith(path)
+
+
+async def test_draining_usage_returns_records_and_empties_the_buffer(
+    client, admin_client, signing_key: SigningKey
+) -> None:
+    """A collector takes records once; a second drain must not replay them."""
+    reply = await client.post(
+        "/v1/chat/completions", json=chat(), headers=auth(signing_key.issue())
+    )
+    assert reply.status_code == 200, reply.text
+
+    first = await admin_client.post("/admin/usage/drain")
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["count"] == 1
+    record = body["records"][0]
+    # Ownership on an exported record comes from the verified token and the local
+    # registry, so a collector never decides who is billed.
+    assert record["account_id"] == str(ACCOUNT_A)
+    assert record["deployment_id"] == str(DEPLOYMENT_A)
+    assert record["record_id"]
+
+    second = await admin_client.post("/admin/usage/drain")
+    assert second.json() == {"records": [], "count": 0}
+
+
+async def test_each_call_is_independently_deduplicable(
+    client, admin_client, signing_key: SigningKey
+) -> None:
+    for _ in range(2):
+        await client.post("/v1/chat/completions", json=chat(), headers=auth(signing_key.issue()))
+
+    records = (await admin_client.post("/admin/usage/drain")).json()["records"]
+    assert len({record["record_id"] for record in records}) == 2
+
+
+async def test_the_inference_listener_cannot_drain_usage(
+    client, signing_key: SigningKey
+) -> None:
+    """Draining is administrative: a caller on the inference path cannot take usage."""
+    response = await client.post("/admin/usage/drain", headers=auth(signing_key.issue()))
+    assert response.status_code == 404

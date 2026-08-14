@@ -201,6 +201,63 @@ class DeploymentStatusResponse(ORMModel):
     reported_at: dt.datetime
 
 
+# --- telemetry and usage --------------------------------------------------
+
+
+class UsageRecordRequest(BaseModel):
+    """One completed inference call reported by a collector.
+
+    Neither an account nor a stamp appears here. Both are derived from the
+    verified telemetry credential and the placement, so a compromised stamp
+    cannot submit usage as another account by changing a field.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    deployment_id: uuid.UUID
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    occurred_at: dt.datetime
+    #: Idempotency key from the collector, scoped to its stamp server-side.
+    deduplication_key: str = Field(min_length=8, max_length=80)
+
+
+class UsageIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[UsageRecordRequest] = Field(min_length=1, max_length=500)
+
+
+class UsageRejectionResponse(BaseModel):
+    index: int
+    code: str
+    deployment_id: uuid.UUID | None = None
+
+
+class UsageIngestResponse(BaseModel):
+    accepted: int
+    duplicates: int
+    rejected: int
+    rejections: list[UsageRejectionResponse]
+
+
+class UsageStampBreakdown(BaseModel):
+    stamp_id: uuid.UUID
+    events: int
+    input_tokens: int
+    output_tokens: int
+
+
+class DeploymentUsageResponse(BaseModel):
+    deployment_id: uuid.UUID
+    events: int
+    input_tokens: int
+    output_tokens: int
+    first_occurred_at: dt.datetime | None
+    last_occurred_at: dt.datetime | None
+    stamps: list[UsageStampBreakdown]
+
+
 # --- inference stamps -----------------------------------------------------
 
 

@@ -15,7 +15,41 @@ Authorization details that hold today: an API key can never carry a control scop
 
 Verified locally: `ruff` reports no findings, 55 tests pass against a database built by the real Alembic migration, `alembic upgrade → downgrade → upgrade` reproduces 16 application tables, the app imports with 35 routes, and `openapi.json` matches the running app at 24 paths and 38 schemas, which a test enforces.
 
-Not implemented in the service: PostgreSQL row-level security policies, telemetry ingestion endpoints, outbox delivery workers, usage publication, request idempotency (the `idempotency_keys` table has no handler), agent/telemetry credential rotation, and managed-capacity entitlement management through the API.
+Not implemented in the service: PostgreSQL row-level security policies, outbox
+delivery workers, request idempotency (the `idempotency_keys` table has no handler),
+agent/telemetry credential rotation, and managed-capacity entitlement management
+through the API.
+
+### Usage ingestion
+
+`POST /v1/telemetry/usage` accepts usage records authenticated by the write-only
+telemetry credential, which until now was issued at enrollment and accepted nowhere.
+The agent credential and a control token are both refused there.
+
+A record carries no account and no stamp. Ownership is resolved from the credential
+and the placement: the deployment must be assigned to the reporting stamp, and the
+owning account is read from the placement row, so a managed stamp reports for several
+customers without naming an account and cannot report for a deployment it does not
+serve. The request contract forbids unknown fields, so a record cannot smuggle
+ownership past it and have it silently ignored.
+
+Records in a batch are independent, because collectors retry whole batches and
+partial progress must survive. Deduplication keys are namespaced by stamp, so one
+stamp cannot block another's records by claiming their keys first. Records dated more
+than seven days old or more than five minutes ahead are refused.
+
+The data plane exposes `POST /admin/usage/drain` on its administrative listener and
+assigns each record a stable identifier at record time, so a collector's retry is
+deduplicated centrally rather than double counted. The data plane never sends usage
+itself and never holds the telemetry credential.
+
+`GET /v1/accounts/{id}/deployments/{id}/usage` returns totals with a per-stamp
+breakdown. Usage is operational, not billing-grade: delivery is at-least-once and a
+stamp that never reports contributes nothing.
+
+Not implemented: the collector process that performs the drain-and-forward. A
+control-plane test drives the mapping with the data plane's real buffer, so the
+collector has a specification rather than an inference.
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 

@@ -15,6 +15,7 @@ from app.schemas import (
     DeploymentResponse,
     DeploymentStatusResponse,
     DeploymentUpdateRequest,
+    DeploymentUsageResponse,
     PlacementCreateRequest,
     PlacementResponse,
 )
@@ -28,6 +29,7 @@ from app.services.deployments import (
     list_placements,
     update_deployment,
 )
+from app.services.usage import summarize_deployment_usage
 
 router = APIRouter(tags=["deployments"])
 
@@ -171,3 +173,27 @@ async def read_status(
 ) -> list[DeploymentStatusResponse]:
     records = await list_deployment_status(session, principal.account_id, deployment_id)
     return [DeploymentStatusResponse.model_validate(record) for record in records]
+
+
+@router.get(
+    _BASE + "/{deployment_id}/usage",
+    response_model=DeploymentUsageResponse,
+    summary="Read reported usage totals",
+)
+async def read_usage(
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> DeploymentUsageResponse:
+    """Aggregate usage a collector reported for this deployment.
+
+    Usage is operational in MVP, not billing-grade accounting: records are
+    deduplicated per stamp but delivery is at-least-once and a stamp that never
+    reports simply contributes nothing.
+    """
+    # Confirms the deployment exists and belongs to the token's account.
+    await get_deployment(session, principal.account_id, deployment_id)
+    summary = await summarize_deployment_usage(
+        session, account_id=principal.account_id, deployment_id=deployment_id
+    )
+    return DeploymentUsageResponse.model_validate(summary)

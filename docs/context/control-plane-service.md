@@ -201,6 +201,10 @@ then use the returned control token as `Authorization: Bearer <token>`.
 - Outside `local`/`test` the service refuses to start without a signing key, and also without a real `FABRIC_CREDENTIAL_PEPPER` — the default and the `.env.example` placeholder are both rejected, because every credential verifier derives from it.
 - Managed capacity is gated by `accounts.managed_capacity_enabled`, which is currently set directly in the database.
 - Managed placement additionally requires a supported Kubernetes distribution (`aks`, `k3s`).
-- Usage events, telemetry ingestion, and outbox delivery workers are defined in the schema but have no publisher yet.
+- Usage ingestion is implemented on `POST /v1/telemetry/usage`, authenticated by the
+  telemetry credential; ownership comes from that credential and the placement.
+  `GET /v1/accounts/{account_id}/deployments/{deployment_id}/usage` reads totals back.
+  No collector performs the drain-and-forward yet.
+- Outbox delivery workers are defined in the schema but have no publisher yet.
 - Stamp revocation is available through the API; agent and telemetry credential rotation is not.
 - Verified locally: `ruff` clean, 55 tests passing, `alembic upgrade → downgrade → upgrade` reproducing 16 application tables, 35 routes, and `openapi.json` matching the running app (24 paths, 38 schemas) — enforced by a test.

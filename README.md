@@ -15,7 +15,11 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
 - A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
 
-There is currently no running vLLM host, Kubernetes operator, cluster agent, AKS/k3s deployment, telemetry pipeline, or A10/T4 benchmark result.
+The control plane accepts usage on `/v1/telemetry/usage` and the data plane buffers
+records for a collector to drain, but no collector process runs them.
+
+There is currently no running vLLM host, Kubernetes operator, cluster agent, AKS/k3s
+deployment, metrics pipeline, dashboard, or A10/T4 benchmark result.
 
 ## Run the control plane
 

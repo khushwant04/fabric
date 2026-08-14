@@ -2,7 +2,14 @@
 
 **Status:** Implemented (initial version) — the ingress in [`data-plane/`](../../data-plane/) verifies Fabric inference tokens locally and proxies OpenAI-compatible requests.
 **Design reference:** [Security and Identity](security-identity.md), [Architecture Requirements](architecture-requirements.md) AR-DP01/02/03 and AR-ID03/04/05.
-**Not included yet:** quotas and rate limiting, mTLS or network policy to the model host, telemetry export, and anything that writes the deployments file (the cluster agent does not exist).
+Usage is buffered locally and taken by a collector through
+`POST /admin/usage/drain` on the administrative listener. The data plane never pushes
+usage and never holds the telemetry credential, which keeps the inference path free of
+any export credential. Each record is given a stable identifier at record time so a
+retried forward is deduplicated centrally.
+
+**Not included yet:** quotas and rate limiting, mTLS or network policy to the model
+host, and the collector process that drains and forwards usage.
 
 ## What runs today
 

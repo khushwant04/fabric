@@ -220,6 +220,24 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     async def usage_state() -> dict[str, Any]:
         return plane.usage.snapshot()
 
+    @router.post("/admin/usage/drain", summary="Remove and return buffered usage")
+    async def drain_usage() -> dict[str, Any]:
+        """Hand buffered records to a collector.
+
+        Draining is destructive, so it is a POST on the administrative listener
+        rather than a GET on the inference listener: only the collector should be
+        able to take records, and taking them must not look like a cacheable read.
+
+        The data plane does not export usage itself. It never holds the telemetry
+        credential, which belongs to a collector-only Secret, so the credential
+        classes stay separate even though the usage data originates here.
+        """
+        records = plane.usage.drain()
+        return {
+            "records": [record.as_dict() for record in records],
+            "count": len(records),
+        }
+
     return router
 
 

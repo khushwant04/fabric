@@ -1,9 +1,17 @@
 """Local usage buffering.
 
-AR-DP01 gives the data plane local telemetry buffering. Central ingestion does
-not exist yet, so records accumulate in a bounded deque and the oldest are
-dropped rather than growing without limit or failing a request. Dropped counts
-are reported so the gap is visible instead of silent.
+AR-DP01 gives the data plane local telemetry buffering. Records accumulate in a
+bounded deque and the oldest are dropped rather than growing without limit or
+failing a request. Dropped counts are reported so loss is visible instead of
+silent.
+
+The control plane now accepts usage, but the data plane does not send it: it never
+holds the telemetry credential, which belongs to a collector-only Secret. A
+collector drains this buffer through the administrative listener and forwards the
+records, which keeps the inference path free of any export credential.
+
+Each record carries a stable identifier assigned here, so a collector retrying a
+forward is deduplicated centrally instead of double-counting.
 
 Ownership on a record comes from the verified token and the local registry, never
 from anything the client sent.
@@ -29,9 +37,13 @@ class UsageRecord:
     output_tokens: int
     streamed: bool
     occurred_at: dt.datetime
+    #: Assigned at record time, not at export time, so the identity of a record
+    #: survives a collector restart and a retried forward stays idempotent.
+    record_id: uuid.UUID = dataclasses.field(default_factory=uuid.uuid4)
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "record_id": str(self.record_id),
             "account_id": str(self.account_id),
             "deployment_id": str(self.deployment_id),
             "input_tokens": self.input_tokens,
@@ -58,7 +70,7 @@ class UsageBuffer:
             self._recorded += 1
 
     def drain(self) -> list[UsageRecord]:
-        """Remove and return buffered records, for a future exporter."""
+        """Remove and return buffered records for a collector to forward."""
         with self._lock:
             drained = list(self._records)
             self._records.clear()
@@ -71,7 +83,7 @@ class UsageBuffer:
                 "capacity": self._records.maxlen,
                 "recorded": self._recorded,
                 "dropped": self._dropped,
-                # No exporter exists, so buffered records are not yet evidence
-                # of anything beyond local activity.
-                "exporter": None,
+                # The data plane never pushes: records leave only when a collector
+                # drains them, so a growing buffer means no collector is running.
+                "export_mode": "drain",
             }
