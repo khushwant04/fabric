@@ -1,0 +1,72 @@
+# A PostgreSQL instance for verifying the packaging, and nothing else.
+#
+# This is NOT part of the product: Fabric does not ship a database. It exists so
+# deploy/scripts/kind-e2e.sh can run the control plane in-cluster without depending on
+# an external managed instance.
+#
+# The application role is created without BYPASSRLS on purpose. A superuser or a
+# BYPASSRLS role ignores row-level security policies while the catalog still reports
+# them as enabled, so a test running as one would report isolation that is not
+# enforced.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  init.sql: |
+    CREATE ROLE fabric_app WITH
+        LOGIN PASSWORD 'fabric_app'
+        NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+    GRANT USAGE, CREATE ON SCHEMA public TO fabric_app;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO fabric_app;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            # Test-only credentials for a throwaway cluster.
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: fabric
+            # The data directory lives under a subdirectory so an emptyDir mount does
+            # not collide with the lost+found the image expects to be absent.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "fabric"]
+            initialDelaySeconds: 3
+            periodSeconds: 2
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: init
+          configMap: {name: postgres-init}
+        - name: data
+          emptyDir: {}

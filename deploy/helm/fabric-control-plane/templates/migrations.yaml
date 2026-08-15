@@ -1,0 +1,65 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+  annotations:
+    # Before any replica serves, so a new column is never missing under a pod that
+    # expects it. Weight orders this ahead of the Deployment within the same hook.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-control-plane.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "fabric-control-plane.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              python -m alembic upgrade head
+              {{- if .Values.migrations.seedSystemAccount }}
+              # Idempotent: the system account that owns managed capacity must exist
+              # before any managed stamp enrols.
+              python -m app.cli seed-system-account
+              {{- end }}
+          env:
+            {{- include "fabric-control-plane.env" . | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # Settings validate the signing key path even for a migration, so the key
+            # is mounted here too rather than relaxing that validation.
+            - name: signing-key
+              mountPath: /etc/fabric/signing
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: signing-key
+          secret:
+            secretName: {{ include "fabric-control-plane.signingSecret" . }}
+            items:
+              - key: {{ .Values.signingKey.existingSecretKey }}
+                path: {{ .Values.signingKey.existingSecretKey }}
+            defaultMode: 0400
+        - name: tmp
+          emptyDir: {}
+{{- end }}

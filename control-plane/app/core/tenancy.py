@@ -37,6 +37,7 @@ import dataclasses
 import logging
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
@@ -214,7 +215,19 @@ def install_session_context() -> None:
         return
 
     @event.listens_for(Session, "after_begin")
-    def _after_begin(_session: Session, _transaction: object, connection: Connection) -> None:
+    def _after_begin(_session: Session, transaction: Any, connection: Connection) -> None:
+        # Savepoints are excluded deliberately. This event fires for nested
+        # transactions as well as outer ones, and re-applying the context variables at
+        # every savepoint overwrote elevation that had been set imperatively for the
+        # surrounding transaction: usage ingestion opens a savepoint per record, so
+        # every insert ran unelevated and was refused by policy while the transaction
+        # itself was elevated.
+        #
+        # A savepoint inherits the settings of the transaction it opens inside, so
+        # there is nothing to establish, and skipping it also removes a round trip per
+        # record.
+        if getattr(transaction, "nested", False):
+            return
         apply_context(connection)
 
     install_session_context._installed = True  # type: ignore[attr-defined]

@@ -1,0 +1,96 @@
+{{- include "fabric-control-plane.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "fabric-control-plane.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-control-plane.labels" . | nindent 8 }}
+      annotations:
+        # Roll the pods when the signing key or database target changes, since neither
+        # is re-read while a process runs.
+        checksum/config: {{ printf "%s|%s|%s" .Values.database.url .Values.signingKey.value .Values.jwt.issuer | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "fabric-control-plane.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: control-plane
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - app.main:app
+            - --host=0.0.0.0
+            - --port=8080
+            # One worker per pod. Replicas are the unit of concurrency here, so a
+            # worker count would multiply connection-pool size per pod invisibly.
+            - --workers=1
+          env:
+            {{- include "fabric-control-plane.env" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # Liveness must not depend on the database: a database blip would otherwise
+          # restart every replica and turn a recoverable outage into a cold start.
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          # Readiness does check it, because a replica that cannot reach the database
+          # cannot serve.
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: signing-key
+              mountPath: /etc/fabric/signing
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: signing-key
+          secret:
+            secretName: {{ include "fabric-control-plane.signingSecret" . }}
+            items:
+              - key: {{ .Values.signingKey.existingSecretKey }}
+                path: {{ .Values.signingKey.existingSecretKey }}
+            defaultMode: 0400
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

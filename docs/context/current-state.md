@@ -23,8 +23,12 @@ another account's row even when the SQL does not filter. A handler that forgets 
 `WHERE account_id` returns nothing instead of another tenant's data, which tests
 assert by issuing deliberately unfiltered queries.
 
-The declared account travels as a transaction-local setting, re-applied whenever a
-transaction begins. Session-level settings were rejected because they survive the
+The declared account travels as a transaction-local setting, re-applied when a
+transaction begins but deliberately not on savepoints: that event fires for both, and
+re-applying it on a savepoint overwrote elevation held for the surrounding transaction.
+Usage ingestion opens a savepoint per record, so every usage row was refused by policy
+while the transaction itself was elevated. A savepoint inherits its transaction's
+settings, so there is nothing to establish and one round trip per record is avoided. Session-level settings were rejected because they survive the
 connection returning to the pool and would hand the next request another tenant's
 context; per-tenant database roles were rejected because accounts are created at
 runtime and a pool cannot switch roles safely.
@@ -102,6 +106,16 @@ file itself, which is a working stamp with one fewer moving part and no Kubernet
 permissions.
 
 Not implemented: a model-host workload, rollback, and progressive rollout.
+
+### Control-plane packaging
+
+`deploy/helm/fabric-control-plane/` installs the control plane, with migrations as a
+pre-install hook, the signing key supplied rather than generated, liveness separated
+from readiness so a database blip does not restart every replica, and no
+ServiceAccount token mounted. `deploy/scripts/kind-e2e.sh` with
+`FABRIC_E2E_CONTROL_PLANE=cluster` installs it against an in-cluster PostgreSQL whose
+application role has no `BYPASSRLS`, so the whole system is exercised with row-level
+security in force.
 
 ### Packaging
 
