@@ -27,8 +27,14 @@ A stamp can be installed on Kubernetes with the chart in [`deploy/`](deploy/), a
 [`deploy/scripts/kind-e2e.sh`](deploy/scripts/kind-e2e.sh) verifies the whole loop on
 a throwaway cluster.
 
-There is currently no running vLLM host, managed AKS/k3s environment, metrics pipeline,
-dashboard, or A10/T4 benchmark result.
+A vLLM host has been run on the development GPU serving the launch model, with the
+whole platform loop verified against it: real inference through the data plane, and the
+model's own token counts attributed centrally. That host runs vLLM's own kernels; the
+Fabric substitution is not registered in it, because the version that supports the
+model moved the gated-delta code after the version the adapter targets.
+
+There is currently no managed AKS/k3s environment, metrics pipeline, dashboard, or
+A10/T4 benchmark result.
 
 ## Run the control plane
 
