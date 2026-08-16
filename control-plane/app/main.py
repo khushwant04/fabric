@@ -17,8 +17,9 @@ from fastapi import FastAPI
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
-from app.core.database import dispose_engine
+from app.core.database import dispose_engine, get_session_factory
 from app.core.errors import ApiError, api_error_handler
+from app.core.tenancy import system_context, verify_policies_are_enforceable
 
 logger = logging.getLogger("fabric.control_plane")
 
@@ -28,6 +29,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     logging.basicConfig(level=settings.log_level.upper())
     logger.info("control-plane starting env=%s", settings.app_env)
+
+    # Policies are enabled and forced by migration, but a superuser or a BYPASSRLS
+    # role ignores them while the catalog still reports them as active. That failure
+    # is completely silent, so it is checked once here. Advisory rather than fatal:
+    # refusing to start would turn a hardening gap into an outage, and a database
+    # that is briefly unreachable is not evidence of a misconfiguration.
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            with system_context():
+                await verify_policies_are_enforceable(session)
+    except Exception:  # noqa: BLE001 - startup must survive a database hiccup
+        logger.warning("could not verify row-level security enforcement", exc_info=True)
+
     try:
         yield
     finally:

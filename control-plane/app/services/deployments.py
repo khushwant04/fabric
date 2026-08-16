@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, Forbidden, NotFound
 from app.core.platform import is_supported_orchestrator
+from app.core.tenancy import elevated
 from app.models import (
     MODE_BYOI,
     MODE_MANAGED,
@@ -198,9 +199,15 @@ async def _authorize_stamp_for_account(
     session: AsyncSession, *, account: Account, stamp_id: uuid.UUID
 ) -> InferenceStamp:
     """Return the stamp only when this account may deploy onto it."""
-    stamp = (
-        await session.execute(select(InferenceStamp).where(InferenceStamp.id == stamp_id))
-    ).scalar_one_or_none()
+    # Elevated for the lookup alone. Managed capacity is owned by the Fabric system
+    # account, so a customer resolving a shared stamp is reading another account's
+    # row by design; scoping this read to the caller would make managed placement
+    # impossible. Whether the caller may use the stamp is decided below, and the
+    # elevation is dropped before anything is written.
+    async with elevated(session):
+        stamp = (
+            await session.execute(select(InferenceStamp).where(InferenceStamp.id == stamp_id))
+        ).scalar_one_or_none()
     if stamp is None or stamp.revoked_at is not None:
         raise NotFound("stamp_not_found", "Inference stamp does not exist")
 

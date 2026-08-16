@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import scopes as scope_defs
 from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound
+from app.core.tenancy import declare_system, elevated
 from app.models import Account, AccountMembership, User
 from app.services.audit import record_audit
 
@@ -26,13 +27,18 @@ async def get_account(session: AsyncSession, account_id: uuid.UUID) -> Account:
 
 async def get_system_account(session: AsyncSession) -> Account | None:
     """Return the protected internal account that owns managed stamps."""
-    return (
-        await session.execute(select(Account).where(Account.is_system.is_(True)))
-    ).scalar_one_or_none()
+    # Elevated: the system account is not the caller's account, and callers need it
+    # to validate managed capacity ownership.
+    async with elevated(session):
+        return (
+            await session.execute(select(Account).where(Account.is_system.is_(True)))
+        ).scalar_one_or_none()
 
 
 async def ensure_system_account(session: AsyncSession) -> Account:
     """Create the singleton system account when missing."""
+    # Runs in system context: the system account is created before any tenant exists.
+    await declare_system(session)
     existing = await get_system_account(session)
     if existing is not None:
         return existing
@@ -53,6 +59,9 @@ async def create_account(
     session: AsyncSession, *, slug: str, name: str, owner: User
 ) -> tuple[Account, AccountMembership]:
     """Create a customer account and its owner membership."""
+    # Runs in system context: creating a tenant precedes tenancy: the account being inserted cannot
+    # already be the declared context, and its first membership belongs to it.
+    await declare_system(session)
     account = Account(slug=slug, name=name, status="active", is_system=False)
     session.add(account)
     try:

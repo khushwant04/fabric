@@ -26,6 +26,7 @@ from app.core.credentials import (
 from app.core.database import get_db_session
 from app.core.errors import Forbidden, Unauthorized
 from app.core.jwt_service import decode_token
+from app.core.tenancy import declare_account, declare_system
 from app.core.timeutil import is_expired, utc_now
 from app.models import StampCredential, TelemetryCredential
 
@@ -110,6 +111,9 @@ def _principal_from_claims(claims: dict, audience: str) -> PrincipalContext:
 
     raw_scopes = claims.get("scp") or []
     scopes = frozenset(str(scope) for scope in raw_scopes)
+    # Row-level security reads this. It comes from the verified token, the same
+    # source the services filter by, so the database and the code agree on tenancy.
+    declare_account(account_id)
     return PrincipalContext(
         subject=subject,
         principal_id=principal_id,
@@ -155,6 +159,18 @@ async def _lookup_machine_credential(
     The two classes are stored in separate tables *and* carry distinct display
     prefixes, so neither can be presented in place of the other.
     """
+    # Elevated before the lookup, not after it. A machine credential is the caller's
+    # only identity, and the row that establishes it is account-scoped, so the
+    # credential could not be found under a context that does not exist yet.
+    #
+    # The elevation is left in place for the rest of the transaction on purpose: a
+    # stamp's own account is not the tenancy of its work. A managed stamp is owned by
+    # the Fabric system account while the deployments it serves belong to customers,
+    # and its usage is attributed to them. Row-level security cannot express that from
+    # a single account, so these paths stay scoped by the service checks on stamp and
+    # placement, which have their own tests.
+    await declare_system(session)
+
     expected_prefix = PREFIX_TELEMETRY if telemetry else PREFIX_AGENT
     parsed = parse_credential(token, expected_prefix=expected_prefix)
     if parsed is None:

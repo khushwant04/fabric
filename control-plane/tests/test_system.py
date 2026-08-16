@@ -1,3 +1,4 @@
+
 """System endpoints, migration/model parity, and API document parity."""
 
 from __future__ import annotations
@@ -5,12 +6,13 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
 import sqlalchemy as sa
 from httpx import AsyncClient
 
 from app.core.database import Base
 from app.main import create_app
-from tests.conftest import PROJECT_ROOT, TEST_DB_PATH
+from tests.conftest import PROJECT_ROOT, TEST_DB_PATH, USING_POSTGRES
 
 
 async def test_health_and_readiness(client: AsyncClient) -> None:
@@ -32,6 +34,10 @@ async def test_jwks_publishes_rsa_signing_key(client: AsyncClient) -> None:
     assert "d" not in entry and "p" not in entry
 
 
+@pytest.mark.skipif(
+    USING_POSTGRES,
+    reason="inspects the SQLite file the default configuration migrates",
+)
 def test_migration_matches_model_metadata() -> None:
     """Every model table and column must exist in the migrated schema."""
     assert pathlib.Path(TEST_DB_PATH).exists(), "migrated test database is missing"
