@@ -36,13 +36,33 @@ def _command_output(args: list[str]) -> str | None:
     return completed.stdout.strip() or None
 
 
+#: Paths whose contents can change a measurement. Scoped deliberately: an artifact
+#: is marked dirty to say "this result does not correspond to any commit", and an
+#: edit to the frontend or to documentation cannot change a kernel timing. Checking
+#: the whole tree marked every artifact dirty on any machine with unrelated work in
+#: progress, which made the flag useless precisely when it mattered.
+MEASUREMENT_PATHS = ("runtime", "serving")
+
+
 def _git_state() -> dict[str, Any]:
     commit = _command_output(["git", "rev-parse", "HEAD"])
-    status = _command_output(["git", "status", "--porcelain"])
+    # Untracked artifacts are excluded: writing a result must not make the result
+    # that is being written look untrustworthy.
+    status = _command_output(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            *MEASUREMENT_PATHS,
+        ]
+    )
     return {
         "commit": commit,
         # ``None`` status means git was unavailable, which is not the same as clean.
         "dirty": None if status is None and commit is None else bool(status),
+        "dirty_scope": list(MEASUREMENT_PATHS),
     }
 
 
@@ -50,6 +70,55 @@ def _driver_version() -> str | None:
     return _command_output(
         ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"]
     )
+
+
+#: Queried per run so a reader can see whether the GPU was throttling. Timings on a
+#: laptop part drift substantially under sustained load, and a comparison run while
+#: clocks are down is not comparable with one run cold. Without this the artifact
+#: records the number but not the condition that produced it.
+_THERMAL_FIELDS = (
+    "clocks.sm",
+    "clocks.max.sm",
+    "temperature.gpu",
+    "power.draw",
+    "power.limit",
+)
+
+
+def _thermal_state() -> dict[str, Any] | None:
+    """Clocks, temperature, and power at the time of the run."""
+    output = _command_output(
+        [
+            "nvidia-smi",
+            f"--query-gpu={','.join(_THERMAL_FIELDS)}",
+            "--format=csv,noheader,nounits",
+        ]
+    )
+    if output is None:
+        return None
+
+    values = [item.strip() for item in output.splitlines()[0].split(",")]
+    if len(values) != len(_THERMAL_FIELDS):
+        return None
+
+    def number(raw: str) -> float | None:
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    state = {
+        "sm_clock_mhz": number(values[0]),
+        "sm_clock_max_mhz": number(values[1]),
+        "temperature_c": number(values[2]),
+        "power_draw_w": number(values[3]),
+        "power_limit_w": number(values[4]),
+    }
+    if state["sm_clock_mhz"] and state["sm_clock_max_mhz"]:
+        # Recorded rather than judged: a threshold would be a guess, and the ratio is
+        # what a reader needs to compare two runs.
+        state["sm_clock_fraction_of_max"] = state["sm_clock_mhz"] / state["sm_clock_max_mhz"]
+    return state
 
 
 def _gpu_state() -> dict[str, Any]:
@@ -103,6 +172,8 @@ def capture() -> dict[str, Any]:
     """Return the immutable inputs describing this execution environment."""
     gpu = _gpu_state()
     return {
+        # Thermal state at run time, so a throttled result is identifiable as one.
+        "thermal": _thermal_state(),
         "python_version": sys.version.split()[0],
         "platform": platform.platform(),
         "torch_version": gpu.pop("torch_version"),

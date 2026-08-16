@@ -90,10 +90,10 @@ def test_unknown_schema_version_is_rejected() -> None:
         verify_artifact(artifact)
 
 
-def test_current_schema_is_v4_and_older_versions_remain_readable() -> None:
+def test_current_schema_is_v5_and_older_versions_remain_readable() -> None:
     """Bumping the schema must not invalidate already-committed evidence."""
-    assert SCHEMA_VERSION == 4
-    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2, 3, 4})
+    assert SCHEMA_VERSION == 5
+    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2, 3, 4, 5})
 
     # A v1 body carries no drift, tile_sweep, or baselines keys and must verify.
     v1_body = {
@@ -136,7 +136,7 @@ def test_current_schema_is_v4_and_older_versions_remain_readable() -> None:
     verify_artifact(v3_artifact)
 
 
-def test_v4_records_the_profile_section() -> None:
+def test_v5_records_the_profile_section() -> None:
     profile = {
         "device_limits": {"multiprocessors": 36},
         "occupancy": [{"block_v": 32, "theoretical": {"occupancy": 1.0}}],
@@ -146,7 +146,7 @@ def test_v4_records_the_profile_section() -> None:
         "counter_metrics_unavailable_reason": "ERR_NVGPUCTRPERM",
     }
     artifact = _artifact(profile=profile)
-    assert artifact["schema_version"] == 4
+    assert artifact["schema_version"] == SCHEMA_VERSION
     assert artifact["profile"] == profile
     verify_artifact(artifact)
 

@@ -223,8 +223,21 @@ steps, and every other shape to vLLM's own implementation. 17 serving tests pass
 
 Measured on the development GPU against vLLM's own decode kernel, on identical
 inputs with a shuffled slot table: outputs agree to ≤1.5e-5 in FP16 and are often
-bit-identical, and Fabric is 1.03–1.12x at one sequence, 1.12–1.22x at four, and
-1.34–1.41x at sixteen across three runs. This is a kernel-level comparison on a
+identical in output, with the state cache agreeing to 1.2e-7 rather than exactly,
+so the substitution is not bit-identical. Fabric is 1.13–1.23x across one, sixteen,
+and thirty-two sequences in three committed artifacts at one commit.
+
+Those figures replace earlier ones taken from `compare.py` printing to a terminal.
+Putting the comparison in the artifact chain changed two claims: the substitution was
+described as bit-identical, which the recorded state delta contradicts, and the
+speedup range was wider than the harness reproduces.
+
+Measurements on this host vary with sustained load. Three runs spaced apart give
+1.13–1.23x against vLLM and 0.98–1.34x against flash-linear-attention; six runs
+back to back gave 0.64–1.12x and 0.72–1.05x, with the GPU 5-6C hotter. Artifacts now
+record clock, temperature, and power so the condition is visible, though the sampled
+SM clock was the same in both cases, so the variance is recorded rather than
+explained. This is a kernel-level comparison on a
 development GPU, not a full-model or production result.
 
 Not implemented: registering the substitution inside a running vLLM instance, and

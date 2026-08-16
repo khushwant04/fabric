@@ -53,7 +53,7 @@ Implemented so far: the dispatch and fallback layer
 the deployment spec, containment of unexpected kernel failures, per-deployment
 fallback telemetry, paged-state addressing so a host's slot-addressed cache is read
 in place, and a vLLM decode-op substitution (`serving/`) verified to compute the
-same function as vLLM's own kernel and measured 1.0–1.4x against it on the
+identical outputs to vLLM's own kernel and measured 1.13–1.23x against it on the
 development GPU. Still open: registering the substitution in a live vLLM instance,
 the private-profile dispatch boundary, causal-convolution fusion, packed
 projections, and A10/T4 validation.

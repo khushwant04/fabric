@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from harness import environment
 from harness.artifact import TARGETS
 from harness.runner import CORRECTNESS_SEEDS, build_config, parse_args
@@ -21,6 +23,7 @@ def test_capture_reports_versions_and_repository_state() -> None:
         "driver_version",
         "fla_version",
         "vllm_version",
+        "thermal",
         "git",
     }
     assert captured["python_version"].startswith("3.")
@@ -98,3 +101,28 @@ def test_every_roadmap_target_is_selectable() -> None:
     assert [name for name, target in TARGETS.items() if target.citable_as_production] == [
         "t4-production"
     ]
+
+
+def test_dirtiness_is_scoped_to_measurement_paths() -> None:
+    """A dirty flag must mean the measured code differs from the commit.
+
+    Checking the whole tree marked every artifact dirty whenever unrelated work was
+    in progress, such as frontend edits, which cannot change a kernel timing. A flag
+    that is always set carries no information.
+    """
+    from harness.environment import MEASUREMENT_PATHS
+
+    assert "runtime" in MEASUREMENT_PATHS
+    assert "serving" in MEASUREMENT_PATHS
+    assert "v1" not in MEASUREMENT_PATHS
+    assert "docs" not in MEASUREMENT_PATHS
+
+
+def test_git_state_reports_the_scope_it_checked() -> None:
+    """A reader must know what the flag covers, not just its value."""
+    from harness.environment import capture
+
+    git = capture().get("git") or {}
+    if git.get("commit") is None:
+        pytest.skip("not a git checkout")
+    assert git["dirty_scope"] == ["runtime", "serving"]
