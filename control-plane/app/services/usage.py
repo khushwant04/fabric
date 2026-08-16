@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.tenancy import elevated
 from app.models import DeploymentPlacement, UsageEvent
 
 #: A record older than this is refused: late data cannot be reconciled usefully
@@ -75,6 +76,31 @@ async def ingest_usage(
     """
     moment = now or dt.datetime.now(tz=dt.UTC)
     result = IngestResult()
+
+    # Elevated for the whole operation, not inherited from the caller. Ingestion
+    # writes rows owned by accounts the reporting stamp does not belong to: a managed
+    # stamp is owned by the system account and reports usage for customers, so no
+    # single declared account can cover these writes.
+    #
+    # It has to be here rather than at authentication. Elevation is transaction-local
+    # by design, and the transaction that authenticated the credential is not
+    # necessarily the one these inserts land in, which is exactly how this failed:
+    # policies refused every usage row while the same code passed in tests that
+    # happened to share one transaction.
+    async with elevated(session):
+        return await _ingest(session, stamp_id=stamp_id, records=records, moment=moment,
+                             result=result)
+
+
+async def _ingest(
+    session: AsyncSession,
+    *,
+    stamp_id: uuid.UUID,
+    records: list,
+    moment: dt.datetime,
+    result: IngestResult,
+) -> IngestResult:
+    """Store the batch. Ownership checks are unchanged; only the context differs."""
 
     # One lookup per distinct deployment rather than per record.
     placements: dict[uuid.UUID, DeploymentPlacement] = {}

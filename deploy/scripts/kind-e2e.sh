@@ -25,8 +25,13 @@ CLUSTER="${FABRIC_KIND_CLUSTER:-fabric-e2e}"
 # operator renders the data plane's configuration. Without it, the agent writes that
 # file itself. Both paths ship, so both are exercised.
 OPERATOR="${FABRIC_E2E_OPERATOR:-0}"
+# Where the control plane runs. "host" keeps it on this machine, which is quicker to
+# iterate on. "cluster" installs it from its own chart against an in-cluster
+# PostgreSQL, which is the only way to verify that chart at all.
+CONTROL_PLANE="${FABRIC_E2E_CONTROL_PLANE:-host}"
 WORK="$(mktemp -d)"
 CONTROL_PID=""
+FORWARD_PID=""
 KEEP="${FABRIC_KEEP_CLUSTER:-0}"
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -34,6 +39,9 @@ info() { printf '   %s\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 cleanup() {
+    if [ -n "$FORWARD_PID" ]; then
+        kill "$FORWARD_PID" 2>/dev/null || true
+    fi
     if [ -n "$CONTROL_PID" ]; then
         kill "$CONTROL_PID" 2>/dev/null || true
         for _ in $(seq 1 20); do
@@ -63,7 +71,12 @@ KUBECTL=(kubectl --context "kind-$CLUSTER")
 log "1. Build images"
 # --------------------------------------------------------------------------
 
-for image in agent data-plane; do
+IMAGES=(agent data-plane)
+if [ "$CONTROL_PLANE" = "cluster" ]; then
+    IMAGES+=(control-plane)
+fi
+
+for image in "${IMAGES[@]}"; do
     docker build -q -f "$REPO_ROOT/deploy/images/$image.Dockerfile" \
         -t "fabric/$image:e2e" "$REPO_ROOT" >/dev/null
     info "built fabric/$image:e2e"
@@ -83,7 +96,11 @@ log "2. Create the cluster and load the images"
 
 kind create cluster --name "$CLUSTER" --wait 180s >/dev/null 2>&1 \
     || die "could not create cluster $CLUSTER"
-kind load docker-image "fabric/agent:e2e" "fabric/data-plane:e2e" --name "$CLUSTER" >/dev/null
+LOAD=()
+for image in "${IMAGES[@]}"; do
+    LOAD+=("fabric/$image:e2e")
+done
+kind load docker-image "${LOAD[@]}" --name "$CLUSTER" >/dev/null
 info "cluster ready: $("${KUBECTL[@]}" get nodes -o name | tr '\n' ' ')"
 
 "${KUBECTL[@]}" apply -f "$REPO_ROOT/deploy/testing/stub-model-host.yaml" >/dev/null
@@ -91,40 +108,18 @@ info "cluster ready: $("${KUBECTL[@]}" get nodes -o name | tr '\n' ' ')"
 info "stub model host running (not a product component)"
 
 # --------------------------------------------------------------------------
-log "3. Control plane on the host, reachable from the cluster"
+log "3. Control plane"
 # --------------------------------------------------------------------------
 
-GATEWAY="$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}}
-{{end}}' | grep -E '^[0-9]+\.' | head -1)"
-[ -n "$GATEWAY" ] || die "could not determine the cluster's route to the host"
-
-PORT="${FABRIC_E2E_PORT:-$("$CONTROL_PY" -c '
-import socket
-s = socket.socket()
-s.bind(("0.0.0.0", 0))
-print(s.getsockname()[1])
-s.close()')}"
-CONTROL_URL="http://$GATEWAY:$PORT"
-
 openssl genrsa -out "$WORK/signing.pem" 2048 2>/dev/null
-export FABRIC_APP_ENV=test
-export FABRIC_DATABASE_URL="${FABRIC_DATABASE_URL:-sqlite+aiosqlite:///$WORK/kind-e2e.db}"
-export FABRIC_JWT_ISSUER="$CONTROL_URL"
-export FABRIC_AUTH0_AUDIENCE="unused-in-this-path"
-export FABRIC_CREDENTIAL_PEPPER="kind-e2e-pepper-not-a-real-secret"
-export FABRIC_JWT_PRIVATE_KEY_PATH="$WORK/signing.pem"
-case "$FABRIC_DATABASE_URL" in
-    sqlite*) info "database: sqlite (set FABRIC_DATABASE_URL to exercise PostgreSQL)" ;;
-    *)       info "database: PostgreSQL" ;;
-esac
+SEED_SCRIPT="$WORK/seed.py"
+cat > "$SEED_SCRIPT" <<'PYSEED'
+import asyncio
+import json
+import sys
 
-cd "$REPO_ROOT/control-plane"
-"$CONTROL_PY" -m alembic upgrade head >/dev/null 2>&1 || die "migrations failed"
-
-SUFFIX="$RANDOM$RANDOM"
-"$CONTROL_PY" - "$SUFFIX" > "$WORK/seed.json" <<'PY'
-import asyncio, json, sys
 from sqlalchemy import update
+
 from app.core.database import dispose_engine, get_session_factory
 from app.models import Account, User
 from app.services.accounts import create_account, ensure_system_account
@@ -132,7 +127,8 @@ from app.services.api_keys import create_api_key
 
 suffix = sys.argv[1]
 
-async def main():
+
+async def main() -> None:
     factory = get_session_factory()
     async with factory() as session:
         await ensure_system_account(session)
@@ -159,28 +155,109 @@ async def main():
         print(json.dumps({"account_id": str(account.id), "api_key": secret}))
     await dispose_engine()
 
+
 asyncio.run(main())
-PY
+PYSEED
 
-# Bound to every interface so the cluster can reach it over the bridge.
-"$CONTROL_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" \
-    --log-level warning >"$WORK/control-plane.log" 2>&1 &
-CONTROL_PID=$!
-cd "$REPO_ROOT"
+SUFFIX="$RANDOM$RANDOM"
 
-for _ in $(seq 1 60); do
-    curl -fsS "$CONTROL_URL/healthz" >/dev/null 2>&1 && break
-    sleep 0.5
-done
-curl -fsS "$CONTROL_URL/healthz" >/dev/null \
-    || { cat "$WORK/control-plane.log"; die "control plane did not start"; }
-info "listening on $CONTROL_URL"
+if [ "$CONTROL_PLANE" = "cluster" ]; then
+    info "installing the control plane from its own chart"
+
+    "${KUBECTL[@]}" apply -f "$REPO_ROOT/deploy/testing/postgres.yaml" >/dev/null
+    "${KUBECTL[@]}" wait --for=condition=available deployment/postgres --timeout=180s >/dev/null
+    # The application role has no BYPASSRLS, so row-level security is actually in
+    # force for everything the control plane does here.
+    info "test PostgreSQL running (not a product component)"
+
+    CONTROL_URL="http://cp-fabric-control-plane.default.svc"
+    helm install cp "$REPO_ROOT/deploy/helm/fabric-control-plane" \
+        --kube-context "kind-$CLUSTER" \
+        --set image.repository=fabric/control-plane --set image.tag=e2e \
+        --set replicas=1 --set podDisruptionBudget.enabled=false \
+        --set appEnv=test \
+        --set database.url="postgresql+asyncpg://fabric_app:fabric_app@postgres:5432/fabric" \
+        --set-file signingKey.value="$WORK/signing.pem" \
+        --set credentialPepper="kind-e2e-pepper-not-a-real-secret" \
+        --set jwt.issuer="$CONTROL_URL" \
+        --set auth0.issuer="https://unused.e2e.test/" \
+        --set auth0.audience="unused-in-this-path" \
+        --wait --timeout 300s >/dev/null \
+        || { "${KUBECTL[@]}" logs -l app.kubernetes.io/name=fabric-control-plane \
+             --tail=30 --all-containers; die "control-plane install failed"; }
+    info "control plane ready in-cluster at $CONTROL_URL"
+
+    # Seeding runs inside a pod: the database is only reachable from the cluster.
+    POD=$("${KUBECTL[@]}" get pod -l app.kubernetes.io/name=fabric-control-plane \
+        -o jsonpath='{.items[0].metadata.name}')
+    "${KUBECTL[@]}" cp "$SEED_SCRIPT" "$POD:/tmp/seed.py" >/dev/null
+    "${KUBECTL[@]}" exec "$POD" -- python /tmp/seed.py "$SUFFIX" > "$WORK/seed.json"
+
+    # A local port so this script can drive the API the same way in both modes.
+    "${KUBECTL[@]}" port-forward "service/cp-fabric-control-plane" \
+        "0:80" >"$WORK/forward.log" 2>&1 &
+    FORWARD_PID=$!
+    for _ in $(seq 1 60); do
+        LOCAL_PORT=$(sed -n 's/.*127.0.0.1:\([0-9]*\).*/\1/p' "$WORK/forward.log" | head -1)
+        [ -n "$LOCAL_PORT" ] && break
+        sleep 0.5
+    done
+    [ -n "$LOCAL_PORT" ] || { cat "$WORK/forward.log"; die "port-forward did not start"; }
+    LOCAL_URL="http://127.0.0.1:$LOCAL_PORT"
+    for _ in $(seq 1 60); do
+        curl -fsS "$LOCAL_URL/healthz" >/dev/null 2>&1 && break
+        sleep 0.5
+    done
+    curl -fsS "$LOCAL_URL/healthz" >/dev/null || die "cannot reach the control plane"
+    info "driving the API through a port-forward on $LOCAL_URL"
+else
+    GATEWAY="$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}}
+{{end}}' | grep -E '^[0-9]+\.' | head -1)"
+    [ -n "$GATEWAY" ] || die "could not determine the cluster's route to the host"
+
+    PORT="${FABRIC_E2E_PORT:-$("$CONTROL_PY" -c '
+import socket
+s = socket.socket()
+s.bind(("0.0.0.0", 0))
+print(s.getsockname()[1])
+s.close()')}"
+    CONTROL_URL="http://$GATEWAY:$PORT"
+    LOCAL_URL="$CONTROL_URL"
+
+    export FABRIC_APP_ENV=test
+    export FABRIC_DATABASE_URL="${FABRIC_DATABASE_URL:-sqlite+aiosqlite:///$WORK/kind-e2e.db}"
+    export FABRIC_JWT_ISSUER="$CONTROL_URL"
+    export FABRIC_AUTH0_AUDIENCE="unused-in-this-path"
+    export FABRIC_CREDENTIAL_PEPPER="kind-e2e-pepper-not-a-real-secret"
+    export FABRIC_JWT_PRIVATE_KEY_PATH="$WORK/signing.pem"
+    case "$FABRIC_DATABASE_URL" in
+        sqlite*) info "database: sqlite (set FABRIC_DATABASE_URL to exercise PostgreSQL)" ;;
+        *)       info "database: PostgreSQL" ;;
+    esac
+
+    cd "$REPO_ROOT/control-plane"
+    "$CONTROL_PY" -m alembic upgrade head >/dev/null 2>&1 || die "migrations failed"
+    "$CONTROL_PY" "$SEED_SCRIPT" "$SUFFIX" > "$WORK/seed.json"
+
+    "$CONTROL_PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" \
+        --log-level warning >"$WORK/control-plane.log" 2>&1 &
+    CONTROL_PID=$!
+    cd "$REPO_ROOT"
+
+    for _ in $(seq 1 60); do
+        curl -fsS "$CONTROL_URL/healthz" >/dev/null 2>&1 && break
+        sleep 0.5
+    done
+    curl -fsS "$CONTROL_URL/healthz" >/dev/null \
+        || { cat "$WORK/control-plane.log"; die "control plane did not start"; }
+    info "listening on $CONTROL_URL"
+fi
 
 ACCOUNT_ID=$("$CONTROL_PY" -c "import json;print(json.load(open('$WORK/seed.json'))['account_id'])")
 API_KEY=$("$CONTROL_PY" -c "import json;print(json.load(open('$WORK/seed.json'))['api_key'])")
 
 token_for() {
-    curl -fsS -X POST "$CONTROL_URL/v1/token" -H 'Content-Type: application/json' \
+    curl -fsS -X POST "$LOCAL_URL/v1/token" -H 'Content-Type: application/json' \
         -d "{\"grant_type\":\"api_key\",\"api_key\":\"$API_KEY\",\"audience\":\"$1\"}" \
         | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['access_token'])"
 }
@@ -189,11 +266,11 @@ CONTROL_TOKEN=$(token_for fabric-control)
 api() {
     local method="$1" path="$2" body="${3:-}"
     if [ -n "$body" ]; then
-        curl -fsS -X "$method" "$CONTROL_URL$path" \
+        curl -fsS -X "$method" "$LOCAL_URL$path" \
             -H "Authorization: Bearer $CONTROL_TOKEN" \
             -H 'Content-Type: application/json' -d "$body"
     else
-        curl -fsS -X "$method" "$CONTROL_URL$path" -H "Authorization: Bearer $CONTROL_TOKEN"
+        curl -fsS -X "$method" "$LOCAL_URL$path" -H "Authorization: Bearer $CONTROL_TOKEN"
     fi
 }
 
@@ -425,6 +502,10 @@ info "no second enrollment: the single-use token was not needed again"
 log "Packaging verified"
 cat <<EOF
 
+  control plane   ${CONTROL_PLANE} (cluster installs it from its own chart, runs its
+                  migrations as a pre-install hook, and serves against PostgreSQL
+                  with row-level security in force)
+  operator        $([ "$OPERATOR" = "1" ] && echo "enabled: intent declared as custom resources" || echo "disabled: the agent writes the configuration itself")
   images          run as uid 65532 with a read-only root filesystem
   chart           values reach the containers, and probes are reachable by the
                   kubelet without exposing the administrative listener

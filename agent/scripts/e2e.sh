@@ -24,6 +24,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# A real model host, when one is running. Left unset, the data plane talks to a stub
+# so the loop can be verified without a GPU. Set it to exercise the whole path against
+# actual inference:
+#
+#   FABRIC_E2E_UPSTREAM=http://127.0.0.1:8000 FABRIC_E2E_RELEASE=launch-model \
+#       agent/scripts/e2e.sh
+UPSTREAM="${FABRIC_E2E_UPSTREAM:-http://model-host.e2e.test}"
+# The name the upstream itself knows the model by, which is not the customer's alias.
+RELEASE="${FABRIC_E2E_RELEASE:-e2e-release-1}"
 WORK="$(mktemp -d)"
 SERVER_PID=""
 DATA_PLANE_PID=""
@@ -171,7 +180,7 @@ CONTROL_TOKEN=$(curl -fsS -X POST "$CONTROL_URL/v1/token" -H 'Content-Type: appl
 info "control token acquired"
 
 DEPLOYMENT=$(api POST "/v1/accounts/$ACCOUNT_ID/deployments" \
-    '{"name":"e2e-deployment","model_alias":"e2e-model","spec":{"runtime":{"release":"e2e-release-1"}}}')
+    "{\"name\":\"e2e-deployment\",\"model_alias\":\"e2e-model\",\"spec\":{\"runtime\":{\"release\":\"$RELEASE\"}}}")
 DEPLOYMENT_ID=$(echo "$DEPLOYMENT" | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['id'])")
 info "deployment: $DEPLOYMENT_ID"
 
@@ -191,7 +200,7 @@ FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --state-dir "$WORK/agent-state" \
     --telemetry-credential-file "$WORK/collector-secret/telemetry-credential" \
     --stamp-name e2e-stamp \
-    --upstream "http://model-host.e2e.test" \
+    --upstream "$UPSTREAM" \
     --orchestrator k3s \
     --once 2>&1 | tail -3
 
@@ -219,7 +228,7 @@ info "placed $DEPLOYMENT_ID on $STAMP_ID"
 FABRIC_AGENT_ENROLLMENT_TOKEN="" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
     --state-dir "$WORK/agent-state" \
-    --upstream "http://model-host.e2e.test" \
+    --upstream "$UPSTREAM" \
     --once 2>&1 | tail -2
 
 info "rendered configuration:"
@@ -296,13 +305,22 @@ def upstream(request: httpx.Request) -> httpx.Response:
     })
 
 
+# A real client when a model host is running, so the request actually reaches it and
+# the token counts recorded are the model's own rather than a fixture's.
+real_upstream = os.environ.get("FABRIC_E2E_REAL_UPSTREAM") or ""
+upstream_client = (
+    httpx.AsyncClient(timeout=120.0)
+    if real_upstream
+    else httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+)
+
 plane = DataPlane(
     settings=settings,
     keys=KeyCache(settings, client=httpx.Client(transport=httpx.MockTransport(
         lambda r: httpx.Response(200, json=json.load(open(jwks_path)))
     ))),
     registry=registry,
-    client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+    client=upstream_client,
 )
 
 
@@ -325,6 +343,7 @@ FABRIC_E2E_DEPLOYMENTS="$WORK/agent-state/deployments.json" \
 FABRIC_E2E_JWKS="$WORK/jwks.json" \
 FABRIC_E2E_DP_PORT="$DP_PORT" \
 FABRIC_E2E_DP_ADMIN_PORT="$DP_ADMIN_PORT" \
+FABRIC_E2E_REAL_UPSTREAM="${FABRIC_E2E_UPSTREAM:-}" \
 "$DATA_PY" "$WORK/data_plane.py" >"$WORK/data-plane.log" 2>&1 &
 DATA_PLANE_PID=$!
 cd "$REPO_ROOT"
@@ -399,9 +418,14 @@ import json,sys
 body=json.load(sys.stdin)
 assert body['events']==1, body
 # The token counts came from the model host's reply, through the data plane's
-# buffer, through the collector, to the control plane.
-assert body['input_tokens']==11, body
-assert body['output_tokens']==4, body
+# buffer, through the collector, to the control plane. The stub returns fixed
+# numbers so they can be asserted exactly; a real model decides its own, so only
+# their presence can be checked.
+if '$UPSTREAM' == 'http://model-host.e2e.test':
+    assert body['input_tokens']==11, body
+    assert body['output_tokens']==4, body
+else:
+    assert body['input_tokens'] > 0 and body['output_tokens'] > 0, body
 assert body['stamps'][0]['stamp_id']=='$STAMP_ID', body
 print(f\"     events={body['events']} input={body['input_tokens']} \"
       f\"output={body['output_tokens']} stamp={body['stamps'][0]['stamp_id'][:8]}\")"

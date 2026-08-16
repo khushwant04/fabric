@@ -28,7 +28,7 @@ from app.core.tenancy import (
 )
 from app.models import Deployment
 from tests.conftest import USING_POSTGRES
-from tests.helpers import bearer, create_deployment, onboard
+from tests.helpers import bearer, create_deployment, enroll_stamp, onboard
 
 pytestmark = pytest.mark.skipif(
     not USING_POSTGRES,
@@ -229,3 +229,36 @@ def test_role_capability_reports_when_policies_are_ignored() -> None:
     assert RoleCapability(role="app", is_superuser=False, bypasses_rls=False).policies_enforced
     assert not RoleCapability(role="owner", is_superuser=False, bypasses_rls=True).policies_enforced
     assert not RoleCapability(role="root", is_superuser=True, bypasses_rls=False).policies_enforced
+
+
+async def test_usage_ingestion_survives_policies(client: AsyncClient) -> None:
+    """Found by deploying with policies enforced: every usage row was refused.
+
+    A stamp reports usage for accounts it does not belong to, so ingestion cannot run
+    under a declared account. Elevation is transaction-local, and the transaction that
+    authenticated the credential is not necessarily the one the inserts land in, so
+    elevating at authentication was not enough.
+    """
+    from tests.test_telemetry import USAGE, place, record
+
+    account_id, token = await onboard(client, "rls-usage", "rls-usage-account")
+    deployment = await create_deployment(client, account_id, token)
+    enrolled = await enroll_stamp(client, account_id, token)
+    await place(client, account_id, token, deployment["id"], enrolled["stamp"]["id"])
+
+    # No account declared, exactly as a collector's request arrives.
+    reset_context()
+
+    response = await client.post(
+        USAGE,
+        json={"records": [record(deployment["id"], "rls-usage-key-1")]},
+        headers=bearer(enrolled["telemetry_credential"]),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["accepted"] == 1, response.text
+
+    usage = await client.get(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}/usage",
+        headers=bearer(token),
+    )
+    assert usage.json()["events"] == 1

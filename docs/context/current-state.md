@@ -23,8 +23,12 @@ another account's row even when the SQL does not filter. A handler that forgets 
 `WHERE account_id` returns nothing instead of another tenant's data, which tests
 assert by issuing deliberately unfiltered queries.
 
-The declared account travels as a transaction-local setting, re-applied whenever a
-transaction begins. Session-level settings were rejected because they survive the
+The declared account travels as a transaction-local setting, re-applied when a
+transaction begins but deliberately not on savepoints: that event fires for both, and
+re-applying it on a savepoint overwrote elevation held for the surrounding transaction.
+Usage ingestion opens a savepoint per record, so every usage row was refused by policy
+while the transaction itself was elevated. A savepoint inherits its transaction's
+settings, so there is nothing to establish and one round trip per record is avoided. Session-level settings were rejected because they survive the
 connection returning to the pool and would hand the next request another tenant's
 context; per-tenant database roles were rejected because accounts are created at
 runtime and a pool cannot switch roles safely.
@@ -102,6 +106,44 @@ file itself, which is a working stamp with one fewer moving part and no Kubernet
 permissions.
 
 Not implemented: a model-host workload, rollback, and progressive rollout.
+
+### Control-plane packaging
+
+`deploy/helm/fabric-control-plane/` installs the control plane, with migrations as a
+pre-install hook, the signing key supplied rather than generated, liveness separated
+from readiness so a database blip does not restart every replica, and no
+ServiceAccount token mounted. `deploy/scripts/kind-e2e.sh` with
+`FABRIC_E2E_CONTROL_PLANE=cluster` installs it against an in-cluster PostgreSQL whose
+application role has no `BYPASSRLS`, so the whole system is exercised with row-level
+security in force.
+
+### Live model host
+
+A vLLM host has been run on the development GPU serving the launch model, and the
+platform loop was verified against it end to end rather than against a stub:
+enrollment, placement, rendered configuration, an authenticated request through the
+data plane returning the model's own output, and the model's own token counts drained
+by the collector and attributed to the account and stamp centrally.
+
+`agent/scripts/e2e.sh` takes `FABRIC_E2E_UPSTREAM` and `FABRIC_E2E_RELEASE` to run
+against a real host. Without them it uses a stub, whose fixed token counts are asserted
+exactly; against a real model only their presence can be, because the model decides
+them.
+
+Two version facts matter and are not yet resolved:
+
+- The launch model's architecture is not supported by the vLLM the serving component
+  pins. The live host therefore runs a much newer vLLM in a separate environment, which
+  also brings a newer torch and Triton. The pinned environment is kept as it is because
+  the committed comparison artifacts were produced in it.
+- The Fabric kernel substitution is **not** registered in that host. The adapter targets
+  the gated-delta op where the pinned version keeps it, and the newer version moved that
+  code, so the live host runs vLLM's own kernels throughout.
+
+A third gap is measurement rather than plumbing: the launch model's linear-attention
+layers use larger head dimensions and more heads than every committed artifact
+measured, and 18 of its 24 layers are linear attention. No artifact covers the shapes
+the launch model actually runs, so the kernel's benefit for this model is unmeasured.
 
 ### Packaging
 

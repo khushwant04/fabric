@@ -1,0 +1,11 @@
+apiVersion: v2
+name: fabric-control-plane
+description: |
+  The Fabric control plane: accounts, credentials, deployment intent, stamp
+  enrollment, desired state, status, and usage ingestion. Fabric operates this
+  itself; a customer installing a stamp does not install this chart.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/khushwant04/fabric

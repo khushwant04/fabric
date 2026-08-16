@@ -13,7 +13,7 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A Go cluster agent in [`agent/`](agent/) that enrolls a stamp, pulls desired state, renders the data plane's local configuration, and reports status; it creates no Kubernetes resources.
 - A Go usage collector in [`agent/cmd/fabric-collector/`](agent/cmd/fabric-collector/) that drains the data plane and forwards usage with a write-only telemetry credential it cannot use for anything else.
 - A `FabricModelDeployment` CRD and a cluster-local operator in [`agent/`](agent/) that reconcile placed deployments into the data plane's configuration and report what was applied; the operator creates no model-host workload.
-- Container images and a Helm chart in [`deploy/`](deploy/) that install a stamp — agent, data plane, collector, and optionally the operator — on Kubernetes, verified on a real cluster against PostgreSQL.
+- Container images and Helm charts in [`deploy/`](deploy/) that install a stamp — agent, data plane, collector, and optionally the operator — and the control plane itself on Kubernetes, verified on a real cluster against PostgreSQL with row-level security in force.
 - An inference data plane in [`data-plane/`](data-plane/) that verifies Fabric inference JWTs locally, enforces account ownership of deployments, and proxies OpenAI-compatible requests to a model host.
 - A vLLM decode-op substitution in [`serving/`](serving/) that returns identical outputs to vLLM's own gated-delta kernel and is 1.13–1.23x faster on the development GPU, per three committed artifacts; it is not registered in a live vLLM instance.
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
@@ -27,8 +27,14 @@ A stamp can be installed on Kubernetes with the chart in [`deploy/`](deploy/), a
 [`deploy/scripts/kind-e2e.sh`](deploy/scripts/kind-e2e.sh) verifies the whole loop on
 a throwaway cluster.
 
-There is currently no running vLLM host, managed AKS/k3s environment, metrics pipeline,
-dashboard, or A10/T4 benchmark result.
+A vLLM host has been run on the development GPU serving the launch model, with the
+whole platform loop verified against it: real inference through the data plane, and the
+model's own token counts attributed centrally. That host runs vLLM's own kernels; the
+Fabric substitution is not registered in it, because the version that supports the
+model moved the gated-delta code after the version the adapter targets.
+
+There is currently no managed AKS/k3s environment, metrics pipeline, dashboard, or
+A10/T4 benchmark result.
 
 ## Run the control plane
 
