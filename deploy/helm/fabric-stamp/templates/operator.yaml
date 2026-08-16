@@ -1,0 +1,50 @@
+{{- if .Values.operator.enabled }}
+apiVersion: apps/v1
+# A separate Deployment, not a container in the stamp pod. The operator needs a
+# different ServiceAccount from the agent, and a pod has only one: sharing it would
+# hand the agent the operator's Kubernetes permissions and defeat the split.
+kind: Deployment
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-operator
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  # One replica and no leader election. Reconciliation is idempotent, but two writers
+  # would still fight over the same ConfigMap and churn every mounted copy.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fabric-stamp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-stamp.labels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: {{ include "fabric-stamp.fullname" . }}-operator
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: operator
+          image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
+          command: ["/usr/local/bin/fabric-operator"]
+          args:
+            - --namespace={{ .Release.Namespace }}
+            - --configmap={{ .Values.operator.configMapName }}
+            - --interval={{ .Values.operator.interval }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

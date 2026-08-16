@@ -29,7 +29,9 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "fabric-stamp.serviceAccountName" . }}
-      automountServiceAccountToken: false
+      # Mounted only when an operator runs: the agent needs the API server to declare
+      # intent. Without an operator it needs no Kubernetes access at all.
+      automountServiceAccountToken: {{ .Values.operator.enabled }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -70,7 +72,13 @@ spec:
             # mounts rather than one is what stops the data plane's container from
             # being able to read the agent credential at all.
             - --credentials-file=/var/lib/fabric-agent/credentials.json
+            {{- if .Values.operator.enabled }}
+            # Declares intent through the API server. The operator renders the file,
+            # so the agent never writes what the data plane reads.
+            - --publish=kubernetes
+            {{- else }}
             - --deployments-file=/etc/fabric/config/deployments.json
+            {{- end }}
             {{- if .Values.collector.enabled }}
             - --telemetry-credential-file=/etc/fabric/collector/telemetry-credential
             {{- end }}
@@ -92,8 +100,10 @@ spec:
           volumeMounts:
             - name: agent-state
               mountPath: /var/lib/fabric-agent
+            {{- if not .Values.operator.enabled }}
             - name: rendered-config
               mountPath: /etc/fabric/config
+            {{- end }}
             {{- if .Values.collector.enabled }}
             - name: collector-secret
               mountPath: /etc/fabric/collector
@@ -198,8 +208,10 @@ spec:
         # Rendered configuration: written by the agent, read by the data plane. It
         # holds no secret, and it is recreated on every reconcile pass, so it does
         # not need to survive a restart.
+        {{- if not .Values.operator.enabled }}
         - name: rendered-config
           emptyDir: {}
+        {{- end }}
         {{- if .Values.collector.enabled }}
         - name: collector-secret
           emptyDir:
@@ -207,6 +219,15 @@ spec:
         {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.operator.enabled }}
+        # Projected from the ConfigMap the operator renders. A ConfigMap mount is a
+        # file, so the data plane's configuration source is unchanged and it keeps
+        # following updates the same way.
+        - name: rendered-config
+          configMap:
+            name: {{ .Values.operator.configMapName }}
+            optional: true
+        {{- end }}
         {{- if not .Values.persistence.enabled }}
         # Without persistence a restart loses the credentials, and the single-use
         # enrollment token cannot be replayed. Suitable only for throwaway testing.

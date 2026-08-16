@@ -88,7 +88,7 @@ Exit requirement: inference needs no Auth0, database, or control API call after 
 
 ## Phase 5: Operator, agent, and stamps — weeks 4–6
 
-- Versioned `FabricModelDeployment` CRD and cluster-local operator with conditions/rollback.
+- Versioned `FabricModelDeployment` CRD and cluster-local operator with conditions/rollback. **Partly implemented**: the CRD and operator ship and are verified on a real cluster; the operator renders the data plane's configuration and reports conditions, but creates no model-host workload and has no rollback.
 - Cluster-agent enrollment, bounded capability discovery, outbound desired-state pull, heartbeat, and status return. **Implemented** in `agent/`, verified end to end against a real control plane and data plane; it renders local configuration rather than Kubernetes resources, because the operator does not exist.
 - Usage collection. **Implemented**: `fabric-collector` drains the data plane and forwards usage under a separate write-only credential, and the control plane attributes it to the account and stamp. Runtime and GPU metrics collection is still open.
 - Stamp packaging. **Implemented**: container images and a Helm chart install agent, data plane, and collector as one StatefulSet, verified on a real Kubernetes cluster against PostgreSQL. The CRD, the operator, and a control-plane chart remain open.

@@ -21,6 +21,8 @@ import (
 
 	"github.com/khushwant04/fabric/agent/internal/agent"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
+	"github.com/khushwant04/fabric/agent/internal/kube"
+	"github.com/khushwant04/fabric/agent/internal/operator"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -40,6 +42,9 @@ func main() {
 		"path to credentials.json (default <state-dir>/credentials.json)")
 	deploymentsPath := flag.String("deployments-file", envOr("FABRIC_AGENT_DEPLOYMENTS_FILE", ""),
 		"path to deployments.json (default <state-dir>/deployments.json)")
+	publish := flag.String("publish", envOr("FABRIC_AGENT_PUBLISH", "file"),
+		"where to publish assignments: file, or kubernetes for FabricModelDeployment "+
+			"resources reconciled by the operator")
 	telemetryCredentialPath := flag.String("telemetry-credential-file",
 		envOr("FABRIC_AGENT_TELEMETRY_CREDENTIAL_FILE", ""),
 		"write the collector's telemetry credential here (0600); empty runs no hand-off")
@@ -95,6 +100,24 @@ func main() {
 			AllocatableGPUs: *gpus,
 			AgentVersion:    version,
 		},
+	}
+
+	// Publishing to the cluster is opt-in, because an agent without an operator has
+	// no reason to hold Kubernetes permissions at all.
+	if *publish == "kubernetes" {
+		client, err := kube.InCluster()
+		if err != nil {
+			log.Error("--publish=kubernetes needs in-cluster credentials", "error", err)
+			os.Exit(1)
+		}
+		// The stamp id is not known until enrollment completes, so the publisher is
+		// attached after Ensure below.
+		config.SinkFactory = func(stampID string) agent.Sink {
+			return operator.NewPublisher(client, client.Namespace, stampID)
+		}
+	} else if *publish != "file" {
+		log.Error("--publish must be file or kubernetes", "value", *publish)
+		os.Exit(1)
 	}
 
 	instance := agent.New(config, log)

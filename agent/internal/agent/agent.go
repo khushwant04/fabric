@@ -18,11 +18,32 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/khushwant04/fabric/agent/internal/agentcontract"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
 	"github.com/khushwant04/fabric/agent/internal/state"
 )
 
 // Config is the agent's runtime configuration.
+// Sink receives the assignments the agent has decided this stamp should serve.
+//
+// Two implementations exist. Without an operator the agent writes the data plane's
+// file directly. With one, it declares intent as custom resources and the operator
+// renders the file, which keeps central credentials and Kubernetes permissions in
+// different processes.
+type Sink interface {
+	Apply(ctx context.Context, deployments []state.Deployment) error
+}
+
+// StatusSource is a sink that can also report what the cluster observed.
+//
+// When one is present the agent forwards the cluster's verdict instead of asserting
+// its own, so the control plane learns what was actually applied rather than what the
+// agent asked for. Without it the agent can only report what it wrote itself, and it
+// says so in the condition reason.
+type StatusSource interface {
+	ObservedConditions(ctx context.Context) (map[string]agentcontract.ObservedCondition, error)
+}
+
 type Config struct {
 	ControlPlaneURL string
 	EnrollmentToken string
@@ -33,6 +54,12 @@ type Config struct {
 	// the collector. Empty disables the hand-off, for a stamp running no
 	// collector.
 	TelemetryCredentialPath string
+	// Sink overrides where assignments are published. Nil writes the data plane's
+	// file, which is the behaviour for a stamp with no operator.
+	Sink Sink
+	// SinkFactory builds a sink once the stamp id is known. Enrollment assigns that
+	// id, so a publisher that labels resources with it cannot be built before then.
+	SinkFactory func(stampID string) Sink
 
 	// UpstreamURL is the model host this stamp serves from. The agent records it
 	// in the data plane's configuration; it does not start the host.
@@ -56,6 +83,11 @@ type Agent struct {
 	// Status reports the control plane has not accepted yet, retried on later
 	// passes because desired state will not mention them again.
 	pendingStatus map[string]controlplane.DesiredDeployment
+	// What the cluster reported, when an operator is present.
+	observed map[string]agentcontract.ObservedCondition
+	// The reason last accepted by the control plane per deployment, so a changed
+	// verdict is sent and an unchanged one is not resent every pass.
+	reportedReason map[string]string
 }
 
 // New builds an agent. It does not perform any network call.
@@ -67,11 +99,13 @@ func New(config Config, log *slog.Logger) *Agent {
 		config.RequestTimeout = 30 * time.Second
 	}
 	return &Agent{
-		config:        config,
-		client:        controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
-		log:           log,
-		known:         map[string]state.Deployment{},
-		pendingStatus: map[string]controlplane.DesiredDeployment{},
+		config:         config,
+		client:         controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
+		log:            log,
+		known:          map[string]state.Deployment{},
+		pendingStatus:  map[string]controlplane.DesiredDeployment{},
+		observed:       map[string]agentcontract.ObservedCondition{},
+		reportedReason: map[string]string{},
 	}
 }
 
@@ -99,6 +133,7 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		// The collector's copy may live on an ephemeral volume, so it is rewritten
 		// on every start rather than only when the credential was first issued.
 		a.handOffTelemetryCredential()
+		a.buildSink()
 		// A restart also loses unreported status, and desired state will not
 		// mention already-acknowledged assignments again. What is on disk is what
 		// this agent has applied, so it is reported at the acknowledged generation.
@@ -161,6 +196,7 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		return fmt.Errorf("persist credentials for stamp %s: %w", enrolled.Stamp.ID, err)
 	}
 	a.handOffTelemetryCredential()
+	a.buildSink()
 
 	a.client.Credential = enrolled.AgentCredential
 	a.log.Info("enrolled",
@@ -241,8 +277,8 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 
 	configured := a.configured()
 	if changed {
-		if err := state.WriteDeployments(a.config.DeploymentsPath, configured); err != nil {
-			return nil, fmt.Errorf("write deployments: %w", err)
+		if err := a.publish(ctx, configured); err != nil {
+			return nil, err
 		}
 	}
 
@@ -259,9 +295,14 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 	// pass returns nothing new. A status write that failed here would never be
 	// attempted again, leaving a serving deployment with no reported status at all,
 	// so unaccepted reports are held and retried.
+	// Refreshed once per pass rather than per report, so a stamp with many
+	// assignments makes one call instead of one per deployment.
+	a.refreshObserved(ctx)
+
 	for _, assignment := range desired.Deployments {
 		a.pendingStatus[assignment.DeploymentID] = assignment
 	}
+	a.queueChangedVerdicts()
 
 	for id, assignment := range a.pendingStatus {
 		if err := a.reportStatus(ctx, assignment); err != nil {
@@ -271,6 +312,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 				"deployment_id", assignment.DeploymentID, "error", err)
 			continue
 		}
+		a.reportedReason[id] = a.reasonFor(id)
 		delete(a.pendingStatus, id)
 	}
 	return configured, nil
@@ -282,6 +324,24 @@ func (a *Agent) reportStatus(ctx context.Context, assignment controlplane.Desire
 	if assignment.Deleted {
 		phase = "terminating"
 	}
+	reason := "AgentAppliedLocalConfiguration"
+	// Truthful by default: with no operator the agent can only report what it wrote
+	// itself, which is not an observed rollout.
+	message := "Local data-plane configuration written by the agent"
+
+	if observed, present := a.observed[assignment.DeploymentID]; present {
+		// An operator reported on this deployment, so the cluster's verdict replaces
+		// the agent's assertion.
+		reason = observed.Reason
+		message = observed.Message
+		if !observed.Applied {
+			phase = "pending"
+		}
+		if observed.ObservedGeneration > 0 {
+			generation = int(observed.ObservedGeneration)
+		}
+	}
+
 	report := controlplane.StatusReport{
 		DeploymentID:       assignment.DeploymentID,
 		ObservedGeneration: &generation,
@@ -289,12 +349,10 @@ func (a *Agent) reportStatus(ctx context.Context, assignment controlplane.Desire
 		ReadyReplicas:      1,
 		Conditions: []map[string]any{
 			{
-				"type":   "Configured",
-				"status": "True",
-				"reason": "AgentAppliedLocalConfiguration",
-				// No operator exists, so this reports what the agent configured,
-				// not an observed Kubernetes rollout.
-				"message": "Local data-plane configuration written by the agent",
+				"type":    "Configured",
+				"status":  "True",
+				"reason":  reason,
+				"message": message,
 			},
 		},
 	}
@@ -302,6 +360,78 @@ func (a *Agent) reportStatus(ctx context.Context, assignment controlplane.Desire
 		report.ReadyReplicas = 0
 	}
 	return a.client.ReportStatus(ctx, a.credentials.StampID, report)
+}
+
+// buildSink attaches the publisher once the stamp id is known.
+func (a *Agent) buildSink() {
+	if a.config.Sink != nil || a.config.SinkFactory == nil || a.credentials == nil {
+		return
+	}
+	a.config.Sink = a.config.SinkFactory(a.credentials.StampID)
+}
+
+// queueChangedVerdicts re-reports a deployment whose observed status has changed.
+//
+// An operator reconciles after the agent declares intent, so the first pass reports
+// the agent's own view and the operator's verdict arrives later. Without this the
+// control plane would keep the first answer forever and never learn what the cluster
+// actually did.
+func (a *Agent) queueChangedVerdicts() {
+	for deploymentID := range a.known {
+		reason := a.reasonFor(deploymentID)
+		if a.reportedReason[deploymentID] == reason {
+			continue
+		}
+		if _, queued := a.pendingStatus[deploymentID]; queued {
+			continue
+		}
+		a.pendingStatus[deploymentID] = controlplane.DesiredDeployment{
+			DeploymentID: deploymentID,
+			AccountID:    a.known[deploymentID].AccountID,
+			ModelAlias:   a.known[deploymentID].ModelAlias,
+			// The generation this agent has applied, which is what it can honestly
+			// claim to have observed.
+			DesiredGeneration: a.credentials.AckedGeneration,
+		}
+	}
+}
+
+// reasonFor returns the condition reason that would be reported now.
+func (a *Agent) reasonFor(deploymentID string) string {
+	if observed, present := a.observed[deploymentID]; present && observed.Reason != "" {
+		return observed.Reason
+	}
+	return "AgentAppliedLocalConfiguration"
+}
+
+// refreshObserved reads what the cluster reported, when a sink can tell us.
+func (a *Agent) refreshObserved(ctx context.Context) {
+	source, ok := a.config.Sink.(StatusSource)
+	if !ok {
+		return
+	}
+	observed, err := source.ObservedConditions(ctx)
+	if err != nil {
+		// Reporting the agent's own view is better than reporting nothing, so a
+		// failure here degrades the detail rather than the delivery.
+		a.log.Warn("could not read observed status from the cluster", "error", err)
+		return
+	}
+	a.observed = observed
+}
+
+// publish hands the decided assignments to whichever sink is configured.
+func (a *Agent) publish(ctx context.Context, configured []state.Deployment) error {
+	if a.config.Sink != nil {
+		if err := a.config.Sink.Apply(ctx, configured); err != nil {
+			return fmt.Errorf("declare deployments: %w", err)
+		}
+		return nil
+	}
+	if err := state.WriteDeployments(a.config.DeploymentsPath, configured); err != nil {
+		return fmt.Errorf("write deployments: %w", err)
+	}
+	return nil
 }
 
 func (a *Agent) configured() []state.Deployment {

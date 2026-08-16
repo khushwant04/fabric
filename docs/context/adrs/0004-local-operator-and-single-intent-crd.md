@@ -1,7 +1,9 @@
 # ADR 0004: Use a Local Operator and Single Intent CRD
 
 **Decision status:** Accepted  
-**Implementation status:** Planned  
+**Implementation status:** Implemented for configuration. The `FabricModelDeployment` CRD and the operator ship in [`agent/`](../../../agent/) and [`deploy/helm/fabric-stamp/`](../../../deploy/helm/fabric-stamp/), with status as a subresource so intent and observation have separate writers. The operator renders the data plane's configuration and reports `Applied`; it does not yet create a model-host Deployment, Service, or PodDisruptionBudget, because no model host exists to run. Rollback and progressive rollout are not implemented.
+
+**Original status:** Planned  
 **Date:** 2026-08-11
 
 ## Context

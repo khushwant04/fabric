@@ -1,0 +1,88 @@
+{{- if .Values.operator.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-operator
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+# A Role, not a ClusterRole: the operator manages one namespace, and cluster-wide
+# permission would let a compromised operator read every namespace's secrets-adjacent
+# state for no operational benefit.
+kind: Role
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-operator
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  # The intent it reconciles. No create, update, or delete on the resources
+  # themselves: the agent owns the declaration, the operator only observes it.
+  - apiGroups: ["fabric.khushwant.dev"]
+    resources: ["fabricmodeldeployments"]
+    verbs: ["get", "list", "watch"]
+  # Its own half of the contract.
+  - apiGroups: ["fabric.khushwant.dev"]
+    resources: ["fabricmodeldeployments/status"]
+    verbs: ["get", "patch", "update"]
+  # The data plane's configuration. Restricted to the single named object by
+  # resourceNames, so the operator cannot read or rewrite unrelated configuration in
+  # the namespace.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "update", "patch"]
+    resourceNames: [{{ .Values.operator.configMapName | quote }}]
+  # Creating that object needs an unnamed rule, because the name of a resource that
+  # does not exist yet cannot be matched.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-operator
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "fabric-stamp.fullname" . }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.fullname" . }}-operator
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+# The agent's permissions are the mirror image: it declares intent and never reads
+# status it did not write, nor touches the ConfigMap the data plane consumes.
+kind: Role
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["fabric.khushwant.dev"]
+    resources: ["fabricmodeldeployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Read-only on status: the agent forwards the operator's verdict to the control
+  # plane and must not be able to fabricate one.
+  - apiGroups: ["fabric.khushwant.dev"]
+    resources: ["fabricmodeldeployments/status"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "fabric-stamp.fullname" . }}-agent
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

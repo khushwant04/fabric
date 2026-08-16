@@ -1,6 +1,8 @@
 # Operator, Cluster Agent, and Deployment Design
 
-**Status:** Partly implemented — the cluster agent and usage collector in [`agent/`](../../agent/), the packaging in [`deploy/`](../../deploy/), and the A10 research-host scripts in [`scripts/`](../../scripts/) are implemented. A stamp installs on Kubernetes today through the Helm chart and was verified on a real cluster. No CRD or operator exists, so the agent renders the data plane's configuration rather than creating Kubernetes resources. See [Packaging and Deployment](packaging-deployment.md) and [Cluster Agent](cluster-agent-service.md).
+**Status:** Implemented for the narrow case — the cluster agent and usage collector in [`agent/`](../../agent/), the `FabricModelDeployment` CRD and operator, the packaging in [`deploy/`](../../deploy/), and the A10 research-host scripts in [`scripts/`](../../scripts/). A stamp installs on Kubernetes and was verified on a real cluster both with and without the operator.
+
+The operator reconciles declared deployments into the data plane's configuration and reports what it observed. It does not create a model-host workload, because no vLLM host exists in this project yet; that is the next thing to add here rather than a gap in the design. See [Packaging and Deployment](packaging-deployment.md) and [Cluster Agent](cluster-agent-service.md).
 
 ## Inference stamp definition
 

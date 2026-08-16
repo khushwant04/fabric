@@ -1,8 +1,9 @@
-# Agent and collector image.
+# Agent, collector, and operator image.
 #
-# Both binaries ship in one image because they are versioned together and share a
-# module, but they run as separate containers with separate mounts and separate
-# credentials. Sharing an image is not sharing a trust boundary.
+# All three ship in one image because they are versioned together and share a module,
+# but they run as separate containers with separate mounts, separate credentials, and
+# in the operator's case a separate ServiceAccount. Sharing an image is not sharing a
+# trust boundary.
 #
 # Build from the repository root:
 #   docker build -f deploy/images/agent.Dockerfile -t fabric/agent:dev .
@@ -26,10 +27,13 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
         -o /out/fabric-agent ./cmd/fabric-agent && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
-        -o /out/fabric-collector ./cmd/fabric-collector
+        -o /out/fabric-collector ./cmd/fabric-collector && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+        -o /out/fabric-operator ./cmd/fabric-operator
 
 # Verify the binaries at least start before shipping them.
-RUN /out/fabric-agent --version && /out/fabric-collector --version
+RUN /out/fabric-agent --version && /out/fabric-collector --version && \
+    /out/fabric-operator --version
 
 # Static distroless: no shell, no package manager, no libc to patch. Pinned by
 # digest so a rebuild cannot silently change the base.
@@ -37,6 +41,7 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:3d0f463de06b7ddff27684ec3b
 
 COPY --from=build /out/fabric-agent /usr/local/bin/fabric-agent
 COPY --from=build /out/fabric-collector /usr/local/bin/fabric-collector
+COPY --from=build /out/fabric-operator /usr/local/bin/fabric-operator
 
 # 65532 is distroless' nonroot user. Declared explicitly so the manifests and the
 # image agree on the UID that owns the state volume.

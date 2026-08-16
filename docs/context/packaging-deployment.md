@@ -1,7 +1,7 @@
 # Packaging and Deployment
 
-**Status:** Implemented for a stamp — container images in [`deploy/images/`](../../deploy/images/) and a Helm chart in [`deploy/helm/fabric-stamp/`](../../deploy/helm/fabric-stamp/) install a working inference stamp on Kubernetes. Verified on a real cluster by [`deploy/scripts/kind-e2e.sh`](../../deploy/scripts/kind-e2e.sh).
-**Not included:** a CRD or operator (none exists), a chart for the control plane, GPU scheduling, an ingress or TLS termination, and a model host. Fabric does not deploy vLLM.
+**Status:** Implemented for a stamp — container images in [`deploy/images/`](../../deploy/images/) and a Helm chart in [`deploy/helm/fabric-stamp/`](../../deploy/helm/fabric-stamp/) install a working inference stamp on Kubernetes, with or without the operator. Verified on a real cluster by [`deploy/scripts/kind-e2e.sh`](../../deploy/scripts/kind-e2e.sh) in both modes.
+**Not included:** a chart for the control plane, GPU scheduling, an ingress or TLS termination, and a model host. Fabric does not deploy vLLM, and the operator does not create a workload for one.
 **Design reference:** [ADR 0004](adrs/0004-local-operator-and-single-intent-crd.md), [ADR 0007](adrs/0007-cluster-agent-and-central-telemetry.md), [ADR 0008](adrs/0008-account-scoped-tenancy-and-stamp-credentials.md), [Operator and Deployment](operator-deployment.md).
 
 ## Images
@@ -72,6 +72,42 @@ now covered by a test.
 | A restarted agent starved the collector | The telemetry credential was written only at enrollment, and a restart does not re-enrol. The hand-off now runs on every start. |
 | A failed status report was lost permanently | Desired state does not repeat an acknowledged assignment, so the report was never retried and the customer saw no status for a serving deployment. Unaccepted reports are now held and retried. |
 | Managed PostgreSQL closed pooled connections | Pre-ping alone leaves a race, so a dropped connection failed mid-statement and surfaced as a 500 to the agent. Connections are now recycled below the usual idle timeout. |
+
+## Operator and CRD
+
+With `operator.enabled=true` the agent stops writing the data plane's file and declares
+one `FabricModelDeployment` per assignment instead. The operator reconciles those
+declarations into the ConfigMap the data plane mounts, and reports what it observed on
+each resource's status. The agent then forwards the operator's verdict to the control
+plane rather than its own, so the control plane learns what the cluster did.
+
+The split exists for a specific reason: the agent holds central credentials and the
+operator holds Kubernetes permissions, and neither holds both. A compromise of the
+agent cannot mutate the cluster beyond declaring intent that the operator will validate;
+a compromise of the operator cannot talk to Fabric at all.
+
+| Component | Kubernetes permissions | Fabric credentials |
+|---|---|---|
+| Agent | create/update/delete `fabricmodeldeployments`, read their status | agent credential, telemetry credential to hand over |
+| Operator | read `fabricmodeldeployments`, patch their status, write one named ConfigMap | none |
+| Data plane | none (no service-account token mounted) | none; verifies tokens with public keys |
+| Collector | none | write-only telemetry credential |
+
+Status is a subresource, so the agent declares intent and cannot write status, while
+the operator reports status and cannot change intent. The operator's ConfigMap rule is
+restricted by `resourceNames` to the single object it manages.
+
+`Applied` carries the reason `DataPlaneConfigurationRendered`, which names what actually
+happened. The operator configures the data plane; it does not start a model host,
+because none exists in this project, and a reason implying a running workload would be
+a false statement about the cluster.
+
+The CRD is annotated `helm.sh/resource-policy: keep`: deleting a CRD deletes every
+custom resource of that kind, so an accidental uninstall would withdraw every deployment
+the cluster serves.
+
+Without the operator the agent writes the file directly, which is a working stamp with
+one fewer moving part and no Kubernetes permissions at all. Both paths are verified.
 
 ## Install
 
