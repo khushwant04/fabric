@@ -168,3 +168,51 @@ async def test_tampered_key_secret_is_rejected(client: AsyncClient) -> None:
     )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "invalid_api_key"
+
+
+async def _token_from_key(client: AsyncClient, secret: str, audience: str) -> str:
+    response = await client.post(
+        "/v1/token",
+        json={"grant_type": "api_key", "api_key": secret, "audience": audience},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["access_token"]
+
+
+async def test_a_key_holder_can_discover_its_own_identity(client: AsyncClient) -> None:
+    """/v1/me answers for a person who logged in; a key holder is not one.
+
+    Without this, a caller holding only an API key has to be told its own account id out
+    of band, which is information the token it already holds carries.
+    """
+    account_id, token = await onboard(client, "self-user", "self-account")
+    created = await _create_key(client, account_id, token, ["deployments:read"])
+    key_token = await _token_from_key(client, created["secret"], "fabric-control")
+
+    response = await client.get("/v1/self", headers=bearer(key_token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["account_id"] == account_id
+    assert body["audience"] == "fabric-control"
+    # The scopes reported are the ones the key actually holds.
+    assert body["scopes"] == ["deployments:read"]
+
+
+async def test_a_fabric_token_on_a_human_endpoint_says_so(client: AsyncClient) -> None:
+    """A Fabric token on an Auth0-only endpoint used to blame the identity provider.
+
+    In production it surfaced as "Auth0 signing keys could not be retrieved", which points
+    at Auth0 when the real problem is that the endpoint authenticates people and the
+    caller is a machine.
+    """
+    account_id, token = await onboard(client, "human-ep", "human-ep-account")
+    created = await _create_key(client, account_id, token, ["deployments:read"])
+    key_token = await _token_from_key(client, created["secret"], "fabric-control")
+
+    response = await client.get("/v1/me", headers=bearer(key_token))
+
+    assert response.status_code == 401, response.text
+    error = response.json()["error"]
+    assert error["code"] == "auth0_login_required"
+    assert "/v1/self" in error["message"]

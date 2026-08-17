@@ -78,6 +78,22 @@ class UserResponse(ORMModel):
     display_name: str | None
 
 
+class SelfResponse(BaseModel):
+    """Who a Fabric token belongs to.
+
+    /v1/me answers for a person authenticated through Auth0. This answers for whatever
+    holds the token, which for an API key is the account and principal it was issued to,
+    so a caller with only a key can discover its own identity instead of being told the
+    account id out of band.
+    """
+
+    account_id: uuid.UUID
+    principal_type: str
+    principal_id: uuid.UUID | None
+    scopes: list[str]
+    audience: str
+
+
 class MeResponse(BaseModel):
     user: UserResponse
     memberships: list[MembershipResponse]
