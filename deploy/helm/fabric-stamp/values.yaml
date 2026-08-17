@@ -65,6 +65,34 @@ agent:
 operator:
   enabled: false
   installCRD: true
+  # With an image set, the operator runs the inference server for each placed
+  # deployment and points the data plane at it. Left empty, the data plane is
+  # configured against modelHost.url, which someone else operates.
+  #
+  # Fabric does not build this image: it is a vLLM image with the weights either baked
+  # in or mounted through cacheClaim.
+  managedModelHost:
+    image: ""
+    # What the server loads: a repository id, or a path inside the image.
+    modelRef: ""
+    # The name the server answers to. This is the release, not a customer's alias.
+    servedName: ""
+    gpus: 1
+    # Required in practice: the model family's default context length will not fit
+    # alongside its own weights on a single device.
+    maxModelLen: 2048
+    maxNumSeqs: 2
+    # A fraction of *total* device memory. Anything else resident on the GPU is not
+    # accounted for, so asking for all of it fails at startup.
+    gpuMemoryUtilization: "0.85"
+    # Disables CUDA graph capture: slower per token, but the graphs' memory is
+    # returned to the KV cache.
+    enforceEager: false
+    dtype: bfloat16
+    port: 8000
+    # A claim for the weight cache, so a restart does not refetch gigabytes.
+    cacheClaim: ""
+    runtimeClassName: ""
   # The ConfigMap the operator renders and the data plane mounts.
   configMapName: fabric-deployments
   interval: 15s

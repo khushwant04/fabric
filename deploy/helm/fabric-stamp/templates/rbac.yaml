@@ -37,6 +37,22 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create"]
+{{- if .Values.operator.managedModelHost.image }}
+  # The model host, only when the operator runs one. Without an image these
+  # permissions are not granted at all, so an operator that cannot start a server also
+  # cannot create workloads.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Reading pods is how a human debugs a host that will not start; the operator itself
+  # relies on the workload's status rather than inspecting pods.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

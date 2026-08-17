@@ -1,7 +1,10 @@
 # Packaging and Deployment
 
 **Status:** Implemented for a stamp — container images in [`deploy/images/`](../../deploy/images/) and a Helm chart in [`deploy/helm/fabric-stamp/`](../../deploy/helm/fabric-stamp/) install a working inference stamp on Kubernetes, with or without the operator. Verified on a real cluster by [`deploy/scripts/kind-e2e.sh`](../../deploy/scripts/kind-e2e.sh) in both modes.
-**Not included:** GPU scheduling and a model host. Fabric does not deploy vLLM, and the operator does not create a workload for one.
+**Not included:** the model host image itself. Fabric does not build one; with
+`operator.managedModelHost.image` set the operator runs and owns an inference server per
+placed deployment, and without it the data plane is configured against an upstream
+someone else operates.
 **Design reference:** [ADR 0004](adrs/0004-local-operator-and-single-intent-crd.md), [ADR 0007](adrs/0007-cluster-agent-and-central-telemetry.md), [ADR 0008](adrs/0008-account-scoped-tenancy-and-stamp-credentials.md), [Operator and Deployment](operator-deployment.md).
 
 ## Images

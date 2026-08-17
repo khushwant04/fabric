@@ -39,6 +39,28 @@ spec:
             - --namespace={{ .Release.Namespace }}
             - --configmap={{ .Values.operator.configMapName }}
             - --interval={{ .Values.operator.interval }}
+            {{- with .Values.operator.managedModelHost }}
+            {{- if .image }}
+            - --model-host-image={{ .image }}
+            - --model-host-model={{ required "operator.managedModelHost.modelRef is required with an image" .modelRef }}
+            - --model-host-served-name={{ required "operator.managedModelHost.servedName is required with an image" .servedName }}
+            - --model-host-gpus={{ .gpus }}
+            - --model-host-max-model-len={{ .maxModelLen }}
+            - --model-host-max-num-seqs={{ .maxNumSeqs }}
+            - --model-host-gpu-memory-utilization={{ .gpuMemoryUtilization }}
+            - --model-host-dtype={{ .dtype }}
+            - --model-host-port={{ .port }}
+            {{- if .enforceEager }}
+            - --model-host-enforce-eager
+            {{- end }}
+            {{- with .cacheClaim }}
+            - --model-host-cache-claim={{ . }}
+            {{- end }}
+            {{- with .runtimeClassName }}
+            - --model-host-runtime-class={{ . }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

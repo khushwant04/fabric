@@ -196,11 +196,12 @@ func reconciler(client *kube.Client) *Reconciler {
 	return New(client, Options{Namespace: namespace, Log: discardLogger()})
 }
 
-func decodeConfig(t *testing.T, state *apiServer) []dataPlaneEntry {
+func decodeConfig(t *testing.T, written *configMap) []dataPlaneEntry {
 	t.Helper()
-	if state.configMap == nil {
+	if written == nil {
 		t.Fatal("no configuration was written")
 	}
+	state := struct{ configMap *configMap }{configMap: written}
 	var body struct {
 		Deployments []dataPlaneEntry `json:"deployments"`
 	}
@@ -221,7 +222,7 @@ func TestDeclaredDeploymentBecomesDataPlaneConfiguration(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	entries := decodeConfig(t, state)
+	entries := decodeConfig(t, state.configMap)
 	if len(entries) != 1 {
 		t.Fatalf("expected one entry, got %d", len(entries))
 	}
@@ -290,7 +291,7 @@ func TestEntriesAreSortedSoAnUnchangedSetIsStable(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	entries := decodeConfig(t, state)
+	entries := decodeConfig(t, state.configMap)
 	if entries[0].DeploymentID != "dep-a" || entries[1].DeploymentID != "dep-z" {
 		t.Fatalf("entries are not sorted: %+v", entries)
 	}
@@ -312,7 +313,7 @@ func TestADeletingResourceIsWithdrawnImmediately(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	entries := decodeConfig(t, state)
+	entries := decodeConfig(t, state.configMap)
 	if len(entries) != 1 || entries[0].DeploymentID != "dep-s" {
 		t.Fatalf("a deleting deployment is still served: %+v", entries)
 	}
@@ -331,7 +332,7 @@ func TestConfigurationIsWrittenEvenWhenStatusFails(t *testing.T) {
 	}
 	// The data plane is already serving; refusing to configure it because a status
 	// write failed would take away working capacity for a reporting problem.
-	if len(decodeConfig(t, state)) != 1 {
+	if len(decodeConfig(t, state.configMap)) != 1 {
 		t.Fatal("configuration was not written")
 	}
 }
@@ -370,7 +371,7 @@ func TestAnEmptyClusterRendersAnEmptyDocument(t *testing.T) {
 	}
 	// An empty list, not an absent file: the data plane distinguishes "nothing is
 	// placed here" from "the configuration is missing".
-	if entries := decodeConfig(t, state); len(entries) != 0 {
+	if entries := decodeConfig(t, state.configMap); len(entries) != 0 {
 		t.Fatalf("expected an empty document, got %+v", entries)
 	}
 }
@@ -392,7 +393,7 @@ func TestConfigurationUpdateCarriesTheResourceVersion(t *testing.T) {
 	if state.updates != 1 {
 		t.Fatalf("expected one update, got %d", state.updates)
 	}
-	if len(decodeConfig(t, state)) != 2 {
+	if len(decodeConfig(t, state.configMap)) != 2 {
 		t.Fatal("the second deployment was not added")
 	}
 }

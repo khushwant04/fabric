@@ -44,8 +44,32 @@ func main() {
 			"config-key", envOr("FABRIC_OPERATOR_CONFIG_KEY", "deployments.json"),
 			"key within the ConfigMap, which is the file name the data plane mounts")
 		interval = flag.Duration("interval", 15*time.Second, "reconcile interval")
-		once     = flag.Bool("once", false, "reconcile once and exit")
-		show     = flag.Bool("version", false, "print the version and exit")
+
+		// Model host. Without an image the operator only configures the data plane
+		// against an upstream someone else operates, which is the existing behaviour.
+		hostImage = flag.String("model-host-image", envOr("FABRIC_OPERATOR_MODEL_HOST_IMAGE", ""),
+			"inference server image; empty means the operator runs no model host")
+		hostModelRef = flag.String("model-host-model", envOr("FABRIC_OPERATOR_MODEL_REF", ""),
+			"what the server loads: a repository id or a path inside the image")
+		hostServedName = flag.String("model-host-served-name",
+			envOr("FABRIC_OPERATOR_SERVED_NAME", ""),
+			"name the server answers to, which is the release rather than a customer alias")
+		hostGPUs   = flag.Int("model-host-gpus", 1, "GPUs per replica")
+		hostMaxLen = flag.Int("model-host-max-model-len", 0,
+			"context bound; required in practice because the family default will not fit")
+		hostMaxSeqs   = flag.Int("model-host-max-num-seqs", 0, "concurrent sequences")
+		hostGPUMemory = flag.String("model-host-gpu-memory-utilization", "",
+			"fraction of total device memory the server may use")
+		hostEager = flag.Bool("model-host-enforce-eager", false,
+			"disable CUDA graph capture, trading latency for the memory it holds")
+		hostDType = flag.String("model-host-dtype", "", "weight dtype, for example bfloat16")
+		hostPort  = flag.Int("model-host-port", 8000, "port the server listens on")
+		hostCache = flag.String("model-host-cache-claim", envOr("FABRIC_OPERATOR_CACHE_CLAIM", ""),
+			"PersistentVolumeClaim for the weight cache, so a restart does not refetch")
+		hostRuntimeClass = flag.String("model-host-runtime-class",
+			envOr("FABRIC_OPERATOR_RUNTIME_CLASS", ""), "RuntimeClass for GPU nodes")
+		once = flag.Bool("once", false, "reconcile once and exit")
+		show = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
 
@@ -69,11 +93,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	host := operator.ModelHost{
+		Image:                *hostImage,
+		ModelRef:             *hostModelRef,
+		ServedName:           *hostServedName,
+		GPUs:                 *hostGPUs,
+		MaxModelLen:          *hostMaxLen,
+		MaxNumSeqs:           *hostMaxSeqs,
+		GPUMemoryUtilization: *hostGPUMemory,
+		EnforceEager:         *hostEager,
+		DType:                *hostDType,
+		Port:                 *hostPort,
+		CacheClaim:           *hostCache,
+		RuntimeClassName:     *hostRuntimeClass,
+	}
+	if host.Enabled() {
+		// Checked here rather than discovered by a server that starts and then fails:
+		// without these the container would either load nothing or answer to a name
+		// the data plane never asks for.
+		if host.ModelRef == "" || host.ServedName == "" {
+			log.Error("--model-host-image needs --model-host-model and --model-host-served-name")
+			os.Exit(1)
+		}
+		log.Info("managing the model host",
+			"image", host.Image, "served_name", host.ServedName, "gpus", host.GPUs)
+	}
+
 	reconciler := operator.New(client, operator.Options{
 		Namespace:     *namespace,
 		ConfigMapName: *configMap,
 		ConfigKey:     *configKey,
 		Log:           log,
+		ModelHost:     host,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
