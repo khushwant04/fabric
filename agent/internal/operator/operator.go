@@ -115,6 +115,12 @@ type Options struct {
 	// the path the data plane already expects.
 	ConfigKey string
 	Log       *slog.Logger
+	// ModelHost, when it carries an image, makes the operator run the inference
+	// server for each declared deployment rather than pointing the data plane at one
+	// somebody else operates.
+	ModelHost ModelHost
+	// Rollout governs how a change of release is applied and when it is abandoned.
+	Rollout Rollout
 }
 
 // Reconciler renders declared deployments into cluster state.
@@ -133,6 +139,9 @@ func New(client *kube.Client, options Options) *Reconciler {
 	}
 	if options.Log == nil {
 		options.Log = slog.Default()
+	}
+	if options.Rollout.ReadyTimeout == 0 {
+		options.Rollout = DefaultRollout()
 	}
 	return &Reconciler{client: client, options: options}
 }
@@ -162,6 +171,13 @@ type Result struct {
 	Serving       int
 	ConfigChanged bool
 	StatusWrites  int
+	// HostsReady counts deployments whose model host can answer, which is not the
+	// same as the number configured.
+	HostsReady int
+	HostsTotal int
+	// RolledBack and Deferred make rollout behaviour observable in one pass.
+	RolledBack int
+	Deferred   int
 }
 
 // ReconcileOnce brings the ConfigMap in line with the declared resources and records
@@ -189,6 +205,64 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	}
 	result.Serving = len(serving)
 
+	// Hosts first, because the address the data plane is given depends on where the
+	// host ended up. A configuration naming a Service that does not exist yet would
+	// make the data plane fail requests it could otherwise queue behind readiness.
+	ready := map[string]bool{}
+	decisions := map[string]RolloutDecision{}
+	if r.options.ModelHost.Enabled() {
+		result.HostsTotal = len(serving)
+		// Counted across the pass so the stamp's budget for simultaneous changes is
+		// respected: without this every deployment would change release at once and a
+		// bad release would take the whole stamp down together.
+		inFlight := 0
+		for index := range serving {
+			state, observeErr := r.observeRollout(ctx, serving[index])
+			if observeErr != nil {
+				r.options.Log.Warn("could not read rollout state",
+					"resource", serving[index].Metadata.Name, "error", observeErr)
+				continue
+			}
+
+			decision := decideRollout(
+				r.options.Rollout, serving[index], state, inFlight, time.Now(),
+			)
+			decisions[serving[index].Spec.DeploymentID] = decision
+			if decision.Release != state.Current || decision.RolledBack {
+				inFlight++
+			}
+			if decision.RolledBack {
+				r.options.Log.Warn("rolling back model host",
+					"resource", serving[index].Metadata.Name,
+					"from", state.Current, "to", decision.Release)
+				result.RolledBack++
+			}
+			if decision.Deferred {
+				result.Deferred++
+			}
+
+			hostReady, hostErr := r.applyHostWithRollout(ctx, serving[index], decision, state)
+			if hostErr != nil {
+				// One host failing must not stop the others or discard configuration
+				// already applied for them.
+				r.options.Log.Warn("could not reconcile model host",
+					"resource", serving[index].Metadata.Name, "error", hostErr)
+				continue
+			}
+			ready[serving[index].Spec.DeploymentID] = hostReady
+			if hostReady {
+				result.HostsReady++
+			}
+			// The operator owns the host, so it decides the upstream, overriding
+			// whatever the agent guessed at declaration time.
+			serving[index].Spec.UpstreamURL = r.hostUpstream(serving[index])
+		}
+
+		if err := r.pruneHosts(ctx, serving); err != nil {
+			r.options.Log.Warn("could not prune model hosts", "error", err)
+		}
+	}
+
 	changed, err := r.applyConfigMap(ctx, serving)
 	if err != nil {
 		return result, err
@@ -196,8 +270,10 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	result.ConfigChanged = changed
 
 	for _, item := range serving {
-		if !r.statusIsCurrent(item) {
-			if err := r.reportApplied(ctx, item); err != nil {
+		if !r.statusIsCurrent(item) || r.options.ModelHost.Enabled() {
+			if err := r.reportApplied(
+				ctx, item, ready[item.Spec.DeploymentID], decisions[item.Spec.DeploymentID],
+			); err != nil {
 				// One resource failing to accept status does not invalidate the
 				// configuration already written, nor the other resources.
 				r.options.Log.Warn("could not write status",
@@ -313,30 +389,126 @@ func (r *Reconciler) statusIsCurrent(item ModelDeployment) bool {
 	return false
 }
 
-func (r *Reconciler) reportApplied(ctx context.Context, item ModelDeployment) error {
+func (r *Reconciler) reportApplied(
+	ctx context.Context, item ModelDeployment, hostReady bool, decision RolloutDecision,
+) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	conditions := []Condition{
+		{
+			Type:   ConditionApplied,
+			Status: "True",
+			// Names what was actually done, which depends on whether this operator
+			// runs the host or only configures the path to one.
+			Reason:             r.appliedReason(),
+			Message:            "The stamp's data plane is configured to serve this deployment",
+			ObservedGeneration: item.Metadata.Generation,
+			LastTransitionTime: now,
+		},
+	}
+
+	phase := "ready"
+	if r.options.ModelHost.Enabled() {
+		// Reported separately from Applied: configuration can be correct while the
+		// server is still loading weights, which takes minutes.
+		status, reason := "False", "ModelHostStarting"
+		if hostReady {
+			status, reason = "True", "ModelHostServing"
+		} else {
+			phase = "pending"
+		}
+		conditions = append(conditions, Condition{
+			Type:               ConditionHostReady,
+			Status:             status,
+			Reason:             reason,
+			Message:            "Readiness reported by the model host workload",
+			ObservedGeneration: item.Metadata.Generation,
+			LastTransitionTime: now,
+		})
+
+		// Progress is its own condition, so a host that is starting is distinguishable
+		// from one that was abandoned and rolled back.
+		progressing := "False"
+		if !hostReady {
+			progressing = "True"
+		}
+		progressReason := decision.Reason
+		if progressReason == "" {
+			progressReason = "Progressing"
+		}
+		message := "Rollout state observed by the operator"
+		if decision.RolledBack {
+			message = "The declared release did not become ready and was rolled back"
+		}
+		conditions = append(conditions, Condition{
+			Type:               ConditionProgressing,
+			Status:             progressing,
+			Reason:             progressReason,
+			Message:            message,
+			ObservedGeneration: item.Metadata.Generation,
+			LastTransitionTime: now,
+		})
+	}
+
 	patch := map[string]any{
 		"status": Status{
-			Phase:              "ready",
+			Phase:              phase,
 			ObservedGeneration: item.Metadata.Generation,
-			Conditions: []Condition{
-				{
-					Type:   ConditionApplied,
-					Status: "True",
-					// Names what was actually done. The operator renders the data
-					// plane's configuration; it does not start a model host, so a
-					// reason implying a running workload would be false.
-					Reason:             "DataPlaneConfigurationRendered",
-					Message:            "The stamp's data plane is configured to serve this deployment",
-					ObservedGeneration: item.Metadata.Generation,
-					LastTransitionTime: time.Now().UTC().Format(time.RFC3339),
-				},
-			},
+			Conditions:         conditions,
 		},
 	}
 
 	path := fmt.Sprintf("%s/%s/status", r.resourcePath(), item.Metadata.Name)
 	if err := r.client.MergePatch(ctx, path, patch, nil); err != nil {
 		return fmt.Errorf("patch status: %w", err)
+	}
+	return nil
+}
+
+// appliedReason names what the operator did, so status cannot imply a running server
+// on a stamp where the operator only writes configuration.
+func (r *Reconciler) appliedReason() string {
+	if r.options.ModelHost.Enabled() {
+		return "ModelHostAndConfigurationApplied"
+	}
+	return "DataPlaneConfigurationRendered"
+}
+
+// pruneHosts removes workloads whose deployment is no longer declared.
+//
+// Labelled lookup rather than remembered state: an operator that restarted would
+// otherwise leak a GPU-holding workload it had forgotten about.
+func (r *Reconciler) pruneHosts(ctx context.Context, serving []ModelDeployment) error {
+	wanted := make(map[string]struct{}, len(serving))
+	for _, item := range serving {
+		wanted[hostName(item)] = struct{}{}
+	}
+
+	path := fmt.Sprintf(
+		"/apis/apps/v1/namespaces/%s/deployments?labelSelector=%s",
+		r.options.Namespace,
+		"app.kubernetes.io/managed-by%3Dfabric-operator,app.kubernetes.io/name%3Dfabric-model-host",
+	)
+	var list struct {
+		Items []deployment `json:"items"`
+	}
+	if err := r.client.Get(ctx, path, &list); err != nil {
+		return fmt.Errorf("list model hosts: %w", err)
+	}
+
+	for _, existing := range list.Items {
+		if _, keep := wanted[existing.Metadata.Name]; keep {
+			continue
+		}
+		id := existing.Metadata.Labels["fabric.khushwant.dev/deployment-id"]
+		if id == "" {
+			// Without the label there is nothing to correlate, so it is left alone
+			// rather than deleted on a guess.
+			continue
+		}
+		if err := r.deleteHost(ctx, id); err != nil {
+			return err
+		}
+		r.options.Log.Info("model host removed", "deployment", existing.Metadata.Name)
 	}
 	return nil
 }
@@ -355,7 +527,8 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) error {
 		} else if result.ConfigChanged || result.StatusWrites > 0 {
 			r.options.Log.Info("reconciled",
 				"declared", result.Declared, "serving", result.Serving,
-				"config_changed", result.ConfigChanged, "status_writes", result.StatusWrites)
+				"config_changed", result.ConfigChanged, "status_writes", result.StatusWrites,
+				"hosts_ready", result.HostsReady, "hosts_total", result.HostsTotal)
 		}
 
 		select {

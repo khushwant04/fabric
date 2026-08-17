@@ -23,7 +23,7 @@ spec:
         {{- include "fabric-stamp.labels" . | nindent 8 }}
       annotations:
         # Roll the pod when the rendered configuration inputs change.
-        checksum/config: {{ printf "%s|%s|%s" .Values.controlPlane.url .Values.modelHost.url (include "fabric-stamp.jwksUrl" .) | sha256sum }}
+        checksum/config: {{ printf "%s|%s|%s" .Values.controlPlane.url (include "fabric-stamp.modelHostUrl" .) (include "fabric-stamp.jwksUrl" .) | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -64,7 +64,7 @@ spec:
             {{- with .Values.stamp.region }}
             - --region={{ . }}
             {{- end }}
-            - --upstream={{ .Values.modelHost.url }}
+            - --upstream={{ include "fabric-stamp.modelHostUrl" . }}
             - --gpus={{ .Values.stamp.gpus }}
             - --poll={{ .Values.agent.pollInterval }}
             # Secret state stays on the agent's own volume; the rendered
@@ -138,6 +138,22 @@ spec:
               value: {{ .Values.dataPlane.usageBufferSize | quote }}
             - name: FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS
               value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
+            - name: FABRIC_DP_RATE_LIMIT_REQUESTS_PER_MINUTE
+              value: {{ .Values.dataPlane.limits.requestsPerMinute | quote }}
+            - name: FABRIC_DP_RATE_LIMIT_BURST
+              value: {{ .Values.dataPlane.limits.burst | quote }}
+            - name: FABRIC_DP_MAX_IN_FLIGHT_PER_ACCOUNT
+              value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | quote }}
+            {{- if .Values.dataPlane.upstreamTls.clientSecret }}
+            - name: FABRIC_DP_UPSTREAM_CLIENT_CERT
+              value: /etc/fabric/upstream-tls/tls.crt
+            - name: FABRIC_DP_UPSTREAM_CLIENT_KEY
+              value: /etc/fabric/upstream-tls/tls.key
+            {{- end }}
+            {{- if .Values.dataPlane.upstreamTls.caSecret }}
+            - name: FABRIC_DP_UPSTREAM_CA_BUNDLE
+              value: /etc/fabric/upstream-ca/ca.crt
+            {{- end }}
           ports:
             - name: inference
               containerPort: 8080
@@ -192,6 +208,10 @@ spec:
             - --credential-file=/etc/fabric/collector/telemetry-credential
             - --interval={{ .Values.collector.interval }}
             - --queue-capacity={{ .Values.collector.queueCapacity }}
+            {{- with .Values.collector.metrics.endpoint }}
+            - --metrics-endpoint={{ . }}
+            - --metrics-interval={{ $.Values.collector.metrics.interval }}
+            {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

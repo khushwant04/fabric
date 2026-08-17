@@ -13,13 +13,22 @@ kind: ConfigMap
 metadata:
   name: postgres-init
 data:
-  init.sql: |
+  # A script rather than plain SQL so the role's password can come from the environment.
+  # The caller generates it per run, which keeps every password out of the repository
+  # even for a throwaway database. psql's own variable quoting is used instead of shell
+  # interpolation so the value cannot terminate the statement.
+  init.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+        -v app_password="$FABRIC_APP_PASSWORD" <<'SQL'
     CREATE ROLE fabric_app WITH
-        LOGIN PASSWORD 'fabric_app'
+        LOGIN PASSWORD :'app_password'
         NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
     GRANT USAGE, CREATE ON SCHEMA public TO fabric_app;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO fabric_app;
+    SQL
 ---
 apiVersion: v1
 kind: Service
@@ -45,9 +54,14 @@ spec:
         - name: postgres
           image: postgres:16-alpine
           env:
-            # Test-only credentials for a throwaway cluster.
+            # Generated per run by the caller, so no password for any database, however
+            # throwaway, is carried in the repository.
             - name: POSTGRES_PASSWORD
-              value: postgres
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: superuser-password}
+            - name: FABRIC_APP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-credentials, key: app-password}
             - name: POSTGRES_DB
               value: fabric
             # The data directory lives under a subdirectory so an emptyDir mount does
@@ -67,6 +81,6 @@ spec:
               mountPath: /var/lib/postgresql/data
       volumes:
         - name: init
-          configMap: {name: postgres-init}
+          configMap: {name: postgres-init, defaultMode: 0555}
         - name: data
           emptyDir: {}

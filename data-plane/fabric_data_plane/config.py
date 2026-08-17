@@ -69,6 +69,33 @@ class Settings(BaseSettings):
     #: buffer drops oldest records rather than growing without limit.
     usage_buffer_size: int = Field(default=10_000, ge=1)
 
+    #: Requests per minute per account. Zero disables the limit, which is the default:
+    #: the data plane cannot know a model host's capacity, so the operator declares it
+    #: in the chart rather than inheriting a guess from here.
+    rate_limit_requests_per_minute: int = Field(default=0, ge=0)
+    #: How much of that allowance may be spent at once. Defaults to a quarter minute's
+    #: worth so a client that batches its calls is not punished for arriving together.
+    rate_limit_burst: int = Field(default=0, ge=0)
+
+    #: Client certificate and key the data plane presents to the model host, and the
+    #: authority it verifies the host against. All three are needed for mutual TLS: a
+    #: client certificate alone proves who is calling but not who answered, and a CA
+    #: alone leaves the host unable to tell an authorised caller from anything else that
+    #: can reach the pod.
+    #:
+    #: Unset means plain HTTP, which is what a single-pod stamp uses today: the host is
+    #: reachable only inside the pod's own network namespace or through a Service the
+    #: NetworkPolicy restricts. mTLS matters once the host is a separate workload,
+    #: possibly on another node.
+    upstream_client_cert: str | None = None
+    upstream_client_key: str | None = None
+    upstream_ca_bundle: str | None = None
+
+    #: In-flight requests per account. This is the limit that protects the GPU, because
+    #: a model server's cost is set by how many sequences it decodes at once. Zero
+    #: disables it.
+    max_in_flight_per_account: int = Field(default=0, ge=0)
+
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod
     def _strip(cls, value: str) -> str:

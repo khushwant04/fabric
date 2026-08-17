@@ -15,7 +15,7 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A `FabricModelDeployment` CRD and a cluster-local operator in [`agent/`](agent/) that reconcile placed deployments into the data plane's configuration and report what was applied; the operator creates no model-host workload.
 - Container images and Helm charts in [`deploy/`](deploy/) that install a stamp — agent, data plane, collector, and optionally the operator — and the control plane itself on Kubernetes, verified on a real cluster against PostgreSQL with row-level security in force.
 - An inference data plane in [`data-plane/`](data-plane/) that verifies Fabric inference JWTs locally, enforces account ownership of deployments, and proxies OpenAI-compatible requests to a model host.
-- A vLLM decode-op substitution in [`serving/`](serving/) that returns identical outputs to vLLM's own gated-delta kernel and is 1.13–1.23x faster on the development GPU, per three committed artifacts; it is not registered in a live vLLM instance.
+- A vLLM decode-op substitution in [`serving/`](serving/) that returns identical outputs to vLLM's own gated-delta kernel. At the launch model's own layer shapes it is 1.19x at single-sequence decode and at parity (0.98–1.00x) at 16 and 32 sequences, per three committed artifacts; it is not registered in a live vLLM instance.
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
 - A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
 
@@ -27,14 +27,20 @@ A stamp can be installed on Kubernetes with the chart in [`deploy/`](deploy/), a
 [`deploy/scripts/kind-e2e.sh`](deploy/scripts/kind-e2e.sh) verifies the whole loop on
 a throwaway cluster.
 
-A vLLM host has been run on the development GPU serving the launch model, with the
-whole platform loop verified against it: real inference through the data plane, and the
-model's own token counts attributed centrally. That host runs vLLM's own kernels; the
-Fabric substitution is not registered in it, because the version that supports the
-model moved the gated-delta code after the version the adapter targets.
+The platform runs on managed Kubernetes. A control plane and a managed stamp are
+deployed on AKS against Azure PostgreSQL with row-level security in force, and the
+operator runs a vLLM host on a T4 that serves the launch model: a placement creates the
+host, an account's inference token is verified locally by the data plane, real tokens are
+generated on the GPU, and the model's own token counts are attributed back to the account,
+deployment, and stamp. Weights and compiled graphs are cached on the GPU node's own disk.
 
-There is currently no managed AKS/k3s environment, metrics pipeline, dashboard, or
-A10/T4 benchmark result.
+That host runs vLLM's own kernels. The Fabric substitution is not registered in it,
+because the version that supports the model moved the gated-delta code after the version
+the adapter targets.
+
+There is currently no metrics pipeline, dashboard, or T4 benchmark result, and the control
+plane is not yet exposed publicly: it is reached inside the cluster while DNS and a
+certificate for its hostname are pending.
 
 ## Run the control plane
 

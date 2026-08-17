@@ -46,8 +46,68 @@ and forced. Managed providers hand out such roles by default, so the control pla
 checks its own role at startup and logs the gap, and
 `control-plane/scripts/create-app-role.sql` creates a role the policies bind.
 
-Not implemented in the service: outbox
-delivery workers, request idempotency (the `idempotency_keys` table has no handler),
+### Outbox delivery and idempotent requests
+
+Writers for the transactional outbox already existed: `publish_outbox` is called wherever
+a durable event belongs, so deployment changes, placements, enrollments, and revocations
+were already recorded in the same transaction as the change. What was missing was
+delivery. Nothing drained the table, so events accumulated as an unread log, which is
+indistinguishable from a working outbox until an event needs to have arrived.
+
+A worker now drains it on an interval inside the API process. Each event is attempted in
+its own nested transaction, so one failure neither rolls back events already delivered in
+the batch nor stops the rest. Delivery is at-least-once, oldest first so a stuck event
+cannot starve newer ones behind it, and an event that fails ten times is left unprocessed
+rather than deleted, because a consumer that has failed ten times is broken and removing
+the evidence would hide it. The default consumer logs, since Fabric has no message bus and
+inventing one here would be speculative; a real consumer replaces it without touching the
+writers.
+
+`Idempotency-Key` is honoured on deployment creation. A caller that loses the response has
+no safe move without it: retrying may create a second deployment, not retrying may leave
+none. The key is claimed by an insert rather than a check followed by a write, so two
+concurrent retries cannot both proceed, and it is scoped to an account, a principal, and an
+operation, because a key is a client's label for one intended action rather than a global
+identifier. A claimed key with no recorded result answers 409 rather than blocking, since
+there is nothing yet to replay. Keys lapse after 24 hours and are purged in bounded
+batches, elevated because purging spans accounts.
+
+### Bootstrapping without an identity provider
+
+Every other route to an account runs through Auth0: a person logs in, exchanges that
+token, and creates an account. That is right for people and wrong for the first account,
+which has to exist before an identity provider is configured, and for automated setup,
+which has no browser.
+
+`python -m app.cli bootstrap-account` creates an account, a local owner record, and one
+API key, printing the key once. It is a command rather than an endpoint on purpose: an
+endpoint that created accounts without authentication would let anyone create tenants,
+while a command requires whoever runs it to hold the database credentials already. A
+second run refuses to touch an existing account rather than minting another credential for
+one somebody is using.
+
+### Managed-capacity entitlements
+
+Whether an account may place onto Fabric's own GPU has been a column since the first
+schema with no way to set it: it could only be changed by editing the database. It is now
+an API, shaped by who is allowed to decide.
+
+Granting is not account-scoped. The scope authorising it sits outside the set an
+account-scoped API key may hold, and the caller must additionally belong to the Fabric
+system account, so a customer cannot entitle itself however its keys were created. The
+scope check alone would not be enough: a scope says what a token may do, not on whose
+behalf.
+
+Reading is account-scoped, because a customer needs to know whether a managed placement
+will be accepted before attempting one.
+
+A change emits an outbox event so anything caching placement decisions learns of it, and
+only when the value actually moves, since a consumer should not be told about a transition
+that did not happen. The attempt is audited either way. The system account itself cannot
+hold the entitlement: it owns the capacity, and entitling it to itself would obscure whose
+placement a deployment is.
+
+Not implemented in the service: request idempotency (the `idempotency_keys` table has no handler),
 agent/telemetry credential rotation, and managed-capacity entitlement management
 through the API.
 
@@ -92,9 +152,11 @@ credentials. Status is a subresource, so the writer of intent is not the writer 
 observation. The operator's ConfigMap permission is restricted by name to the one
 object it manages, and the data plane mounts no service-account token at all.
 
-The reported reason is `DataPlaneConfigurationRendered`, which is what actually
-happened. No model host is created, so a reason implying a running workload would be
-false.
+The reported reason is what actually happened: `DataPlaneConfigurationRendered` when the
+operator only writes configuration, and `ModelHostAndConfigurationApplied` when it runs
+the inference server too. With a managed host it also reports a separate
+`ModelHostReady` condition from the workload's own status, so a deployment whose server is
+still loading weights is `pending` rather than described as serving.
 
 The operator is implemented against the Kubernetes REST API using only the standard
 library. controller-runtime would have added a large dependency tree to a module that
@@ -105,7 +167,7 @@ Both modes are verified on a real cluster. Without the operator the agent writes
 file itself, which is a working stamp with one fewer moving part and no Kubernetes
 permissions.
 
-Not implemented: a model-host workload, rollback, and progressive rollout.
+Not implemented: rollback and progressive rollout. The model host image itself is not built by Fabric.
 
 ### Control-plane packaging
 
@@ -140,10 +202,43 @@ Two version facts matter and are not yet resolved:
   the gated-delta op where the pinned version keeps it, and the newer version moved that
   code, so the live host runs vLLM's own kernels throughout.
 
-A third gap is measurement rather than plumbing: the launch model's linear-attention
-layers use larger head dimensions and more heads than every committed artifact
-measured, and 18 of its 24 layers are linear attention. No artifact covers the shapes
-the launch model actually runs, so the kernel's benefit for this model is unmeasured.
+The kernel has now been measured at the launch model's own layer shapes: sixteen heads
+with 128-wide key and value dimensions, which is what 18 of its 24 layers run. Three
+spaced artifacts at one commit, on the development GPU:
+
+| Sequences | Against vLLM's kernel | Against flash-linear-attention (by batch) |
+|---|---|---|
+| 1 | 1.188–1.199x | 1.232–1.412x |
+| 16 | 0.982–0.989x | 1.034–1.046x at batch 8 |
+| 32 | 0.990–0.998x | — |
+
+That is a different result from the development shapes, and it is the more relevant
+one. At sixteen heads and 128-wide dimensions the kernel is ahead only at
+single-sequence decode; at the concurrency continuous batching actually produces it is
+at parity or marginally behind. The earlier 1.13–1.23x figures were measured at eight
+heads with 64-wide dimensions, which no layer of this model uses.
+
+Outputs remain identical and the state cache agrees to 1.2e-7 at these shapes too, so
+the substitution stays correct; what changed is the case for making it.
+
+The substitution is still not registered in the live host, and the reason is now
+measured rather than suspected. The newer vLLM's unfused op no longer computes what this
+kernel computes: against the eager reference at the launch model's shapes it is 1.7e-2
+away where the pinned version is 1.2e-4, and the gap widens with concurrency (1.0e-2 at
+one sequence, 1.7e-2 at sixteen, 0.35 at thirty-two). Normalisation was ruled out, since
+pre-normalising in the caller and normalising in the kernel diverge identically.
+
+The newer decode path is the packed op, which also unpacks a combined QKV tensor,
+L2-normalises, and derives the gate from `A_log` and `dt_bias`. Substituting there means
+fusing that work into the kernel, which is kernel work rather than adapter work, so it is
+not attempted here.
+
+Artifacts now record which module the baseline came from, its version, and whether it
+`implements_same_function` as the reference. Two artifacts at one commit make the
+situation explicit: under the pinned version the flag is true and the kernel is 1.25x at
+one sequence and 0.98–0.99x at sixteen and thirty-two; under the newer version the flag
+is false, so its timing ratios describe two different computations and are not a
+speedup claim.
 
 ### Packaging
 
@@ -175,8 +270,21 @@ can never be accepted. Per-record rejections are permanent by nature — an unpl
 deployment or an out-of-window timestamp — so they are logged and discarded rather
 than resent forever. 10 Go tests cover this.
 
-Not implemented: runtime and GPU metrics collection, and any store or dashboard that
-consumes usage.
+GPU and runtime metrics are collected alongside usage. The collector samples devices with
+`nvidia-smi` and scrapes an allowlist of the model host's own series, on a separate
+interval from usage: usage is billing-relevant and should be prompt, while metrics
+frequency is a cost decision. A failed metrics report is dropped rather than queued,
+because the next sample supersedes it and retrying would report the past as the present;
+the queue exists for usage, where every record matters.
+
+The control plane accepts them on `POST /v1/telemetry/metrics` under the same credential
+rules as usage, and they are deliberately not stored as rows. A table would be a
+time-series database with no retention, no downsampling, and no query language, growing
+without bound while being awkward to read. The latest sample is kept on the stamp so an
+operator can see it and the rest is logged, which keeps the path real without pretending a
+relational table is a metrics system.
+
+Not implemented: a metrics store, which is an infrastructure choice, and any dashboard.
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 

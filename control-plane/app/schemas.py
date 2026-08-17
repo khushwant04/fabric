@@ -201,7 +201,76 @@ class DeploymentStatusResponse(ORMModel):
     reported_at: dt.datetime
 
 
+# --- entitlements ---------------------------------------------------------
+
+
+class EntitlementResponse(BaseModel):
+    """Whether an account may place onto Fabric's own managed capacity."""
+
+    account_id: uuid.UUID
+    managed_capacity_enabled: bool
+
+
+class ManagedCapacityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    #: Recorded on the audit trail and the emitted event. Optional, because a grant is
+    #: already attributable to the operator who made it, but useful when it is not
+    #: obvious why.
+    reason: str | None = Field(default=None, max_length=500)
+
+
 # --- telemetry and usage --------------------------------------------------
+
+
+class GPUSampleRequest(BaseModel):
+    """One reading of one device on a stamp."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0, le=64)
+    product: str = Field(max_length=200)
+    utilization_gpu_percent: float = Field(ge=0, le=100)
+    utilization_memory_percent: float = Field(ge=0, le=100)
+    memory_used_mib: float = Field(ge=0)
+    memory_total_mib: float = Field(ge=0)
+    temperature_c: float = Field(ge=0, le=200)
+    power_draw_w: float = Field(ge=0)
+    sm_clock_mhz: float = Field(ge=0)
+    sm_clock_max_mhz: float = Field(ge=0)
+
+
+class RuntimeSampleRequest(BaseModel):
+    """What the model host reported about itself, or why it could not be read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(default="", max_length=500)
+    reachable: bool = False
+    #: Bounded so a stamp cannot use metrics as arbitrary storage.
+    values: dict[str, float] = Field(default_factory=dict, max_length=64)
+    unreachable_cause: str | None = Field(default=None, max_length=500)
+
+
+class MetricsReportRequest(BaseModel):
+    """A stamp's periodic sample.
+
+    Carries no account and no stamp, for the same reason usage records do not: both are
+    derived from the telemetry credential, so a stamp cannot report as another.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    collected_at: dt.datetime
+    gpus: list[GPUSampleRequest] = Field(default_factory=list, max_length=16)
+    runtime: RuntimeSampleRequest = Field(default_factory=RuntimeSampleRequest)
+
+
+class MetricsAcceptedResponse(BaseModel):
+    stamp_id: uuid.UUID
+    gpus_recorded: int
+    runtime_recorded: bool
 
 
 class UsageRecordRequest(BaseModel):

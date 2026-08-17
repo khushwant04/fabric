@@ -1,0 +1,68 @@
+# NVIDIA device plugin for the inference plane.
+#
+# AKS installs the GPU driver on an NC-series pool (`gpuProfile.driver: Install`) but does
+# not add a device plugin, so `nvidia.com/gpu` never appears in node capacity and a pod
+# requesting a GPU stays Pending forever with no obvious cause. The driver being present
+# and the resource being advertised are two different things.
+#
+# It tolerates the GPU pool's taint. Without that the plugin cannot land on the very
+# nodes it exists to advertise, which fails silently in the same way.
+#
+#   kubectl apply -f deploy/cluster/nvidia-device-plugin.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nvidia-device-plugin
+    app.kubernetes.io/part-of: fabric
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+    spec:
+      # Evicting this to fit an ordinary workload would take the GPU away from every pod
+      # on the node, so it ranks with the other node-critical agents.
+      priorityClassName: system-node-critical
+      tolerations:
+        # The taint this project puts on its GPU pool.
+        - key: sku
+          operator: Equal
+          value: gpu
+          effect: NoSchedule
+        # The conventional GPU taint, so the same manifest works on a pool tainted the
+        # usual way rather than needing to be edited per cluster.
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      # AKS's own label for accelerated nodes, rather than this project's, so the plugin
+      # covers any GPU pool in the cluster and not only pools Fabric created.
+      nodeSelector:
+        accelerator: nvidia
+      containers:
+        - name: nvidia-device-plugin-ctr
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+          env:
+            - name: FAIL_ON_INIT_ERROR
+              # Fail loudly on a node where the driver is missing. Continuing would leave
+              # a plugin running that advertises nothing, which looks like a scheduler
+              # problem rather than a driver one.
+              value: "true"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from harness import environment
@@ -126,3 +128,29 @@ def test_git_state_reports_the_scope_it_checked() -> None:
     if git.get("commit") is None:
         pytest.skip("not a git checkout")
     assert git["dirty_scope"] == ["runtime", "serving"]
+
+
+def test_dirtiness_is_detected_from_any_working_directory(tmp_path, monkeypatch) -> None:
+    """The harness is documented to run from serving/, and pathspecs are relative.
+
+    From that directory the check looked for serving/runtime and serving/serving, matched
+    nothing, and reported a clean tree no matter what had been edited. Every artifact
+    produced the documented way therefore claimed to correspond to a commit.
+    """
+    from harness.environment import _git_state
+
+    from_root = _git_state()
+    if from_root.get("commit") is None:
+        pytest.skip("not a git checkout")
+
+    for subdirectory in ("harness", "artifacts"):
+        target = pathlib.Path(__file__).resolve().parents[1] / subdirectory
+        if not target.exists():
+            continue
+        monkeypatch.chdir(target)
+        from_subdir = _git_state()
+        assert from_subdir["commit"] == from_root["commit"]
+        assert from_subdir["dirty"] == from_root["dirty"], (
+            f"dirtiness differs when run from {subdirectory}: "
+            f"{from_subdir['dirty']} vs {from_root['dirty']}"
+        )

@@ -22,23 +22,70 @@ NAME = "vllm:fused_recurrent_gated_delta_rule"
 
 
 def version() -> str | None:
-    try:
-        import vllm
-    except ImportError:
-        return None
-    return getattr(vllm, "__version__", None)
+    from fabric_serving.vllm_ops import resolve
+
+    ops = resolve()
+    return None if ops is None else ops.version
 
 
 def is_available() -> bool:
     """Whether the comparison can run in this environment."""
-    try:
-        import vllm  # noqa: F401
-        from vllm.model_executor.layers.fla.ops import (  # noqa: F401
-            fused_recurrent_gated_delta_rule,
+    from fabric_serving.vllm_ops import resolve
+
+    return resolve() is not None
+
+
+def _agreement_with_reference(
+    *, heads: int, key_dim: int, value_dim: int, dtype: Any, slots: int
+) -> dict[str, Any]:
+    """How far vLLM's op is from the delta rule the Fabric kernel implements.
+
+    A speedup is only meaningful between implementations of the same function. The
+    version this project pinned first agreed with the eager reference to fp16
+    resolution; a later version's unfused op does not, and the gap widens with
+    concurrency, so a timing ratio against it would compare different computations
+    and read as a win.
+
+    Recorded per environment rather than assumed, because which vLLM is installed
+    decides the answer.
+    """
+    import torch
+    from kernels.gated_delta_decode import torch_gated_delta_decode_reference as reference
+
+    from fabric_serving.compare import _call_vllm, make_decode_batch
+
+    def flatten(x):
+        if x.dim() == 4:
+            return x.reshape(-1, *x.shape[-2:])
+        return x.reshape(-1, x.shape[-1])
+
+    def l2(x):
+        return torch.nn.functional.normalize(x.float(), dim=-1, p=2).to(x.dtype)
+
+    deltas = {}
+    for count in (1, 16):
+        torch.manual_seed(0)
+        batch = make_decode_batch(
+            sequences=count, heads=heads, key_dim=key_dim,
+            value_dim=value_dim, slots=slots, dtype=dtype,
         )
-    except Exception:  # noqa: BLE001 - a partial install is unavailable, not fatal
-        return False
-    return True
+        q, k, v, g, beta = (flatten(batch[name]) for name in ("q", "k", "v", "g", "beta"))
+        expected = reference(
+            l2(q), l2(k), v, g, beta, batch["cache"].clone(), state_indices=batch["indices"]
+        )
+        actual = _call_vllm(batch, batch["cache"].clone())
+        deltas[count] = (
+            expected.float().reshape(-1) - actual.float().reshape(-1)
+        ).abs().max().item()
+
+    # fp16 inputs, so agreement is around 1e-3; an order of magnitude beyond that is a
+    # different computation rather than rounding.
+    worst = max(deltas.values())
+    return {
+        "max_abs_vs_eager_reference": worst,
+        "per_sequence_count": {str(count): delta for count, delta in deltas.items()},
+        "implements_same_function": worst < 5e-3,
+    }
 
 
 def measure(
@@ -100,10 +147,23 @@ def measure(
             }
         )
 
+    from fabric_serving.vllm_ops import resolve
+
+    ops = resolve()
+    agreement = _agreement_with_reference(
+        heads=heads, key_dim=key_dim, value_dim=value_dim, dtype=dtype, slots=slots
+    )
+
     return {
         "name": NAME,
         "version": version(),
         "available": True,
+        # Which module the baseline came from, because it moves between versions and
+        # the numbers are only attributable with it.
+        "module": None if ops is None else ops.module,
+        "has_packed_decode_path": bool(ops and ops.has_packed_decode),
+        # Whether a timing ratio against this op is even meaningful.
+        "reference_agreement": agreement,
         "equivalence": equivalence,
         "timings": timings,
     }

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -32,9 +33,11 @@ from fabric_data_plane.config import Settings, get_settings
 from fabric_data_plane.errors import (
     ApiError,
     BadRequest,
+    TooManyRequests,
     UpstreamUnavailable,
     api_error_handler,
 )
+from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.usage import UsageBuffer, UsageRecord
 
@@ -62,6 +65,16 @@ class DataPlane:
         self.registry = registry
         self.client = client
         self.usage = UsageBuffer(settings.usage_buffer_size)
+        self.rate_limiter = RateLimiter(
+            RateLimit(
+                requests_per_minute=settings.rate_limit_requests_per_minute,
+                # A burst of zero with a rate set would refuse everything, so it falls
+                # back to a quarter minute's allowance rather than deadlocking.
+                burst=settings.rate_limit_burst
+                or max(1, settings.rate_limit_requests_per_minute // 4),
+            )
+        )
+        self.concurrency = ConcurrencyLimiter(settings.max_in_flight_per_account)
 
     def authenticate(self, authorization: str | None) -> InferencePrincipal:
         token = extract_bearer_token(authorization)
@@ -114,36 +127,67 @@ async def _proxy(
     # name only selects a candidate.
     deployment = plane.registry.resolve(model, account_id=principal.account_id)
 
+    # Checked after authorization so an unauthenticated or unauthorized caller cannot
+    # consume another account's allowance, and before proxying so a refused request
+    # never reaches the GPU.
+    wait = plane.rate_limiter.check(principal.account_id)
+    if wait is not None:
+        raise TooManyRequests(
+            "rate_limited",
+            "This account has exceeded its request rate on this stamp",
+            retry_after=max(1, math.ceil(wait)),
+        )
+
+    if not await plane.concurrency.acquire(principal.account_id):
+        raise TooManyRequests(
+            "too_many_in_flight",
+            "This account has too many requests in flight on this stamp",
+            # A slot frees when a request finishes rather than on a clock, so a second
+            # is the honest minimum rather than a computed estimate.
+            retry_after=1,
+        )
+
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
     url = f"{deployment.upstream_url}{upstream_path}"
     headers = forwardable_headers(dict(request.headers))
 
     if not streaming:
+        # try/finally rather than a context manager: the slot must be returned whether
+        # the upstream answers, fails, or the request is cancelled, and a leaked slot
+        # permanently reduces the account's concurrency until the process restarts.
         try:
-            response = await plane.client.post(
-                url,
-                json=upstream_payload,
-                headers=headers,
-                timeout=plane.settings.upstream_timeout_seconds,
-            )
-        except httpx.HTTPError as exc:
-            raise UpstreamUnavailable(
-                "upstream_unavailable", "The model host did not respond"
-            ) from exc
+            try:
+                response = await plane.client.post(
+                    url,
+                    json=upstream_payload,
+                    headers=headers,
+                    timeout=plane.settings.upstream_timeout_seconds,
+                )
+            except httpx.HTTPError as exc:
+                raise UpstreamUnavailable(
+                    "upstream_unavailable", "The model host did not respond"
+                ) from exc
 
-        try:
-            body = response.json()
-        except ValueError:
-            body = {"error": {"code": "upstream_invalid_response", "message": "Non-JSON reply"}}
+            try:
+                body = response.json()
+            except ValueError:
+                body = {
+                    "error": {"code": "upstream_invalid_response", "message": "Non-JSON reply"}
+                }
 
-        if response.is_success and isinstance(body, dict):
-            plane.record_usage(principal, deployment, body, streamed=False)
-            # Answer with the customer-facing alias, not the upstream's name.
-            body = {**body, "model": deployment.model_alias}
-        return JSONResponse(status_code=response.status_code, content=body)
+            if response.is_success and isinstance(body, dict):
+                plane.record_usage(principal, deployment, body, streamed=False)
+                # Answer with the customer-facing alias, not the upstream's name.
+                body = {**body, "model": deployment.model_alias}
+            return JSONResponse(status_code=response.status_code, content=body)
+        finally:
+            await plane.concurrency.release(principal.account_id)
 
     async def stream() -> AsyncIterator[bytes]:
+        # A streamed request holds its slot until the last chunk, which is correct: the
+        # model is still decoding for it. Releasing at return would let an account open
+        # unlimited long-lived streams.
         try:
             async with plane.client.stream(
                 "POST",
@@ -159,6 +203,8 @@ async def _proxy(
             # The response has already begun, so the only honest signal left is
             # an error event in the stream itself.
             yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
+        finally:
+            await plane.concurrency.release(principal.account_id)
 
     # Token counts are not reliably present in a streamed reply, so the record
     # marks the call without inventing usage numbers.
@@ -222,6 +268,24 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     async def key_state() -> dict[str, Any]:
         return plane.keys.snapshot()
 
+    @router.get("/admin/upstream", summary="How the model host is reached")
+    async def upstream_state() -> dict[str, Any]:
+        settings = plane.settings
+        return {
+            # Reported rather than inferred from a successful request, so a stamp that
+            # believes it uses mTLS and does not can be told apart from one that does.
+            "client_certificate_configured": bool(settings.upstream_client_cert),
+            "authority_pinned": bool(settings.upstream_ca_bundle),
+            "mutual_tls": bool(settings.upstream_client_cert and settings.upstream_ca_bundle),
+        }
+
+    @router.get("/admin/limits", summary="Rate limit and concurrency state")
+    async def limit_state() -> dict[str, Any]:
+        return {
+            "rate_limit": plane.rate_limiter.snapshot(),
+            "concurrency": plane.concurrency.snapshot(),
+        }
+
     @router.get("/admin/usage", summary="Local usage buffer state")
     async def usage_state() -> dict[str, Any]:
         return plane.usage.snapshot()
@@ -247,16 +311,51 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     return router
 
 
+def upstream_tls(settings: Settings) -> dict[str, Any]:
+    """Client options for reaching the model host.
+
+    Returns nothing to configure when no material is set, so the default stays plain
+    HTTP rather than half-configured TLS. A partial configuration is refused instead of
+    silently downgraded: a client certificate with no key cannot authenticate, and
+    discovering that as a connection error at request time is worse than at startup.
+    """
+    cert = settings.upstream_client_cert
+    key = settings.upstream_client_key
+    authority = settings.upstream_ca_bundle
+
+    if cert and not key:
+        raise ValueError("upstream_client_cert is set without upstream_client_key")
+    if key and not cert:
+        raise ValueError("upstream_client_key is set without upstream_client_cert")
+
+    options: dict[str, Any] = {}
+    if authority:
+        # Verification against a named authority rather than the system store: a stamp's
+        # model host usually presents a certificate from the cluster's own CA, which the
+        # system store does not know.
+        options["verify"] = authority
+    if cert and key:
+        options["cert"] = (cert, key)
+    return options
+
+
 def build_plane(settings: Settings | None = None, keys: Any = None) -> DataPlane:
     from fabric_data_plane.keys import KeyCache
 
     resolved = settings or get_settings()
+    tls = upstream_tls(resolved)
+    if tls:
+        logger.info(
+            "model host connections use TLS (client certificate: %s, pinned authority: %s)",
+            "yes" if "cert" in tls else "no",
+            "yes" if "verify" in tls else "no",
+        )
     return DataPlane(
         settings=resolved,
         keys=keys or KeyCache(resolved),
         # Follows the file the agent rewrites rather than reading it once.
         registry=ReloadingRegistry(resolved.deployments_file),
-        client=httpx.AsyncClient(),
+        client=httpx.AsyncClient(**tls),
     )
 
 

@@ -337,6 +337,106 @@
         }
       }
     },
+    "/v1/accounts/{account_id}/entitlements": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Read this account's entitlements",
+        "description": "Report whether this account may place onto managed capacity.\n\nReadable by the account itself: a customer needs to know whether a managed placement\nwill be accepted before attempting one. ``account_scope`` already refuses a token\nissued for a different account.",
+        "operationId": "read_entitlements_v1_accounts__account_id__entitlements_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/entitlements/managed-capacity": {
+      "put": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Grant or withdraw managed capacity (Fabric operators only)",
+        "description": "Grant or withdraw managed capacity for another account.\n\nDeliberately not account-scoped. The path names the account being changed, while the\ntoken must belong to the Fabric system account and carry a scope that no\naccount-scoped API key can hold. If a customer's own key could grant this, the\nentitlement would mean nothing.",
+        "operationId": "set_managed_capacity_entitlement_v1_accounts__account_id__entitlements_managed_capacity_put",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedCapacityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/{account_id}/service-principals": {
       "post": {
         "tags": [
@@ -657,6 +757,7 @@
           "deployments"
         ],
         "summary": "Create deployment intent",
+        "description": "Create deployment intent, once per idempotency key.\n\nA caller that loses the response to this request has no safe move without a key:\nretrying may create a second deployment, and not retrying may leave none. With a\nkey, the retry returns the first deployment instead of creating another.",
         "operationId": "create_v1_accounts__account_id__deployments_post",
         "parameters": [
           {
@@ -670,6 +771,22 @@
               "title": "Account Id"
             },
             "description": "Account identifier"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "requestBody": {
@@ -1605,6 +1722,48 @@
           }
         }
       }
+    },
+    "/v1/telemetry/metrics": {
+      "post": {
+        "tags": [
+          "telemetry"
+        ],
+        "summary": "Report GPU and runtime metrics for this stamp",
+        "description": "Accept a stamp's periodic sample of its devices and model host.\n\nMetrics are operational signal, not billing input, and they are deliberately not\nstored as rows: a time series belongs in a time-series store, and adding a table here\nwould create one with no retention policy, no downsampling, and no query language.\nFabric has no such store yet, so the samples are recorded on the stamp's heartbeat\nstate and logged, which keeps the path real and gives a consumer something to read\nwithout pretending a database is a metrics system.",
+        "operationId": "report_metrics_v1_telemetry_metrics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetricsReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsAcceptedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2224,6 +2383,100 @@
         ],
         "title": "EnrollmentTokenResponse"
       },
+      "EntitlementResponse": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "managed_capacity_enabled": {
+            "type": "boolean",
+            "title": "Managed Capacity Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_id",
+          "managed_capacity_enabled"
+        ],
+        "title": "EntitlementResponse",
+        "description": "Whether an account may place onto Fabric's own managed capacity."
+      },
+      "GPUSampleRequest": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 0.0,
+            "title": "Index"
+          },
+          "product": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Product"
+          },
+          "utilization_gpu_percent": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Utilization Gpu Percent"
+          },
+          "utilization_memory_percent": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Utilization Memory Percent"
+          },
+          "memory_used_mib": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Memory Used Mib"
+          },
+          "memory_total_mib": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Memory Total Mib"
+          },
+          "temperature_c": {
+            "type": "number",
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Temperature C"
+          },
+          "power_draw_w": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Power Draw W"
+          },
+          "sm_clock_mhz": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Sm Clock Mhz"
+          },
+          "sm_clock_max_mhz": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Sm Clock Max Mhz"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "index",
+          "product",
+          "utilization_gpu_percent",
+          "utilization_memory_percent",
+          "memory_used_mib",
+          "memory_total_mib",
+          "temperature_c",
+          "power_draw_w",
+          "sm_clock_mhz",
+          "sm_clock_max_mhz"
+        ],
+        "title": "GPUSampleRequest",
+        "description": "One reading of one device on a stamp."
+      },
       "GpuCapability": {
         "properties": {
           "product": {
@@ -2311,6 +2564,32 @@
           "received_at"
         ],
         "title": "HeartbeatResponse"
+      },
+      "ManagedCapacityRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ManagedCapacityRequest"
       },
       "MeResponse": {
         "properties": {
@@ -2400,6 +2679,57 @@
         ],
         "title": "MembershipResponse"
       },
+      "MetricsAcceptedResponse": {
+        "properties": {
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "gpus_recorded": {
+            "type": "integer",
+            "title": "Gpus Recorded"
+          },
+          "runtime_recorded": {
+            "type": "boolean",
+            "title": "Runtime Recorded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp_id",
+          "gpus_recorded",
+          "runtime_recorded"
+        ],
+        "title": "MetricsAcceptedResponse"
+      },
+      "MetricsReportRequest": {
+        "properties": {
+          "collected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Collected At"
+          },
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/GPUSampleRequest"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Gpus"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeSampleRequest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "collected_at"
+        ],
+        "title": "MetricsReportRequest",
+        "description": "A stamp's periodic sample.\n\nCarries no account and no stamp, for the same reason usage records do not: both are\nderived from the telemetry credential, so a stamp cannot report as another."
+      },
       "PlacementCreateRequest": {
         "properties": {
           "stamp_id": {
@@ -2486,6 +2816,45 @@
         },
         "type": "object",
         "title": "ResourceSpec"
+      },
+      "RuntimeSampleRequest": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Source",
+            "default": ""
+          },
+          "reachable": {
+            "type": "boolean",
+            "title": "Reachable",
+            "default": false
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "maxProperties": 64,
+            "title": "Values"
+          },
+          "unreachable_cause": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreachable Cause"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RuntimeSampleRequest",
+        "description": "What the model host reported about itself, or why it could not be read."
       },
       "RuntimeSpec": {
         "properties": {

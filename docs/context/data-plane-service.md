@@ -25,8 +25,32 @@ usage and never holds the telemetry credential, which keeps the inference path f
 any export credential. Each record is given a stable identifier at record time so a
 retried forward is deduplicated centrally.
 
-**Not included yet:** quotas and rate limiting, and mTLS or network policy to the
-model host.
+Per-account limits are enforced before a request reaches the model host. A rate limit
+bounds how often an account may ask, using a token bucket so a burst allowance is
+expressible and the limit holds across window boundaries rather than allowing double the
+rate at the seam. A concurrency cap bounds how many of its requests are in flight, which
+is the limit that actually protects the GPU, since a model server's cost is set by how
+many sequences it decodes at once. Both are per account, because the scarce resource is
+the device. A refused request answers 429 with `Retry-After` and never reaches the host.
+
+Both default to disabled and are declared in the chart: the data plane cannot know a
+host's capacity, and a guess would either waste the GPU or pretend to protect it. State
+is per process, so with replicas each pod holds a fraction of the limit; that is recorded
+rather than hidden, and the model host behind them remains the real bound.
+
+Connections to the model host can use mutual TLS. A client certificate proves which data
+plane is calling and a pinned authority proves which host answered; either alone leaves
+half the question open, so both are configured together and the administrative listener
+reports whether both are present rather than inferring it from a successful request. A
+partial configuration is refused at startup instead of failing later as a connection
+error.
+
+Unset means plain HTTP, which is what a single-pod stamp uses: the host is reachable only
+inside the pod's network namespace or through a Service the NetworkPolicy restricts. It
+matters once the host runs as a separate workload, which is now the case when the operator
+manages it.
+
+**Not included yet:** token-based quotas, which need entitlements from the control plane.
 
 ## What runs today
 

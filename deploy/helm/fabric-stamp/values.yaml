@@ -65,9 +65,64 @@ agent:
 operator:
   enabled: false
   installCRD: true
+  # With an image set, the operator runs the inference server for each placed
+  # deployment and points the data plane at it. Left empty, the data plane is
+  # configured against modelHost.url, which someone else operates.
+  #
+  # Fabric does not build this image: it is a vLLM image with the weights either baked
+  # in or mounted through cacheClaim.
+  managedModelHost:
+    image: ""
+    # What the server loads: a repository id, or a path inside the image.
+    modelRef: ""
+    # The name the server answers to. This is the release, not a customer's alias.
+    servedName: ""
+    gpus: 1
+    # Required in practice: the model family's default context length will not fit
+    # alongside its own weights on a single device.
+    maxModelLen: 2048
+    maxNumSeqs: 2
+    # A fraction of *total* device memory. Anything else resident on the GPU is not
+    # accounted for, so asking for all of it fails at startup.
+    gpuMemoryUtilization: "0.85"
+    # Disables CUDA graph capture: slower per token, but the graphs' memory is
+    # returned to the KV cache.
+    enforceEager: false
+    # float16, not bfloat16. A T4 is compute capability 7.5 and has no bfloat16 support,
+    # so a server asked for it refuses to start. Ampere and later (A10, A100, L4, H100)
+    # can use bfloat16, which is closer to how the model was trained.
+    dtype: float16
+    port: 8000
+    # Where downloaded weights are kept.
+    #
+    #   hostPath  the node's own disk. On a GPU SKU that is local NVMe, already paid for,
+    #             and fast. Weights are immutable and only useful to a pod already on
+    #             that node, so this is the default.
+    #   pvc       a PersistentVolumeClaim. It must be ReadWriteMany if more than one host
+    #             will mount it; a ReadWriteOnce claim cannot attach to two nodes.
+    #   none      refetch on every start. Predictable, and correct where no local disk
+    #             exists, at the cost of the download.
+    cache:
+      mode: hostPath
+      # AKS mounts the ephemeral disk at /mnt.
+      hostPath: /mnt/fabric/model-cache
+      claim: ""
+    runtimeClassName: ""
   # The ConfigMap the operator renders and the data plane mounts.
   configMapName: fabric-deployments
   interval: 15s
+  # How a change of release is applied. Replacing a model host is not a rolling update:
+  # the GPU cannot be shared, so the old server stops before the new one starts, and the
+  # new one then loads weights for minutes before it can answer.
+  rollout:
+    # Generous by necessity. A tight deadline rolls back releases that were about to
+    # succeed, and weight loading dominates this number.
+    readyTimeout: 15m
+    # One at a time, so a bad release costs one deployment rather than the whole stamp.
+    maxParallel: 1
+    # Returning to a release that was observed ready beats leaving the stamp serving
+    # nothing until a human intervenes.
+    autoRollback: true
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
@@ -75,6 +130,14 @@ operator:
 collector:
   enabled: true
   interval: 60s
+  # GPU and runtime metrics, sampled on their own interval: usage is billing-relevant and
+  # should be forwarded promptly, while metrics frequency is a cost decision, and tying
+  # the two together would force one to follow the other.
+  metrics:
+    # Empty disables collection. With the operator managing the host this is normally its
+    # Service; a host operated elsewhere may not expose metrics at all.
+    endpoint: ""
+    interval: 30s
   # Records held while the control plane is unreachable. Oldest are dropped when
   # full, and drops are logged.
   queueCapacity: 10000
@@ -83,6 +146,34 @@ collector:
     limits: {cpu: 200m, memory: 128Mi}
 
 dataPlane:
+  # Limits are declared here rather than defaulted in code: the data plane cannot know
+  # how much a model host can take, and a guess would either waste the GPU or pretend
+  # to protect it. Zero disables a limit.
+  limits:
+    # Smooths bursts and is the number a caller can plan around.
+    requestsPerMinute: 0
+    # How much of that allowance may be spent at once. Empty uses a quarter minute's
+    # worth, so a client batching its calls is not punished for arriving together.
+    burst: 0
+    # The limit that actually protects the device, because a model server's cost is set
+    # by how many sequences it decodes at once. With one GPU and a small max-num-seqs,
+    # a value near that server's own concurrency is the useful setting.
+    maxInFlightPerAccount: 0
+
+  # Mutual TLS to the model host. Unset means plain HTTP, which is what a single-pod
+  # stamp uses: the host is reachable only inside the pod's network namespace or through
+  # a Service the NetworkPolicy restricts. This matters once the host runs as a separate
+  # workload, possibly on another node.
+  #
+  # Both halves are needed to mean anything: a client certificate proves who is calling,
+  # and a pinned authority proves who answered.
+  upstreamTls:
+    # Secret holding tls.crt and tls.key for the data plane to present. A cert-manager
+    # Certificate produces exactly this shape.
+    clientSecret: ""
+    # Secret or ConfigMap holding ca.crt for verifying the model host.
+    caSecret: ""
+
   replicas: 1
   logLevel: INFO
   usageBufferSize: 10000
@@ -129,6 +220,22 @@ containerSecurityContext:
   readOnlyRootFilesystem: true
   capabilities:
     drop: ["ALL"]
+
+# Where the model host runs. These apply to the operator-managed host rather than to the
+# agent and data plane, which need no GPU and should stay schedulable anywhere: pinning
+# them to GPU nodes would waste capacity that only the server can use.
+gpu:
+  # Label selecting GPU nodes. The NVIDIA device plugin sets accelerator labels, and the
+  # exact key differs by distribution, so it is a value rather than an assumption.
+  nodeSelector: {}
+  # GPU nodes are commonly tainted so that only workloads asking for a device land on
+  # them, which means the host needs a matching toleration to schedule at all.
+  tolerations: []
+  # Set when a cluster routes GPU workloads through a specific runtime.
+  runtimeClassName: ""
+  # Spreads hosts across nodes, so two deployments on one stamp do not contend for one
+  # device while another node sits idle.
+  spreadAcrossNodes: true
 
 nodeSelector: {}
 tolerations: []

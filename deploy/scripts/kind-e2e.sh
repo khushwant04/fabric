@@ -29,6 +29,10 @@ OPERATOR="${FABRIC_E2E_OPERATOR:-0}"
 # iterate on. "cluster" installs it from its own chart against an in-cluster
 # PostgreSQL, which is the only way to verify that chart at all.
 CONTROL_PLANE="${FABRIC_E2E_CONTROL_PLANE:-host}"
+# Whether the operator runs the inference server itself. A kind node has no GPU, so the
+# host stays Pending: that is the point of exercising it here, because it proves the
+# operator manages the workload and reports readiness honestly rather than assuming it.
+MANAGED_HOST="${FABRIC_E2E_MANAGED_HOST:-0}"
 WORK="$(mktemp -d)"
 CONTROL_PID=""
 FORWARD_PID=""
@@ -164,6 +168,13 @@ SUFFIX="$RANDOM$RANDOM"
 if [ "$CONTROL_PLANE" = "cluster" ]; then
     info "installing the control plane from its own chart"
 
+    # Generated per run: no database password, however throwaway, belongs in the repo.
+    PG_SUPERUSER_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+    PG_APP_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+    "${KUBECTL[@]}" create secret generic postgres-credentials \
+        --from-literal=superuser-password="$PG_SUPERUSER_PASSWORD" \
+        --from-literal=app-password="$PG_APP_PASSWORD" \
+        --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
     "${KUBECTL[@]}" apply -f "$REPO_ROOT/deploy/testing/postgres.yaml" >/dev/null
     "${KUBECTL[@]}" wait --for=condition=available deployment/postgres --timeout=180s >/dev/null
     # The application role has no BYPASSRLS, so row-level security is actually in
@@ -176,7 +187,7 @@ if [ "$CONTROL_PLANE" = "cluster" ]; then
         --set image.repository=fabric/control-plane --set image.tag=e2e \
         --set replicas=1 --set podDisruptionBudget.enabled=false \
         --set appEnv=test \
-        --set database.url="postgresql+asyncpg://fabric_app:fabric_app@postgres:5432/fabric" \
+        --set database.url="postgresql+asyncpg://fabric_app:$PG_APP_PASSWORD@postgres:5432/fabric" \
         --set-file signingKey.value="$WORK/signing.pem" \
         --set credentialPepper="kind-e2e-pepper-not-a-real-secret" \
         --set jwt.issuer="$CONTROL_URL" \
@@ -289,6 +300,15 @@ log "4. Install the chart"
 OPERATOR_ARGS=()
 if [ "$OPERATOR" = "1" ]; then
     OPERATOR_ARGS=(--set operator.enabled=true --set operator.interval=5s)
+    if [ "$MANAGED_HOST" = "1" ]; then
+        OPERATOR_ARGS+=(
+            --set operator.managedModelHost.image=vllm/vllm-openai:v0.26.0
+            --set operator.managedModelHost.modelRef=/models/launch
+            --set operator.managedModelHost.servedName=launch-model
+            --set operator.managedModelHost.maxModelLen=2048
+        )
+        info "operator will manage the model host (no GPU here, so it stays Pending)"
+    fi
     info "operator enabled: intent is declared as custom resources"
 else
     info "operator disabled: the agent writes the data plane's file directly"
@@ -371,6 +391,41 @@ if [ "$OPERATOR" = "1" ]; then
     REASON=$("${KUBECTL[@]}" get fabricmodeldeployments -o jsonpath=\
 '{.items[0].status.conditions[?(@.type=="Applied")].reason}')
     info "operator status: Applied=True reason=$REASON"
+
+    if [ "$MANAGED_HOST" = "1" ]; then
+        DEPLOYMENT_NAME="fabric-host-$(echo "$DEPLOYMENT_ID" | tr 'A-Z' 'a-z')"
+        "${KUBECTL[@]}" get deployment "$DEPLOYMENT_NAME" >/dev/null 2>&1 \
+            || die "the operator created no model host workload"
+        "${KUBECTL[@]}" get service "$DEPLOYMENT_NAME" >/dev/null 2>&1 \
+            || die "the operator created no model host Service"
+        info "model host workload and Service created by the operator"
+
+        # The GPU request is what keeps it Pending on a node without one, and it is
+        # what makes the request meaningful on a node with one.
+        GPU_LIMIT=$("${KUBECTL[@]}" get deployment "$DEPLOYMENT_NAME" \
+            -o jsonpath='{.spec.template.spec.containers[0].resources.limits.nvidia\.com/gpu}')
+        [ -n "$GPU_LIMIT" ] || die "the model host requests no GPU"
+        info "model host requests nvidia.com/gpu=$GPU_LIMIT"
+
+        # The data plane must be pointed at the Service the operator owns, not at the
+        # upstream the agent guessed before the host existed.
+        UPSTREAM_IN_CONFIG=$("${KUBECTL[@]}" get configmap fabric-deployments \
+            -o jsonpath='{.data.deployments\.json}' \
+            | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['deployments'][0]['upstream_url'])")
+        case "$UPSTREAM_IN_CONFIG" in
+            *"$DEPLOYMENT_NAME"*) info "data plane points at the operator's host: $UPSTREAM_IN_CONFIG" ;;
+            *) die "data plane upstream is $UPSTREAM_IN_CONFIG, not the operator's host" ;;
+        esac
+
+        # No GPU on a kind node, so the honest report is that the host is not serving.
+        HOST_READY=$("${KUBECTL[@]}" get fabricmodeldeployments -o jsonpath=\
+'{.items[0].status.conditions[?(@.type=="ModelHostReady")].status}')
+        HOST_REASON=$("${KUBECTL[@]}" get fabricmodeldeployments -o jsonpath=\
+'{.items[0].status.conditions[?(@.type=="ModelHostReady")].reason}')
+        [ "$HOST_READY" = "False" ] \
+            || die "host readiness claims $HOST_READY on a node with no GPU"
+        info "model host readiness reported honestly: ModelHostReady=$HOST_READY reason=$HOST_REASON"
+    fi
 fi
 
 # --------------------------------------------------------------------------
@@ -404,14 +459,32 @@ names = [row['id'] for row in json.load(sys.stdin)['data']]
 assert names == ['kind-model'], names
 print(f'     models visible to the account: {names}')"
 
-probe chat -sS -X POST "$SERVICE/v1/chat/completions" \
-    -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
-    -d '{"model":"kind-model","messages":[{"role":"user","content":"hi"}]}' \
-    | "$CONTROL_PY" -c "
+if [ "$MANAGED_HOST" = "1" ]; then
+    # The operator's host cannot schedule without a GPU, and the data plane is
+    # correctly pointed at it, so the honest outcome is a clean upstream failure
+    # rather than a served reply. Asserting success here would only pass by
+    # accident on a cluster that has a GPU.
+    STATUS=$(probe chat -sS -o /dev/null -w 'HTTP_STATUS:%{http_code}' -X POST \
+        "$SERVICE/v1/chat/completions" \
+        -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"model":"kind-model","messages":[{"role":"user","content":"hi"}]}' \
+        | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2 | tail -1)
+    case "$STATUS" in
+        502|503|504)
+            info "upstream unavailable as expected on a GPU-less node: $STATUS" ;;
+        *)
+            die "expected a gateway failure while the model host is Pending, got $STATUS" ;;
+    esac
+else
+    probe chat -sS -X POST "$SERVICE/v1/chat/completions" \
+        -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"model":"kind-model","messages":[{"role":"user","content":"hi"}]}' \
+        | "$CONTROL_PY" -c "
 import json, sys
 body = json.load(sys.stdin)
 assert body['model'] == 'kind-model', body
 print(f\"     inference served: model={body['model']}\")"
+fi
 
 # The code is tagged in the body rather than relying on curl's bare write-out,
 # which does not survive the pod's log capture reliably.
@@ -431,6 +504,9 @@ usage_events() {
         | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['events'])"
 }
 
+if [ "$MANAGED_HOST" = "1" ]; then
+    info "no usage expected: no request was served while the host is Pending"
+else
 for _ in $(seq 1 40); do
     [ "$(usage_events)" != "0" ] && break
     sleep 2
@@ -446,10 +522,13 @@ assert body['events'] >= 1, body
 assert body['input_tokens'] >= 13, body
 print(f\"     usage: events={body['events']} input={body['input_tokens']} \"
       f\"output={body['output_tokens']} stamp={body['stamps'][0]['stamp_id'][:8]}\")"
+fi
 
 # The reason must name whoever actually applied the configuration: the operator when
 # one runs, otherwise the agent itself.
-if [ "$OPERATOR" = "1" ]; then
+if [ "$OPERATOR" = "1" ] && [ "$MANAGED_HOST" = "1" ]; then
+    EXPECTED_REASON="ModelHostAndConfigurationApplied"
+elif [ "$OPERATOR" = "1" ]; then
     EXPECTED_REASON="DataPlaneConfigurationRendered"
 else
     EXPECTED_REASON="AgentAppliedLocalConfiguration"
@@ -465,7 +544,8 @@ expected = sys.argv[1]
 rows = json.load(sys.stdin)
 assert rows, "the agent reported no status"
 row = rows[0]
-assert row["phase"] == "ready", row
+# Pending is correct while a managed host is still starting.
+assert row["phase"] in ("ready", "pending"), row
 reason = row["conditions"][0]["reason"] if row.get("conditions") else None
 # The control plane must learn what the cluster did, not what the agent asked for.
 assert reason == expected, f"reason={reason} expected={expected}"

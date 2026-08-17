@@ -31,6 +31,11 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://fabric:fabric@localhost:5432/fabric"
 
+    #: How often the outbox worker looks for undelivered events. Short enough that a
+    #: placement is announced promptly, long enough that an idle deployment is not
+    #: polling constantly.
+    outbox_interval_seconds: float = 5.0
+
     #: Discard pooled connections older than this. Managed PostgreSQL (Neon, RDS
     #: Proxy, pgbouncer) closes idle connections, and a pooled connection the
     #: server has already dropped fails mid-statement rather than at checkout, so

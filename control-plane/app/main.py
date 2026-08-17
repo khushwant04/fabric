@@ -9,6 +9,8 @@ production.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -20,6 +22,7 @@ from app.core.config import get_settings
 from app.core.database import dispose_engine, get_session_factory
 from app.core.errors import ApiError, api_error_handler
 from app.core.tenancy import system_context, verify_policies_are_enforceable
+from app.services.outbox import OutboxWorker
 
 logger = logging.getLogger("fabric.control_plane")
 
@@ -43,9 +46,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001 - startup must survive a database hiccup
         logger.warning("could not verify row-level security enforcement", exc_info=True)
 
+    # Delivery runs in the API process for now. A separate deployment would be tidier,
+    # but the queue is small, the work is I/O bound, and one fewer moving part is worth
+    # more than that tidiness until a real consumer exists. It is cancelled on shutdown
+    # rather than left to be killed, so an in-flight batch finishes its transaction.
+    worker = OutboxWorker(get_session_factory())
+    stopping = False
+    delivery = asyncio.create_task(
+        worker.run(interval=settings.outbox_interval_seconds, stop=lambda: stopping)
+    )
+
     try:
         yield
     finally:
+        stopping = True
+        delivery.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await delivery
         await dispose_engine()
         logger.info("control-plane stopped")
 

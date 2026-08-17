@@ -1,7 +1,10 @@
 # Packaging and Deployment
 
 **Status:** Implemented for a stamp — container images in [`deploy/images/`](../../deploy/images/) and a Helm chart in [`deploy/helm/fabric-stamp/`](../../deploy/helm/fabric-stamp/) install a working inference stamp on Kubernetes, with or without the operator. Verified on a real cluster by [`deploy/scripts/kind-e2e.sh`](../../deploy/scripts/kind-e2e.sh) in both modes.
-**Not included:** GPU scheduling and a model host. Fabric does not deploy vLLM, and the operator does not create a workload for one.
+**Not included:** the model host image itself. Fabric does not build one; with
+`operator.managedModelHost.image` set the operator runs and owns an inference server per
+placed deployment, and without it the data plane is configured against an upstream
+someone else operates.
 **Design reference:** [ADR 0004](adrs/0004-local-operator-and-single-intent-crd.md), [ADR 0007](adrs/0007-cluster-agent-and-central-telemetry.md), [ADR 0008](adrs/0008-account-scoped-tenancy-and-stamp-credentials.md), [Operator and Deployment](operator-deployment.md).
 
 ## Images
@@ -122,10 +125,71 @@ Status is a subresource, so the agent declares intent and cannot write status, w
 the operator reports status and cannot change intent. The operator's ConfigMap rule is
 restricted by `resourceNames` to the single object it manages.
 
-`Applied` carries the reason `DataPlaneConfigurationRendered`, which names what actually
-happened. The operator configures the data plane; it does not start a model host,
-because none exists in this project, and a reason implying a running workload would be
-a false statement about the cluster.
+`Applied` carries a reason that names what actually happened, and it differs by mode:
+`DataPlaneConfigurationRendered` when the operator only writes configuration, and
+`ModelHostAndConfigurationApplied` when it also runs the server. Neither can imply a
+running workload on a stamp where none was started.
+
+With `operator.managedModelHost.image` set, the operator creates a Deployment and a
+Service per deployment and overrides the upstream in the rendered configuration, since it
+is the only component that knows where the host ended up. Readiness is a separate
+`ModelHostReady` condition taken from the workload's own status, never assumed from a
+successful write: a model server is minutes from answering after its container starts,
+and while it is starting the phase is `pending`.
+
+| Choice | Reason |
+|---|---|
+| `Recreate` rather than rolling updates | Two replicas would both want the GPU, and the new one would never schedule while the old holds it |
+| One replica per deployment | A GPU is not shared; scaling is the control plane placing on more stamps |
+| GPU as a limit only | Kubernetes requires request and limit to be equal for extended resources |
+| Generous readiness threshold | Weight loading is slow, and a tight probe restarts the pod before it finishes |
+| Hosts pruned by label | An operator that restarted would otherwise leak a workload holding a GPU |
+| Workload permissions only with an image | An operator that runs no server cannot create workloads either |
+| Weights cached on the node's own disk | They are large, immutable, and only useful to a pod already scheduled there; a GPU SKU's ephemeral disk is local NVMe and already paid for |
+| `float16` rather than `bfloat16` by default | A T4 is compute capability 7.5 with no bfloat16 support, and a server asked for it refuses to start |
+| A startup probe rather than a long liveness delay | A fixed delay plus a failure threshold is a deadline; a cold model compiling graphs on a T4 overran 480 seconds and was killed mid-startup, losing the compilation each time |
+| Compiled graphs cached beside the weights | Expensive to produce, identical on every start, and only useful to a pod already on that node |
+| A placeholder upstream when the operator owns the host | The operator's Service is named after a deployment ID that does not exist at install time, so an unroutable placeholder fails closed until a deployment is placed |
+
+## Deployed environment
+
+One AKS cluster in `centralindia` runs both planes, in separate namespaces, against an
+Azure PostgreSQL server. Measured on that cluster:
+
+| Observation | Value |
+|---|---|
+| Model load | 4.25 GiB of weights in 3.3 s from the node's own disk |
+| Cold start to serving | about 510 s, most of it compiling graphs |
+| Startup window allowed | 20 minutes, after 480 s proved too strict |
+| Attribution | 19 input and 4 output tokens, matching the server's own count |
+
+The cluster enforces NetworkPolicy through Cilium and runs Gatekeeper with every
+constraint in `dryrun`, so policy reports violations rather than rejecting workloads. The
+control plane is reached over in-cluster DNS while its public hostname is pending, but
+tokens still carry the public issuer, so the same tokens stay valid once it is exposed.
+| GPU scheduling on the host alone | The agent, data plane, and collector need no device, and pinning them to GPU nodes would waste capacity only the server can use |
+| Anti-affinity preferred, not required | On a single-node stamp a hard rule leaves the second deployment permanently Pending, which is worse than sharing a node |
+| Tolerations default to `Exists` without a value | A taint meaning "this node has a GPU" carries no value, and `Equal` with an empty value would not match it |
+
+### Changing a release
+
+Replacing a model host is not a rolling update. The GPU cannot be shared, so the old
+server stops before the new one starts, and the new one then loads weights for minutes
+before it can answer. That window is unavoidable; leaving a stamp in it forever is not.
+
+| Behaviour | Reason |
+|---|---|
+| One host changes release at a time | A bad release costs one deployment rather than the whole stamp |
+| A stalled release rolls back to the last one observed ready | Returning to something that worked beats serving nothing until a human intervenes |
+| Only a release seen ready becomes the fallback | Recording the declared release optimistically would let a broken one become the thing rolled back to |
+| No fallback means keep trying | Rolling back to nothing would remove the only deployment the stamp has |
+| The deadline resets only when the release changes | Otherwise every pass grants a fresh deadline and a stalled release never times out |
+| History lives in annotations on the workload | An operator restart must not forget which release was good |
+| `Progressing` is its own condition | A host that is starting is distinguishable from one that was abandoned and rolled back |
+
+There is no traffic splitting: one GPU serves one server at a time, so a percentage of
+traffic cannot be expressed. Progressive here means one deployment at a time across a
+stamp.
 
 The CRD is annotated `helm.sh/resource-policy: keep`: deleting a CRD deletes every
 custom resource of that kind, so an accidental uninstall would withdraw every deployment
