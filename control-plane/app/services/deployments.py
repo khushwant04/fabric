@@ -11,7 +11,7 @@ import datetime as dt
 import uuid
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,15 +104,45 @@ async def get_deployment(
     return deployment
 
 
-async def _bump_placements(session: AsyncSession, deployment: Deployment) -> None:
-    await session.execute(
-        update(DeploymentPlacement)
-        .where(
-            DeploymentPlacement.account_id == deployment.account_id,
-            DeploymentPlacement.deployment_id == deployment.id,
+async def _next_stamp_generation(session: AsyncSession, stamp_id: uuid.UUID, floor: int) -> int:
+    """The next delivery generation for a stamp, ahead of anything it has been sent.
+
+    An agent acknowledges one number for the whole stamp, so the generations it is sent
+    have to increase across the stamp and not merely within one deployment. Taking the
+    number from the deployment's own version broke that: a stamp that had acknowledged
+    generation two for one deployment would never be told about a newly placed deployment
+    whose first version is one, because it sits below the watermark. The placement existed,
+    the API reported it assigned, and nothing was ever served.
+    """
+    current = (
+        await session.execute(
+            select(func.coalesce(func.max(DeploymentPlacement.desired_generation), 0)).where(
+                DeploymentPlacement.stamp_id == stamp_id
+            )
         )
-        .values(desired_generation=deployment.generation, status="assigned")
+    ).scalar_one()
+    return max(floor, int(current) + 1)
+
+
+async def _bump_placements(session: AsyncSession, deployment: Deployment) -> None:
+    placements = (
+        (
+            await session.execute(
+                select(DeploymentPlacement).where(
+                    DeploymentPlacement.account_id == deployment.account_id,
+                    DeploymentPlacement.deployment_id == deployment.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
     )
+    # Per stamp, because each stamp tracks its own watermark and they are not in step.
+    for placement in placements:
+        placement.desired_generation = await _next_stamp_generation(
+            session, placement.stamp_id, deployment.generation
+        )
+        placement.status = "assigned"
 
 
 async def update_deployment(
@@ -260,7 +290,9 @@ async def create_placement(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        existing.desired_generation = deployment.generation
+        existing.desired_generation = await _next_stamp_generation(
+            session, stamp.id, deployment.generation
+        )
         existing.status = "assigned"
         await session.flush()
         return existing
@@ -269,7 +301,9 @@ async def create_placement(
         account_id=account_id,
         deployment_id=deployment.id,
         stamp_id=stamp.id,
-        desired_generation=deployment.generation,
+        desired_generation=await _next_stamp_generation(
+            session, stamp.id, deployment.generation
+        ),
         status="assigned",
     )
     session.add(placement)

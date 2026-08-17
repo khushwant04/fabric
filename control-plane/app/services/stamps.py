@@ -358,6 +358,12 @@ async def build_desired_state(
         )
         .where(
             DeploymentPlacement.stamp_id == stamp_id,
+            # Generations are issued ahead of anything the stamp has been sent, so a
+            # watermark is enough to mean "everything after this". Delivering unobserved
+            # placements regardless of generation was tried as a second safety net and
+            # removed: it resends an assignment on every poll until a status report
+            # arrives, which contradicts what a watermark promises and hides whether the
+            # generations themselves are ordered.
             DeploymentPlacement.desired_generation > after_generation,
         )
         .order_by(DeploymentPlacement.desired_generation)
