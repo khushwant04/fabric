@@ -337,6 +337,106 @@
         }
       }
     },
+    "/v1/accounts/{account_id}/entitlements": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Read this account's entitlements",
+        "description": "Report whether this account may place onto managed capacity.\n\nReadable by the account itself: a customer needs to know whether a managed placement\nwill be accepted before attempting one. ``account_scope`` already refuses a token\nissued for a different account.",
+        "operationId": "read_entitlements_v1_accounts__account_id__entitlements_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "Account identifier",
+              "title": "Account Id"
+            },
+            "description": "Account identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/entitlements/managed-capacity": {
+      "put": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Grant or withdraw managed capacity (Fabric operators only)",
+        "description": "Grant or withdraw managed capacity for another account.\n\nDeliberately not account-scoped. The path names the account being changed, while the\ntoken must belong to the Fabric system account and carry a scope that no\naccount-scoped API key can hold. If a customer's own key could grant this, the\nentitlement would mean nothing.",
+        "operationId": "set_managed_capacity_entitlement_v1_accounts__account_id__entitlements_managed_capacity_put",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedCapacityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/{account_id}/service-principals": {
       "post": {
         "tags": [
@@ -2241,6 +2341,26 @@
         ],
         "title": "EnrollmentTokenResponse"
       },
+      "EntitlementResponse": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Account Id"
+          },
+          "managed_capacity_enabled": {
+            "type": "boolean",
+            "title": "Managed Capacity Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_id",
+          "managed_capacity_enabled"
+        ],
+        "title": "EntitlementResponse",
+        "description": "Whether an account may place onto Fabric's own managed capacity."
+      },
       "GpuCapability": {
         "properties": {
           "product": {
@@ -2328,6 +2448,32 @@
           "received_at"
         ],
         "title": "HeartbeatResponse"
+      },
+      "ManagedCapacityRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ManagedCapacityRequest"
       },
       "MeResponse": {
         "properties": {

@@ -9,23 +9,35 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
 from app.core.auth0 import Auth0Identity
 from app.core.database import get_db_session
-from app.core.security import PrincipalContext, account_scope, require_auth0_user
+from app.core.security import (
+    PrincipalContext,
+    account_scope,
+    require_auth0_user,
+    require_control_principal,
+)
 from app.models import Account
 from app.schemas import (
     AccountCreateRequest,
     AccountResponse,
+    EntitlementResponse,
+    ManagedCapacityRequest,
     MemberCreateRequest,
     MembershipResponse,
     MeResponse,
     UserResponse,
 )
 from app.services.accounts import add_member, create_account, get_account, list_members
+from app.services.entitlements import (
+    read_entitlement,
+    require_fabric_operator,
+    set_managed_capacity,
+)
 from app.services.identity import active_memberships, ensure_user
 
 router = APIRouter(tags=["accounts"])
@@ -123,4 +135,63 @@ async def upsert_account_member(
     await session.commit()
     return _membership_response(
         membership.account_id, membership.user_id, membership.role, membership.status
+    )
+
+
+@router.get(
+    "/v1/accounts/{account_id}/entitlements",
+    response_model=EntitlementResponse,
+    summary="Read this account's entitlements",
+)
+async def read_entitlements(
+    account_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.ACCOUNTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> EntitlementResponse:
+    """Report whether this account may place onto managed capacity.
+
+    Readable by the account itself: a customer needs to know whether a managed placement
+    will be accepted before attempting one. ``account_scope`` already refuses a token
+    issued for a different account.
+    """
+    entitlement = await read_entitlement(session, principal.account_id)
+    return EntitlementResponse(
+        account_id=entitlement.account_id,
+        managed_capacity_enabled=entitlement.managed_capacity_enabled,
+    )
+
+
+@router.put(
+    "/v1/accounts/{account_id}/entitlements/managed-capacity",
+    response_model=EntitlementResponse,
+    summary="Grant or withdraw managed capacity (Fabric operators only)",
+)
+async def set_managed_capacity_entitlement(
+    payload: ManagedCapacityRequest,
+    account_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(require_control_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> EntitlementResponse:
+    """Grant or withdraw managed capacity for another account.
+
+    Deliberately not account-scoped. The path names the account being changed, while the
+    token must belong to the Fabric system account and carry a scope that no
+    account-scoped API key can hold. If a customer's own key could grant this, the
+    entitlement would mean nothing.
+    """
+    principal.require_scopes(scope_defs.CAPACITY_WRITE)
+    await require_fabric_operator(session, caller_account_id=principal.account_id)
+
+    entitlement = await set_managed_capacity(
+        session,
+        account_id=account_id,
+        enabled=payload.enabled,
+        actor_id=str(principal.principal_id) if principal.principal_id else principal.subject,
+        reason=payload.reason,
+    )
+    await session.commit()
+
+    return EntitlementResponse(
+        account_id=entitlement.account_id,
+        managed_capacity_enabled=entitlement.managed_capacity_enabled,
     )

@@ -72,6 +72,27 @@ identifier. A claimed key with no recorded result answers 409 rather than blocki
 there is nothing yet to replay. Keys lapse after 24 hours and are purged in bounded
 batches, elevated because purging spans accounts.
 
+### Managed-capacity entitlements
+
+Whether an account may place onto Fabric's own GPU has been a column since the first
+schema with no way to set it: it could only be changed by editing the database. It is now
+an API, shaped by who is allowed to decide.
+
+Granting is not account-scoped. The scope authorising it sits outside the set an
+account-scoped API key may hold, and the caller must additionally belong to the Fabric
+system account, so a customer cannot entitle itself however its keys were created. The
+scope check alone would not be enough: a scope says what a token may do, not on whose
+behalf.
+
+Reading is account-scoped, because a customer needs to know whether a managed placement
+will be accepted before attempting one.
+
+A change emits an outbox event so anything caching placement decisions learns of it, and
+only when the value actually moves, since a consumer should not be told about a transition
+that did not happen. The attempt is audited either way. The system account itself cannot
+hold the entitlement: it owns the capacity, and entitling it to itself would obscure whose
+placement a deployment is.
+
 Not implemented in the service: request idempotency (the `idempotency_keys` table has no handler),
 agent/telemetry credential rotation, and managed-capacity entitlement management
 through the API.

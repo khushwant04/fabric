@@ -201,6 +201,26 @@ class DeploymentStatusResponse(ORMModel):
     reported_at: dt.datetime
 
 
+# --- entitlements ---------------------------------------------------------
+
+
+class EntitlementResponse(BaseModel):
+    """Whether an account may place onto Fabric's own managed capacity."""
+
+    account_id: uuid.UUID
+    managed_capacity_enabled: bool
+
+
+class ManagedCapacityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    #: Recorded on the audit trail and the emitted event. Optional, because a grant is
+    #: already attributable to the operator who made it, but useful when it is not
+    #: obvious why.
+    reason: str | None = Field(default=None, max_length=500)
+
+
 # --- telemetry and usage --------------------------------------------------
 
 

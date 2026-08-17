@@ -20,6 +20,11 @@ DEPLOYMENTS_WRITE = "deployments:write"
 STAMPS_READ = "stamps:read"
 STAMPS_WRITE = "stamps:write"
 
+# Granting managed capacity is Fabric's decision, not a customer's, so this scope is
+# deliberately outside CONTROL_SCOPES: an account-scoped API key can never carry it,
+# which is what stops an account from entitling itself.
+CAPACITY_WRITE = "system:capacity:write"
+
 CONTROL_SCOPES = frozenset(
     {
         ACCOUNTS_READ,
