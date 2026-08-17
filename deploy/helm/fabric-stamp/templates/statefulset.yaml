@@ -138,6 +138,12 @@ spec:
               value: {{ .Values.dataPlane.usageBufferSize | quote }}
             - name: FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS
               value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
+            - name: FABRIC_DP_RATE_LIMIT_REQUESTS_PER_MINUTE
+              value: {{ .Values.dataPlane.limits.requestsPerMinute | quote }}
+            - name: FABRIC_DP_RATE_LIMIT_BURST
+              value: {{ .Values.dataPlane.limits.burst | quote }}
+            - name: FABRIC_DP_MAX_IN_FLIGHT_PER_ACCOUNT
+              value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | quote }}
           ports:
             - name: inference
               containerPort: 8080

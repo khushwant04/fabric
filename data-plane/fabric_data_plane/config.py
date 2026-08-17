@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     #: buffer drops oldest records rather than growing without limit.
     usage_buffer_size: int = Field(default=10_000, ge=1)
 
+    #: Requests per minute per account. Zero disables the limit, which is the default:
+    #: the data plane cannot know a model host's capacity, so the operator declares it
+    #: in the chart rather than inheriting a guess from here.
+    rate_limit_requests_per_minute: int = Field(default=0, ge=0)
+    #: How much of that allowance may be spent at once. Defaults to a quarter minute's
+    #: worth so a client that batches its calls is not punished for arriving together.
+    rate_limit_burst: int = Field(default=0, ge=0)
+
+    #: In-flight requests per account. This is the limit that protects the GPU, because
+    #: a model server's cost is set by how many sequences it decodes at once. Zero
+    #: disables it.
+    max_in_flight_per_account: int = Field(default=0, ge=0)
+
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod
     def _strip(cls, value: str) -> str:

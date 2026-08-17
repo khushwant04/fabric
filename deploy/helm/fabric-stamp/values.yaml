@@ -111,6 +111,20 @@ collector:
     limits: {cpu: 200m, memory: 128Mi}
 
 dataPlane:
+  # Limits are declared here rather than defaulted in code: the data plane cannot know
+  # how much a model host can take, and a guess would either waste the GPU or pretend
+  # to protect it. Zero disables a limit.
+  limits:
+    # Smooths bursts and is the number a caller can plan around.
+    requestsPerMinute: 0
+    # How much of that allowance may be spent at once. Empty uses a quarter minute's
+    # worth, so a client batching its calls is not punished for arriving together.
+    burst: 0
+    # The limit that actually protects the device, because a model server's cost is set
+    # by how many sequences it decodes at once. With one GPU and a small max-num-seqs,
+    # a value near that server's own concurrency is the useful setting.
+    maxInFlightPerAccount: 0
+
   replicas: 1
   logLevel: INFO
   usageBufferSize: 10000
