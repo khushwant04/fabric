@@ -39,6 +39,11 @@ spec:
             - --namespace={{ .Release.Namespace }}
             - --configmap={{ .Values.operator.configMapName }}
             - --interval={{ .Values.operator.interval }}
+            - --rollout-ready-timeout={{ .Values.operator.rollout.readyTimeout }}
+            - --rollout-max-parallel={{ .Values.operator.rollout.maxParallel }}
+            {{- if not .Values.operator.rollout.autoRollback }}
+            - --rollout-auto-rollback=false
+            {{- end }}
             {{- with .Values.operator.managedModelHost }}
             {{- if .image }}
             - --model-host-image={{ .image }}

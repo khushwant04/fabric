@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/kube"
 )
@@ -347,8 +348,24 @@ func (r *Reconciler) hostUpstream(item ModelDeployment) string {
 // applyHost creates or updates the workload for one deployment and reports whether
 // its server is ready.
 func (r *Reconciler) applyHost(ctx context.Context, item ModelDeployment) (bool, error) {
+	return r.applyHostWithRollout(ctx, item, RolloutDecision{Release: releaseOf(item)}, rolloutState{})
+}
+
+// applyHostWithRollout applies the release the rollout policy chose, which is the
+// declared one except while rolling back.
+func (r *Reconciler) applyHostWithRollout(
+	ctx context.Context, item ModelDeployment, decision RolloutDecision, state rolloutState,
+) (bool, error) {
 	name := hostName(item)
-	desired := r.desiredHost(item)
+
+	// The release actually served may differ from the declaration, so the workload is
+	// built from the decision rather than the spec.
+	effective := item
+	if decision.Release != "" && decision.Release != releaseOf(item) {
+		effective.Spec.UpstreamModel = decision.Release
+	}
+	desired := r.desiredHost(effective)
+	desired.Metadata.Annotations = r.rolloutAnnotations(decision, state, time.Now())
 
 	var existing deployment
 	err := r.client.Get(ctx, r.deploymentPath(name), &existing)
@@ -364,7 +381,13 @@ func (r *Reconciler) applyHost(ctx context.Context, item ModelDeployment) (bool,
 	default:
 		// Patched rather than replaced, so fields defaulted by the API server and
 		// anything a cluster admission controller added are left alone.
-		patch := map[string]any{"spec": desired.Spec, "metadata": map[string]any{"labels": desired.Metadata.Labels}}
+		patch := map[string]any{
+			"spec": desired.Spec,
+			"metadata": map[string]any{
+				"labels":      desired.Metadata.Labels,
+				"annotations": desired.Metadata.Annotations,
+			},
+		}
 		if err := r.client.MergePatch(ctx, r.deploymentPath(name), patch, nil); err != nil {
 			return false, fmt.Errorf("update model host %s: %w", name, err)
 		}

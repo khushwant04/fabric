@@ -119,6 +119,8 @@ type Options struct {
 	// server for each declared deployment rather than pointing the data plane at one
 	// somebody else operates.
 	ModelHost ModelHost
+	// Rollout governs how a change of release is applied and when it is abandoned.
+	Rollout Rollout
 }
 
 // Reconciler renders declared deployments into cluster state.
@@ -137,6 +139,9 @@ func New(client *kube.Client, options Options) *Reconciler {
 	}
 	if options.Log == nil {
 		options.Log = slog.Default()
+	}
+	if options.Rollout.ReadyTimeout == 0 {
+		options.Rollout = DefaultRollout()
 	}
 	return &Reconciler{client: client, options: options}
 }
@@ -170,6 +175,9 @@ type Result struct {
 	// same as the number configured.
 	HostsReady int
 	HostsTotal int
+	// RolledBack and Deferred make rollout behaviour observable in one pass.
+	RolledBack int
+	Deferred   int
 }
 
 // ReconcileOnce brings the ConfigMap in line with the declared resources and records
@@ -201,10 +209,39 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	// host ended up. A configuration naming a Service that does not exist yet would
 	// make the data plane fail requests it could otherwise queue behind readiness.
 	ready := map[string]bool{}
+	decisions := map[string]RolloutDecision{}
 	if r.options.ModelHost.Enabled() {
 		result.HostsTotal = len(serving)
+		// Counted across the pass so the stamp's budget for simultaneous changes is
+		// respected: without this every deployment would change release at once and a
+		// bad release would take the whole stamp down together.
+		inFlight := 0
 		for index := range serving {
-			hostReady, hostErr := r.applyHost(ctx, serving[index])
+			state, observeErr := r.observeRollout(ctx, serving[index])
+			if observeErr != nil {
+				r.options.Log.Warn("could not read rollout state",
+					"resource", serving[index].Metadata.Name, "error", observeErr)
+				continue
+			}
+
+			decision := decideRollout(
+				r.options.Rollout, serving[index], state, inFlight, time.Now(),
+			)
+			decisions[serving[index].Spec.DeploymentID] = decision
+			if decision.Release != state.Current || decision.RolledBack {
+				inFlight++
+			}
+			if decision.RolledBack {
+				r.options.Log.Warn("rolling back model host",
+					"resource", serving[index].Metadata.Name,
+					"from", state.Current, "to", decision.Release)
+				result.RolledBack++
+			}
+			if decision.Deferred {
+				result.Deferred++
+			}
+
+			hostReady, hostErr := r.applyHostWithRollout(ctx, serving[index], decision, state)
 			if hostErr != nil {
 				// One host failing must not stop the others or discard configuration
 				// already applied for them.
@@ -234,7 +271,9 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 
 	for _, item := range serving {
 		if !r.statusIsCurrent(item) || r.options.ModelHost.Enabled() {
-			if err := r.reportApplied(ctx, item, ready[item.Spec.DeploymentID]); err != nil {
+			if err := r.reportApplied(
+				ctx, item, ready[item.Spec.DeploymentID], decisions[item.Spec.DeploymentID],
+			); err != nil {
 				// One resource failing to accept status does not invalidate the
 				// configuration already written, nor the other resources.
 				r.options.Log.Warn("could not write status",
@@ -351,7 +390,7 @@ func (r *Reconciler) statusIsCurrent(item ModelDeployment) bool {
 }
 
 func (r *Reconciler) reportApplied(
-	ctx context.Context, item ModelDeployment, hostReady bool,
+	ctx context.Context, item ModelDeployment, hostReady bool, decision RolloutDecision,
 ) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	conditions := []Condition{
@@ -382,6 +421,29 @@ func (r *Reconciler) reportApplied(
 			Status:             status,
 			Reason:             reason,
 			Message:            "Readiness reported by the model host workload",
+			ObservedGeneration: item.Metadata.Generation,
+			LastTransitionTime: now,
+		})
+
+		// Progress is its own condition, so a host that is starting is distinguishable
+		// from one that was abandoned and rolled back.
+		progressing := "False"
+		if !hostReady {
+			progressing = "True"
+		}
+		progressReason := decision.Reason
+		if progressReason == "" {
+			progressReason = "Progressing"
+		}
+		message := "Rollout state observed by the operator"
+		if decision.RolledBack {
+			message = "The declared release did not become ready and was rolled back"
+		}
+		conditions = append(conditions, Condition{
+			Type:               ConditionProgressing,
+			Status:             progressing,
+			Reason:             progressReason,
+			Message:            message,
 			ObservedGeneration: item.Metadata.Generation,
 			LastTransitionTime: now,
 		})

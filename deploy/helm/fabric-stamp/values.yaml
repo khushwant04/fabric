@@ -96,6 +96,18 @@ operator:
   # The ConfigMap the operator renders and the data plane mounts.
   configMapName: fabric-deployments
   interval: 15s
+  # How a change of release is applied. Replacing a model host is not a rolling update:
+  # the GPU cannot be shared, so the old server stops before the new one starts, and the
+  # new one then loads weights for minutes before it can answer.
+  rollout:
+    # Generous by necessity. A tight deadline rolls back releases that were about to
+    # succeed, and weight loading dominates this number.
+    readyTimeout: 15m
+    # One at a time, so a bad release costs one deployment rather than the whole stamp.
+    maxParallel: 1
+    # Returning to a release that was observed ready beats leaving the stamp serving
+    # nothing until a human intervenes.
+    autoRollback: true
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}

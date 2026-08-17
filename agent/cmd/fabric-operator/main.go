@@ -72,6 +72,13 @@ func main() {
 		hostSpread = flag.Bool("model-host-spread-across-nodes", false,
 			"prefer placing model hosts on different nodes")
 
+		readyTimeout = flag.Duration("rollout-ready-timeout", 15*time.Minute,
+			"how long a new release has to become ready before it is abandoned")
+		maxParallel = flag.Int("rollout-max-parallel", 1,
+			"how many hosts may change release at once on this stamp")
+		autoRollback = flag.Bool("rollout-auto-rollback", true,
+			"return to the last release observed ready when a new one misses its deadline")
+
 		once = flag.Bool("once", false, "reconcile once and exit")
 		show = flag.Bool("version", false, "print the version and exit")
 	)
@@ -153,6 +160,11 @@ func main() {
 		ConfigKey:     *configKey,
 		Log:           log,
 		ModelHost:     host,
+		Rollout: operator.Rollout{
+			ReadyTimeout: *readyTimeout,
+			MaxParallel:  *maxParallel,
+			AutoRollback: *autoRollback,
+		},
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

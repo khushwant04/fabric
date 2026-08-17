@@ -149,6 +149,26 @@ and while it is starting the phase is `pending`.
 | Anti-affinity preferred, not required | On a single-node stamp a hard rule leaves the second deployment permanently Pending, which is worse than sharing a node |
 | Tolerations default to `Exists` without a value | A taint meaning "this node has a GPU" carries no value, and `Equal` with an empty value would not match it |
 
+### Changing a release
+
+Replacing a model host is not a rolling update. The GPU cannot be shared, so the old
+server stops before the new one starts, and the new one then loads weights for minutes
+before it can answer. That window is unavoidable; leaving a stamp in it forever is not.
+
+| Behaviour | Reason |
+|---|---|
+| One host changes release at a time | A bad release costs one deployment rather than the whole stamp |
+| A stalled release rolls back to the last one observed ready | Returning to something that worked beats serving nothing until a human intervenes |
+| Only a release seen ready becomes the fallback | Recording the declared release optimistically would let a broken one become the thing rolled back to |
+| No fallback means keep trying | Rolling back to nothing would remove the only deployment the stamp has |
+| The deadline resets only when the release changes | Otherwise every pass grants a fresh deadline and a stalled release never times out |
+| History lives in annotations on the workload | An operator restart must not forget which release was good |
+| `Progressing` is its own condition | A host that is starting is distinguishable from one that was abandoned and rolled back |
+
+There is no traffic splitting: one GPU serves one server at a time, so a percentage of
+traffic cannot be expressed. Progressive here means one deployment at a time across a
+stamp.
+
 The CRD is annotated `helm.sh/resource-policy: keep`: deleting a CRD deletes every
 custom resource of that kind, so an accidental uninstall would withdraw every deployment
 the cluster serves.
