@@ -58,7 +58,11 @@ spec:
             {{- if .enforceEager }}
             - --model-host-enforce-eager
             {{- end }}
-            {{- with .cacheClaim }}
+            - --model-host-cache-mode={{ .cache.mode }}
+            {{- with .cache.hostPath }}
+            - --model-host-cache-host-path={{ . }}
+            {{- end }}
+            {{- with .cache.claim }}
             - --model-host-cache-claim={{ . }}
             {{- end }}
             {{- end }}

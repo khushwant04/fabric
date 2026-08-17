@@ -66,7 +66,13 @@ func main() {
 		hostDType = flag.String("model-host-dtype", "", "weight dtype, for example bfloat16")
 		hostPort  = flag.Int("model-host-port", 8000, "port the server listens on")
 		hostCache = flag.String("model-host-cache-claim", envOr("FABRIC_OPERATOR_CACHE_CLAIM", ""),
-			"PersistentVolumeClaim for the weight cache, so a restart does not refetch")
+			"PersistentVolumeClaim for the weight cache when the mode is pvc")
+		hostCacheMode = flag.String("model-host-cache-mode",
+			envOr("FABRIC_OPERATOR_CACHE_MODE", "hostPath"),
+			"where weights are cached: hostPath, pvc, or none")
+		hostCachePath = flag.String("model-host-cache-host-path",
+			envOr("FABRIC_OPERATOR_CACHE_HOST_PATH", operator.DefaultCacheHostPath),
+			"node directory used when the cache mode is hostPath")
 		hostRuntimeClass = flag.String("model-host-runtime-class",
 			envOr("FABRIC_OPERATOR_RUNTIME_CLASS", ""), "RuntimeClass for GPU nodes")
 		hostSpread = flag.Bool("model-host-spread-across-nodes", false,
@@ -124,6 +130,8 @@ func main() {
 		EnforceEager:         *hostEager,
 		DType:                *hostDType,
 		Port:                 *hostPort,
+		CacheMode:            *hostCacheMode,
+		CacheHostPath:        *hostCachePath,
 		CacheClaim:           *hostCache,
 		RuntimeClassName:     *hostRuntimeClass,
 		SpreadAcrossNodes:    *hostSpread,

@@ -420,3 +420,60 @@ func TestSchedulingIsAppliedToTheHostPod(t *testing.T) {
 		t.Fatal("anti-affinity is required rather than preferred")
 	}
 }
+
+func TestWeightsAreCachedOnTheNodeByDefault(t *testing.T) {
+	// A single shared ReadWriteOnce claim was the previous behaviour and could not attach
+	// to two nodes, so a second host on a second node would never start. Weights are
+	// large, immutable, and only useful to a pod already on that node.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	body := string(encoded)
+	if !strings.Contains(body, DefaultCacheHostPath) {
+		t.Fatalf("weights are not cached on the node: %s", body)
+	}
+	if strings.Contains(body, "persistentVolumeClaim") {
+		t.Fatal("a claim was used when the node's own disk was available")
+	}
+	// The download must land in the mount rather than on the container filesystem.
+	if !strings.Contains(body, "HF_HOME") || !strings.Contains(body, modelCacheMountPath) {
+		t.Fatalf("the cache location is not pointed at the mount: %s", body)
+	}
+}
+
+func TestACacheClaimIsUsedOnlyInPvcMode(t *testing.T) {
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+	host := testHost()
+	host.CacheMode = "pvc"
+	host.CacheClaim = "weights"
+
+	if _, err := hostReconciler(client, host).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	if !strings.Contains(string(encoded), `"claimName":"weights"`) {
+		t.Fatalf("the claim was ignored in pvc mode: %s", encoded)
+	}
+}
+
+func TestCacheCanBeDisabled(t *testing.T) {
+	// Correct where no local disk exists, at the cost of refetching on every start.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+	host := testHost()
+	host.CacheMode = "none"
+
+	if _, err := hostReconciler(client, host).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	body := string(encoded)
+	if strings.Contains(body, "hostPath") || strings.Contains(body, "persistentVolumeClaim") {
+		t.Fatalf("expected an ephemeral cache: %s", body)
+	}
+}

@@ -72,6 +72,20 @@ identifier. A claimed key with no recorded result answers 409 rather than blocki
 there is nothing yet to replay. Keys lapse after 24 hours and are purged in bounded
 batches, elevated because purging spans accounts.
 
+### Bootstrapping without an identity provider
+
+Every other route to an account runs through Auth0: a person logs in, exchanges that
+token, and creates an account. That is right for people and wrong for the first account,
+which has to exist before an identity provider is configured, and for automated setup,
+which has no browser.
+
+`python -m app.cli bootstrap-account` creates an account, a local owner record, and one
+API key, printing the key once. It is a command rather than an endpoint on purpose: an
+endpoint that created accounts without authentication would let anyone create tenants,
+while a command requires whoever runs it to hold the database credentials already. A
+second run refuses to touch an existing account rather than minting another credential for
+one somebody is using.
+
 ### Managed-capacity entitlements
 
 Whether an account may place onto Fabric's own GPU has been a column since the first

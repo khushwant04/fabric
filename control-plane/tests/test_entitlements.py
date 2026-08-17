@@ -186,3 +186,66 @@ async def test_a_managed_placement_follows_the_entitlement(
             )
         ).scalar_one()
     assert after is True
+
+
+async def test_bootstrap_creates_an_account_without_auth0(db_session: AsyncSession) -> None:
+    """Every other route to an account goes through Auth0, so the first one needs this.
+
+    An endpoint doing the same would let anyone create tenants; a command requires
+    whoever runs it to already hold the database credentials.
+    """
+    from app.cli import _bootstrap_account
+
+    await _bootstrap_account(
+        slug="bootstrapped",
+        name="Bootstrapped",
+        email="ops@bootstrapped.test",
+        key_name="first",
+        managed=True,
+    )
+
+    from app.core.tenancy import system_context
+    from app.models import ApiKey
+
+    with system_context():
+        account = (
+            await db_session.execute(select(Account).where(Account.slug == "bootstrapped"))
+        ).scalar_one()
+        keys = (
+            await db_session.execute(select(ApiKey).where(ApiKey.account_id == account.id))
+        ).scalars().all()
+
+    assert account.managed_capacity_enabled is True
+    assert len(keys) == 1
+    # Only a hash is stored; the secret was printed once and cannot be recovered.
+    assert keys[0].secret_verifier
+    assert not hasattr(keys[0], "secret")
+
+
+async def test_bootstrap_refuses_to_touch_an_existing_account(
+    db_session: AsyncSession, capsys
+) -> None:
+    """A second run must not silently mint another credential for a live account."""
+    from app.cli import _bootstrap_account
+    from app.core.tenancy import system_context
+    from app.models import ApiKey
+
+    for _ in range(2):
+        await _bootstrap_account(
+            slug="once-only",
+            name=None,
+            email="ops@once.test",
+            key_name="first",
+            managed=False,
+        )
+
+    with system_context():
+        account = (
+            await db_session.execute(select(Account).where(Account.slug == "once-only"))
+        ).scalar_one()
+        keys = (
+            await db_session.execute(select(ApiKey).where(ApiKey.account_id == account.id))
+        ).scalars().all()
+
+    assert len(keys) == 1, "the second run issued another key"
+    assert "refusing to modify" in capsys.readouterr().out

@@ -48,8 +48,20 @@ type ModelHost struct {
 	RuntimeClassName string
 	NodeSelector     map[string]string
 	Tolerations      []map[string]any
-	// CacheClaim mounts an existing PersistentVolumeClaim at the model cache path, so
-	// weights survive a restart instead of being pulled again.
+	// CacheMode decides where downloaded weights live: "hostPath" for the node's own
+	// disk, "pvc" for a PersistentVolumeClaim, or "none" to refetch on every start.
+	//
+	// A node-local path is the default because it matches how weights behave. They are
+	// large, immutable, and only useful to a pod already scheduled on that node, and a
+	// GPU node's ephemeral disk is both fast and already paid for. A single shared claim
+	// was the previous behaviour and was wrong: ReadWriteOnce cannot attach to two nodes,
+	// so the second host on a second node would never start.
+	CacheMode string
+	// CacheHostPath is the directory used when CacheMode is "hostPath". On AKS the
+	// ephemeral disk is mounted at /mnt, which is why the default lives under it.
+	CacheHostPath string
+	// CacheClaim is the claim used when CacheMode is "pvc". It must be ReadWriteMany if
+	// more than one host will mount it.
 	CacheClaim string
 	// SpreadAcrossNodes keeps hosts on different nodes, so two deployments on one stamp
 	// do not contend for a single device while another node sits idle.
@@ -103,6 +115,44 @@ func ParseTolerations(entries []string) ([]map[string]any, error) {
 // behaviour every existing deployment relies on, so it stays the default.
 func (m ModelHost) Enabled() bool {
 	return m.Image != ""
+}
+
+// modelCacheMountPath is where weights are visible inside the container.
+const modelCacheMountPath = "/model-cache"
+
+// DefaultCacheHostPath is on the AKS ephemeral disk, which is local NVMe on GPU SKUs.
+const DefaultCacheHostPath = "/mnt/fabric/model-cache"
+
+// cacheVolume builds the weight cache according to the configured mode.
+func (m ModelHost) cacheVolume() map[string]any {
+	switch m.CacheMode {
+	case "pvc":
+		if m.CacheClaim != "" {
+			return map[string]any{
+				"name":                  "cache",
+				"persistentVolumeClaim": map[string]any{"claimName": m.CacheClaim},
+			}
+		}
+	case "none":
+		// Deliberate: refetch on every start. Predictable, and correct where no local
+		// disk exists, at the cost of the download.
+		return map[string]any{"name": "cache", "emptyDir": map[string]any{}}
+	case "hostPath", "":
+		path := m.CacheHostPath
+		if path == "" {
+			path = DefaultCacheHostPath
+		}
+		return map[string]any{
+			"name": "cache",
+			"hostPath": map[string]any{
+				"path": path,
+				// Created on first use, since a fresh node has no such directory and
+				// requiring one would make the host fail to start on a new node.
+				"type": "DirectoryOrCreate",
+			},
+		}
+	}
+	return map[string]any{"name": "cache", "emptyDir": map[string]any{}}
 }
 
 const (
@@ -222,21 +272,21 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 		"volumeMounts": []map[string]any{
 			// A model server needs writable scratch and shared memory; the image is
 			// otherwise treated as immutable.
-			{"name": "cache", "mountPath": "/root/.cache/huggingface"},
+			{"name": "cache", "mountPath": modelCacheMountPath},
 			{"name": "shm", "mountPath": "/dev/shm"},
+		},
+		// Pointed at the mount explicitly rather than relying on the image's default
+		// cache location, which differs between images and would silently put a
+		// multi-gigabyte download on the container filesystem.
+		"env": []map[string]any{
+			{"name": "HF_HOME", "value": modelCacheMountPath},
+			{"name": "HF_HUB_CACHE", "value": modelCacheMountPath + "/hub"},
 		},
 	}
 
 	volumes := []map[string]any{
 		{"name": "shm", "emptyDir": map[string]any{"medium": "Memory"}},
-	}
-	if host.CacheClaim != "" {
-		volumes = append(volumes, map[string]any{
-			"name":                  "cache",
-			"persistentVolumeClaim": map[string]any{"claimName": host.CacheClaim},
-		})
-	} else {
-		volumes = append(volumes, map[string]any{"name": "cache", "emptyDir": map[string]any{}})
+		host.cacheVolume(),
 	}
 
 	podSpec := map[string]any{

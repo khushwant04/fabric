@@ -88,10 +88,25 @@ operator:
     # Disables CUDA graph capture: slower per token, but the graphs' memory is
     # returned to the KV cache.
     enforceEager: false
-    dtype: bfloat16
+    # float16, not bfloat16. A T4 is compute capability 7.5 and has no bfloat16 support,
+    # so a server asked for it refuses to start. Ampere and later (A10, A100, L4, H100)
+    # can use bfloat16, which is closer to how the model was trained.
+    dtype: float16
     port: 8000
-    # A claim for the weight cache, so a restart does not refetch gigabytes.
-    cacheClaim: ""
+    # Where downloaded weights are kept.
+    #
+    #   hostPath  the node's own disk. On a GPU SKU that is local NVMe, already paid for,
+    #             and fast. Weights are immutable and only useful to a pod already on
+    #             that node, so this is the default.
+    #   pvc       a PersistentVolumeClaim. It must be ReadWriteMany if more than one host
+    #             will mount it; a ReadWriteOnce claim cannot attach to two nodes.
+    #   none      refetch on every start. Predictable, and correct where no local disk
+    #             exists, at the cost of the download.
+    cache:
+      mode: hostPath
+      # AKS mounts the ephemeral disk at /mnt.
+      hostPath: /mnt/fabric/model-cache
+      claim: ""
     runtimeClassName: ""
   # The ConfigMap the operator renders and the data plane mounts.
   configMapName: fabric-deployments
