@@ -163,6 +163,19 @@ Azure PostgreSQL server. Measured on that cluster:
 | Startup window allowed | 20 minutes, after 480 s proved too strict |
 | Attribution | 19 input and 4 output tokens, matching the server's own count |
 
+The control plane is exposed through the cluster's existing Istio ingress gateway rather
+than a Kubernetes Ingress, because a cluster running the Istio addon has no IngressClass:
+an Ingress object would be created and never served, and adding a controller to serve it
+would put two of them in front of one cluster.
+
+TLS terminates at the gateway from a Kubernetes secret and plaintext is redirected, even
+though a CDN in front already terminates TLS for clients. The hop from that CDN to the
+cluster crosses the public internet carrying API keys and tokens, so `terminatedUpstream`
+exists for cases where that hop is private and is not what a credential-issuing API
+should use. Verified end to end: an API key exchanged over the public hostname returns a
+token whose issuer is that hostname, and the same hostname serves the JWKS that verifies
+it.
+
 The cluster enforces NetworkPolicy through Cilium and runs Gatekeeper with every
 constraint in `dryrun`, so policy reports violations rather than rejecting workloads. The
 control plane is reached over in-cluster DNS while its public hostname is pending, but

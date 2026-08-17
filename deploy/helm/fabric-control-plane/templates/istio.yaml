@@ -1,0 +1,82 @@
+{{- if .Values.istio.enabled }}
+{{- if not .Values.istio.hosts }}
+{{- fail "istio.hosts is required when istio.enabled is set: a gateway with no hostname matches nothing" -}}
+{{- end }}
+{{- if and (eq .Values.istio.tls.mode "secret") (not .Values.istio.tls.credentialName) }}
+{{- fail "istio.tls.credentialName is required when istio.tls.mode is secret" -}}
+{{- end }}
+{{- if not .Values.istio.gatewaySelector }}
+{{- fail "istio.gatewaySelector is required when istio.enabled is set: without it the Gateway selects no workload and Istio rejects it" -}}
+{{- end }}
+{{- if not (has .Values.istio.tls.mode (list "secret" "terminatedUpstream")) }}
+{{- fail "istio.tls.mode must be secret or terminatedUpstream" -}}
+{{- end }}
+# Exposed through an existing Istio ingress gateway rather than a Kubernetes Ingress.
+# A cluster running the Istio addon has no IngressClass, so an Ingress object would be
+# created and never served, and installing a second ingress controller to serve it would
+# put two of them in front of the same cluster.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+spec:
+  # Selects the gateway's workload, which lives in its own namespace. The Gateway object
+  # itself stays here so it is removed with this release.
+  selector:
+    {{- toYaml .Values.istio.gatewaySelector | nindent 4 }}
+  servers:
+    {{- if eq .Values.istio.tls.mode "secret" }}
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        {{- toYaml .Values.istio.hosts | nindent 8 }}
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.istio.tls.credentialName }}
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        {{- toYaml .Values.istio.hosts | nindent 8 }}
+      # Tokens and API keys travel on this API, so plaintext is refused outright rather
+      # than served and hoped about.
+      tls:
+        httpsRedirect: true
+    {{- else }}
+    # terminatedUpstream: something in front of this gateway already terminates TLS and
+    # reaches the cluster over HTTP. That leaves the hop from that terminator to this
+    # cluster unencrypted across the public internet, carrying tokens and API keys with
+    # it, so it is only appropriate where that hop is itself private or the exposure is
+    # accepted deliberately and temporarily.
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        {{- toYaml .Values.istio.hosts | nindent 8 }}
+    {{- end }}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+spec:
+  hosts:
+    {{- toYaml .Values.istio.hosts | nindent 4 }}
+  gateways:
+    - {{ include "fabric-control-plane.fullname" . }}
+  http:
+    - route:
+        - destination:
+            host: {{ include "fabric-control-plane.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ .Values.service.port }}
+      timeout: {{ .Values.istio.timeout }}
+{{- end }}
