@@ -115,6 +115,25 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
+# Exposure through an existing Istio ingress gateway. A cluster running the Istio addon
+# has no IngressClass, so an Ingress object would be created and never served.
+istio:
+  enabled: false
+  hosts: []
+  # Selects the gateway workload. This is the AKS Istio addon's external gateway.
+  gatewaySelector:
+    istio: aks-istio-ingressgateway-external
+  tls:
+    # secret             terminate TLS at the gateway from a Kubernetes secret, and
+    #                    redirect plaintext, which is the right shape for a public API
+    #                    that issues credentials.
+    # terminatedUpstream something in front already terminates TLS and reaches the
+    #                    cluster over HTTP, leaving that hop unencrypted.
+    mode: secret
+    # A secret in the gateway's own namespace, not this one.
+    credentialName: ""
+  timeout: 120s
+
 # Spread replicas over nodes so a node failure does not take the API with it.
 spreadAcrossNodes: true
 
