@@ -63,10 +63,35 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if not .Values.controlPlane.jwtIssuer -}}
 {{- fail "controlPlane.jwtIssuer is required: the data plane cannot verify tokens without it" -}}
 {{- end -}}
-{{- if not .Values.modelHost.url -}}
-{{- fail "modelHost.url is required: the data plane has nothing to proxy to" -}}
+{{- if and (not .Values.modelHost.url) (not (include "fabric-stamp.managesModelHost" .)) -}}
+{{- fail "modelHost.url is required: the data plane has nothing to proxy to, and no operator is managing a host" -}}
 {{- end -}}
 {{- if and (not .Values.enrollment.token) (not .Values.enrollment.existingSecret) -}}
 {{- fail "enrollment.token or enrollment.existingSecret is required for the first install" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether the operator creates and owns the model host itself. When it does, the upstream
+in the rendered configuration is a placeholder: the operator's Service is named after a
+deployment ID that does not exist at install time, and the operator overrides the
+upstream once a deployment is actually placed here.
+*/}}
+{{- define "fabric-stamp.managesModelHost" -}}
+{{- if and .Values.operator.enabled .Values.operator.managedModelHost.image -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The upstream the data plane starts with. A host that cannot be reached fails closed with
+a gateway error, which is the right behaviour before a deployment is placed: answering
+from the wrong upstream would be worse than not answering.
+*/}}
+{{- define "fabric-stamp.modelHostUrl" -}}
+{{- if .Values.modelHost.url -}}
+{{- .Values.modelHost.url -}}
+{{- else -}}
+http://model-host-not-yet-placed.invalid
 {{- end -}}
 {{- end -}}
