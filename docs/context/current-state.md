@@ -140,10 +140,28 @@ Two version facts matter and are not yet resolved:
   the gated-delta op where the pinned version keeps it, and the newer version moved that
   code, so the live host runs vLLM's own kernels throughout.
 
-A third gap is measurement rather than plumbing: the launch model's linear-attention
-layers use larger head dimensions and more heads than every committed artifact
-measured, and 18 of its 24 layers are linear attention. No artifact covers the shapes
-the launch model actually runs, so the kernel's benefit for this model is unmeasured.
+The kernel has now been measured at the launch model's own layer shapes: sixteen heads
+with 128-wide key and value dimensions, which is what 18 of its 24 layers run. Three
+spaced artifacts at one commit, on the development GPU:
+
+| Sequences | Against vLLM's kernel | Against flash-linear-attention (by batch) |
+|---|---|---|
+| 1 | 1.188–1.199x | 1.232–1.412x |
+| 16 | 0.982–0.989x | 1.034–1.046x at batch 8 |
+| 32 | 0.990–0.998x | — |
+
+That is a different result from the development shapes, and it is the more relevant
+one. At sixteen heads and 128-wide dimensions the kernel is ahead only at
+single-sequence decode; at the concurrency continuous batching actually produces it is
+at parity or marginally behind. The earlier 1.13–1.23x figures were measured at eight
+heads with 64-wide dimensions, which no layer of this model uses.
+
+Outputs remain identical and the state cache agrees to 1.2e-7 at these shapes too, so
+the substitution stays correct; what changed is the case for making it.
+
+Two integration gaps remain, both above: the substitution is not registered in the live
+host, and the host runs a newer vLLM whose decode path differs from the one measured
+here.
 
 ### Packaging
 

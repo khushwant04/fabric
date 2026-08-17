@@ -15,7 +15,7 @@ Fabric is an early-stage project for building a technically differentiated, mana
 - A `FabricModelDeployment` CRD and a cluster-local operator in [`agent/`](agent/) that reconcile placed deployments into the data plane's configuration and report what was applied; the operator creates no model-host workload.
 - Container images and Helm charts in [`deploy/`](deploy/) that install a stamp — agent, data plane, collector, and optionally the operator — and the control plane itself on Kubernetes, verified on a real cluster against PostgreSQL with row-level security in force.
 - An inference data plane in [`data-plane/`](data-plane/) that verifies Fabric inference JWTs locally, enforces account ownership of deployments, and proxies OpenAI-compatible requests to a model host.
-- A vLLM decode-op substitution in [`serving/`](serving/) that returns identical outputs to vLLM's own gated-delta kernel and is 1.13–1.23x faster on the development GPU, per three committed artifacts; it is not registered in a live vLLM instance.
+- A vLLM decode-op substitution in [`serving/`](serving/) that returns identical outputs to vLLM's own gated-delta kernel. At the launch model's own layer shapes it is 1.19x at single-sequence decode and at parity (0.98–1.00x) at 16 and 32 sequences, per three committed artifacts; it is not registered in a live vLLM instance.
 - A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
 - A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
 
