@@ -168,6 +168,13 @@ SUFFIX="$RANDOM$RANDOM"
 if [ "$CONTROL_PLANE" = "cluster" ]; then
     info "installing the control plane from its own chart"
 
+    # Generated per run: no database password, however throwaway, belongs in the repo.
+    PG_SUPERUSER_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+    PG_APP_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+    "${KUBECTL[@]}" create secret generic postgres-credentials \
+        --from-literal=superuser-password="$PG_SUPERUSER_PASSWORD" \
+        --from-literal=app-password="$PG_APP_PASSWORD" \
+        --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
     "${KUBECTL[@]}" apply -f "$REPO_ROOT/deploy/testing/postgres.yaml" >/dev/null
     "${KUBECTL[@]}" wait --for=condition=available deployment/postgres --timeout=180s >/dev/null
     # The application role has no BYPASSRLS, so row-level security is actually in
@@ -180,7 +187,7 @@ if [ "$CONTROL_PLANE" = "cluster" ]; then
         --set image.repository=fabric/control-plane --set image.tag=e2e \
         --set replicas=1 --set podDisruptionBudget.enabled=false \
         --set appEnv=test \
-        --set database.url="postgresql+asyncpg://fabric_app:fabric_app@postgres:5432/fabric" \
+        --set database.url="postgresql+asyncpg://fabric_app:$PG_APP_PASSWORD@postgres:5432/fabric" \
         --set-file signingKey.value="$WORK/signing.pem" \
         --set credentialPepper="kind-e2e-pepper-not-a-real-secret" \
         --set jwt.issuer="$CONTROL_URL" \
