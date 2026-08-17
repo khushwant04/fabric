@@ -1,0 +1,17 @@
+# The build context is uploaded in full before anything is built, so anything large and
+# reproducible stays out of it. A first attempt walked serving/.venv-live, several
+# gigabytes of installed wheels that the image installs for itself anyway, and the upload
+# was still going long after the build should have finished.
+**/.venv
+**/.venv-*
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+.git
+v1
+utils/transformers
+runtime/artifacts
+**/*.pyc
+**/*.log

@@ -264,6 +264,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		if release := releaseFromSpec(assignment.Spec); release != "" {
 			entry.UpstreamModel = release
 		}
+		entry.KernelMode = kernelModeFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || previous != entry {
 			changed = true
 			a.log.Info("configured deployment",
@@ -440,6 +441,27 @@ func (a *Agent) configured() []state.Deployment {
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+// kernelModeFromSpec extracts which decode kernel the deployment asks for.
+//
+// The control plane has accepted this field since the beginning and nothing acted on it,
+// so a deployment could declare a kernel and be served by another. An unrecognised value
+// is treated as unset rather than rejected here: the control plane validates the vocabulary
+// and an agent that refused a value a newer control plane understands would stop
+// reconciling entirely.
+func kernelModeFromSpec(spec map[string]any) string {
+	runtime, ok := spec["runtime"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	mode, _ := runtime["kernel_mode"].(string)
+	switch mode {
+	case "fabric", "standard", "auto":
+		return mode
+	default:
+		return ""
+	}
 }
 
 // releaseFromSpec extracts the runtime release the host should serve.

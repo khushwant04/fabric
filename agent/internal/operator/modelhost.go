@@ -123,6 +123,19 @@ func (m ModelHost) Enabled() bool {
 // working one.
 const startupFailureThreshold = 120
 
+// kernelEnvironment turns a deployment's requested kernel into the host's environment.
+//
+// Only an explicit request for the Fabric kernel switches it on. "auto" is deliberately
+// conservative and serves the model server's own kernel, because choosing between them
+// automatically would need a policy grounded in measurements this platform does not yet
+// hold for every shape it might serve. A deployment that wants the substitution says so.
+func kernelEnvironment(mode string) []map[string]any {
+	if mode != "fabric" {
+		return nil
+	}
+	return []map[string]any{{"name": "FABRIC_KERNEL", "value": "1"}}
+}
+
 // modelCacheMountPath is where weights are visible inside the container.
 const modelCacheMountPath = "/model-cache"
 
@@ -294,7 +307,7 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 		// Pointed at the mount explicitly rather than relying on the image's default
 		// cache location, which differs between images and would silently put a
 		// multi-gigabyte download on the container filesystem.
-		"env": []map[string]any{
+		"env": append(kernelEnvironment(item.Spec.KernelMode), []map[string]any{
 			{"name": "HF_HOME", "value": modelCacheMountPath},
 			{"name": "HF_HUB_CACHE", "value": modelCacheMountPath + "/hub"},
 			// Compiled graphs belong on the node's disk for the same reason weights do:
@@ -303,7 +316,7 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 			// turned one overrunning startup into a loop of them.
 			{"name": "VLLM_CACHE_ROOT", "value": modelCacheMountPath + "/vllm"},
 			{"name": "TORCHINDUCTOR_CACHE_DIR", "value": modelCacheMountPath + "/inductor"},
-		},
+		}...),
 	}
 
 	volumes := []map[string]any{

@@ -51,7 +51,13 @@ type Spec struct {
 	ModelAlias    string `json:"modelAlias"`
 	UpstreamURL   string `json:"upstreamUrl"`
 	UpstreamModel string `json:"upstreamModel,omitempty"`
-	Generation    int    `json:"generation"`
+	// KernelMode selects which decode kernel the model host uses: "fabric" for the
+	// Fabric substitution, "standard" for the server's own, "auto" to let the platform
+	// decide. It belongs on the deployment rather than the stamp because it is a
+	// property of what is being served, and because two deployments on one stamp
+	// differing only in this is how the two are compared.
+	KernelMode string `json:"kernelMode,omitempty"`
+	Generation int    `json:"generation"`
 }
 
 // Condition is a standard Kubernetes-style status condition.
