@@ -249,3 +249,36 @@ async def test_bootstrap_refuses_to_touch_an_existing_account(
 
     assert len(keys) == 1, "the second run issued another key"
     assert "refusing to modify" in capsys.readouterr().out
+
+
+async def test_a_system_key_can_enrol_managed_capacity_but_not_widen_entitlements(
+    db_session: AsyncSession, capsys
+) -> None:
+    """Managed stamps are Fabric's capacity, so a tenant key is refused one by design.
+
+    That leaves Fabric's own operators needing a credential. It must be able to enrol
+    managed capacity without being able to hand accounts access to it.
+    """
+    from app.cli import _issue_system_key
+    from app.core.tenancy import system_context
+    from app.models import ApiKey
+
+    await _issue_system_key(name="fleet-operator")
+    printed = capsys.readouterr().out
+    assert "fab_key_" in printed
+
+    with system_context():
+        account = (
+            await db_session.execute(select(Account).where(Account.slug == "fabric-system"))
+        ).scalar_one()
+        key = (
+            await db_session.execute(select(ApiKey).where(ApiKey.account_id == account.id))
+        ).scalars().one()
+
+    assert account.is_system is True
+    granted = set(key.scopes)
+    # Enough to enrol a managed stamp under the system account.
+    assert scope_defs.STAMPS_WRITE in granted
+    # Not enough to grant any account access to managed capacity: that path needs
+    # database credentials, so no long-lived key can widen entitlements on its own.
+    assert scope_defs.CAPACITY_WRITE not in granted

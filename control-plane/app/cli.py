@@ -3,6 +3,7 @@
 Usage:
     python -m app.cli seed-system-account
     python -m app.cli bootstrap-account --slug acme --email ops@acme.test
+    python -m app.cli issue-system-key --name fleet-operator
     python -m app.cli grant-managed-capacity --account <uuid>
 
 ``bootstrap-account`` exists because every other route to an account goes through
@@ -30,6 +31,7 @@ from app.models import Account, User
 from app.services.accounts import create_account, ensure_system_account
 from app.services.api_keys import create_api_key
 from app.services.entitlements import set_managed_capacity
+from app.services.service_principals import create_service_principal
 
 
 async def _seed_system_account() -> None:
@@ -105,6 +107,47 @@ async def _bootstrap_account(
     await dispose_engine()
 
 
+async def _issue_system_key(*, name: str) -> None:
+    """Issue an API key on the Fabric system account, printing it once.
+
+    Managed stamps are Fabric's own capacity serving many tenants, so enrolling one is
+    refused under a customer account: a tenant must not own the fleet. That rule leaves
+    Fabric's operators needing a credential of their own, and this is where it comes from.
+
+    The key deliberately does not carry ``system:capacity:write``. Granting an account
+    access to managed capacity happens through ``grant-managed-capacity``, which needs
+    database credentials, so no long-lived key can widen entitlements on its own.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        with system_context():
+            account = await ensure_system_account(session)
+            # A service principal, not a user: this is a machine credential for Fabric's
+            # own fleet operations and there is no person behind it.
+            principal = await create_service_principal(
+                session,
+                account_id=account.id,
+                name=name,
+                actor_type="system",
+                actor_user_id=None,
+            )
+            await session.flush()
+            _record, secret = await create_api_key(
+                session,
+                account_id=account.id,
+                name=name,
+                requested_scopes=sorted(scope_defs.CONTROL_SCOPES),
+                principal_scopes=frozenset(scope_defs.CONTROL_SCOPES),
+                expires_in_days=None,
+                service_principal_id=principal.id,
+                actor_user_id=None,
+            )
+            await session.commit()
+        print(f"account   {account.id}  slug={account.slug}")
+        print(f"api_key   {secret}")
+    await dispose_engine()
+
+
 async def _grant_managed_capacity(account_id: uuid.UUID) -> None:
     factory = get_session_factory()
     async with factory() as session:
@@ -141,6 +184,9 @@ def main() -> None:
         help="also entitle the account to Fabric's managed GPU capacity",
     )
 
+    system_key = commands.add_parser("issue-system-key")
+    system_key.add_argument("--name", default="fleet-operator")
+
     grant = commands.add_parser("grant-managed-capacity")
     grant.add_argument("--account", required=True, type=uuid.UUID)
 
@@ -158,6 +204,8 @@ def main() -> None:
                 managed=args.managed_capacity,
             )
         )
+    elif args.command == "issue-system-key":
+        asyncio.run(_issue_system_key(name=args.name))
     elif args.command == "grant-managed-capacity":
         asyncio.run(_grant_managed_capacity(args.account))
 
