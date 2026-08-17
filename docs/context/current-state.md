@@ -92,9 +92,11 @@ credentials. Status is a subresource, so the writer of intent is not the writer 
 observation. The operator's ConfigMap permission is restricted by name to the one
 object it manages, and the data plane mounts no service-account token at all.
 
-The reported reason is `DataPlaneConfigurationRendered`, which is what actually
-happened. No model host is created, so a reason implying a running workload would be
-false.
+The reported reason is what actually happened: `DataPlaneConfigurationRendered` when the
+operator only writes configuration, and `ModelHostAndConfigurationApplied` when it runs
+the inference server too. With a managed host it also reports a separate
+`ModelHostReady` condition from the workload's own status, so a deployment whose server is
+still loading weights is `pending` rather than described as serving.
 
 The operator is implemented against the Kubernetes REST API using only the standard
 library. controller-runtime would have added a large dependency tree to a module that
@@ -105,7 +107,7 @@ Both modes are verified on a real cluster. Without the operator the agent writes
 file itself, which is a working stamp with one fewer moving part and no Kubernetes
 permissions.
 
-Not implemented: a model-host workload, rollback, and progressive rollout.
+Not implemented: rollback and progressive rollout. The model host image itself is not built by Fabric.
 
 ### Control-plane packaging
 

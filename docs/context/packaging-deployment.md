@@ -125,10 +125,26 @@ Status is a subresource, so the agent declares intent and cannot write status, w
 the operator reports status and cannot change intent. The operator's ConfigMap rule is
 restricted by `resourceNames` to the single object it manages.
 
-`Applied` carries the reason `DataPlaneConfigurationRendered`, which names what actually
-happened. The operator configures the data plane; it does not start a model host,
-because none exists in this project, and a reason implying a running workload would be
-a false statement about the cluster.
+`Applied` carries a reason that names what actually happened, and it differs by mode:
+`DataPlaneConfigurationRendered` when the operator only writes configuration, and
+`ModelHostAndConfigurationApplied` when it also runs the server. Neither can imply a
+running workload on a stamp where none was started.
+
+With `operator.managedModelHost.image` set, the operator creates a Deployment and a
+Service per deployment and overrides the upstream in the rendered configuration, since it
+is the only component that knows where the host ended up. Readiness is a separate
+`ModelHostReady` condition taken from the workload's own status, never assumed from a
+successful write: a model server is minutes from answering after its container starts,
+and while it is starting the phase is `pending`.
+
+| Choice | Reason |
+|---|---|
+| `Recreate` rather than rolling updates | Two replicas would both want the GPU, and the new one would never schedule while the old holds it |
+| One replica per deployment | A GPU is not shared; scaling is the control plane placing on more stamps |
+| GPU as a limit only | Kubernetes requires request and limit to be equal for extended resources |
+| Generous readiness threshold | Weight loading is slow, and a tight probe restarts the pod before it finishes |
+| Hosts pruned by label | An operator that restarted would otherwise leak a workload holding a GPU |
+| Workload permissions only with an image | An operator that runs no server cannot create workloads either |
 
 The CRD is annotated `helm.sh/resource-policy: keep`: deleting a CRD deletes every
 custom resource of that kind, so an accidental uninstall would withdraw every deployment
