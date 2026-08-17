@@ -159,9 +159,24 @@ heads with 64-wide dimensions, which no layer of this model uses.
 Outputs remain identical and the state cache agrees to 1.2e-7 at these shapes too, so
 the substitution stays correct; what changed is the case for making it.
 
-Two integration gaps remain, both above: the substitution is not registered in the live
-host, and the host runs a newer vLLM whose decode path differs from the one measured
-here.
+The substitution is still not registered in the live host, and the reason is now
+measured rather than suspected. The newer vLLM's unfused op no longer computes what this
+kernel computes: against the eager reference at the launch model's shapes it is 1.7e-2
+away where the pinned version is 1.2e-4, and the gap widens with concurrency (1.0e-2 at
+one sequence, 1.7e-2 at sixteen, 0.35 at thirty-two). Normalisation was ruled out, since
+pre-normalising in the caller and normalising in the kernel diverge identically.
+
+The newer decode path is the packed op, which also unpacks a combined QKV tensor,
+L2-normalises, and derives the gate from `A_log` and `dt_bias`. Substituting there means
+fusing that work into the kernel, which is kernel work rather than adapter work, so it is
+not attempted here.
+
+Artifacts now record which module the baseline came from, its version, and whether it
+`implements_same_function` as the reference. Two artifacts at one commit make the
+situation explicit: under the pinned version the flag is true and the kernel is 1.25x at
+one sequence and 0.98–0.99x at sixteen and thirty-two; under the newer version the flag
+is false, so its timing ratios describe two different computations and are not a
+speedup claim.
 
 ### Packaging
 
