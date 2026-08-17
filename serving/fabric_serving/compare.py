@@ -14,11 +14,16 @@ from typing import Any
 
 import torch
 import triton
-from vllm.model_executor.layers.fla.ops.fused_recurrent import (
-    fused_recurrent_gated_delta_rule as vllm_fused,
-)
 
 from fabric_serving.vllm_gated_delta import fabric_fused_recurrent_gated_delta_rule
+from fabric_serving.vllm_ops import resolve as resolve_vllm_ops
+
+# Resolved once: the module path differs between the version this project pinned and
+# the version that can serve the launch model.
+_OPS = resolve_vllm_ops()
+if _OPS is None:  # pragma: no cover - exercised by the harness's unavailable path
+    raise ImportError("vLLM is not installed in this environment")
+vllm_fused = _OPS.unfused
 
 
 def make_decode_batch(

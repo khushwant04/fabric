@@ -46,11 +46,22 @@ MEASUREMENT_PATHS = ("runtime", "serving")
 
 def _git_state() -> dict[str, Any]:
     commit = _command_output(["git", "rev-parse", "HEAD"])
+
+    # Anchored at the repository root. Pathspecs are resolved relative to the working
+    # directory, and the harness is documented to run from serving/ so the vLLM
+    # baseline is importable. From there "runtime" and "serving" matched nothing, git
+    # returned no output, and every artifact reported a clean tree regardless of what
+    # had been edited: the flag that exists to guarantee a result corresponds to a
+    # commit was silently always reassuring.
+    toplevel = _command_output(["git", "rev-parse", "--show-toplevel"])
+    location = ["-C", toplevel] if toplevel else []
+
     # Untracked artifacts are excluded: writing a result must not make the result
     # that is being written look untrustworthy.
     status = _command_output(
         [
             "git",
+            *location,
             "status",
             "--porcelain",
             "--untracked-files=no",
