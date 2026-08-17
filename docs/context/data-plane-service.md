@@ -38,8 +38,19 @@ host's capacity, and a guess would either waste the GPU or pretend to protect it
 is per process, so with replicas each pod holds a fraction of the limit; that is recorded
 rather than hidden, and the model host behind them remains the real bound.
 
-**Not included yet:** token-based quotas, which need entitlements from the control plane,
-and mTLS or network policy to the model host.
+Connections to the model host can use mutual TLS. A client certificate proves which data
+plane is calling and a pinned authority proves which host answered; either alone leaves
+half the question open, so both are configured together and the administrative listener
+reports whether both are present rather than inferring it from a successful request. A
+partial configuration is refused at startup instead of failing later as a connection
+error.
+
+Unset means plain HTTP, which is what a single-pod stamp uses: the host is reachable only
+inside the pod's network namespace or through a Service the NetworkPolicy restricts. It
+matters once the host runs as a separate workload, which is now the case when the operator
+manages it.
+
+**Not included yet:** token-based quotas, which need entitlements from the control plane.
 
 ## What runs today
 

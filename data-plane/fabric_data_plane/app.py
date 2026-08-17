@@ -268,6 +268,17 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     async def key_state() -> dict[str, Any]:
         return plane.keys.snapshot()
 
+    @router.get("/admin/upstream", summary="How the model host is reached")
+    async def upstream_state() -> dict[str, Any]:
+        settings = plane.settings
+        return {
+            # Reported rather than inferred from a successful request, so a stamp that
+            # believes it uses mTLS and does not can be told apart from one that does.
+            "client_certificate_configured": bool(settings.upstream_client_cert),
+            "authority_pinned": bool(settings.upstream_ca_bundle),
+            "mutual_tls": bool(settings.upstream_client_cert and settings.upstream_ca_bundle),
+        }
+
     @router.get("/admin/limits", summary="Rate limit and concurrency state")
     async def limit_state() -> dict[str, Any]:
         return {
@@ -300,16 +311,51 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     return router
 
 
+def upstream_tls(settings: Settings) -> dict[str, Any]:
+    """Client options for reaching the model host.
+
+    Returns nothing to configure when no material is set, so the default stays plain
+    HTTP rather than half-configured TLS. A partial configuration is refused instead of
+    silently downgraded: a client certificate with no key cannot authenticate, and
+    discovering that as a connection error at request time is worse than at startup.
+    """
+    cert = settings.upstream_client_cert
+    key = settings.upstream_client_key
+    authority = settings.upstream_ca_bundle
+
+    if cert and not key:
+        raise ValueError("upstream_client_cert is set without upstream_client_key")
+    if key and not cert:
+        raise ValueError("upstream_client_key is set without upstream_client_cert")
+
+    options: dict[str, Any] = {}
+    if authority:
+        # Verification against a named authority rather than the system store: a stamp's
+        # model host usually presents a certificate from the cluster's own CA, which the
+        # system store does not know.
+        options["verify"] = authority
+    if cert and key:
+        options["cert"] = (cert, key)
+    return options
+
+
 def build_plane(settings: Settings | None = None, keys: Any = None) -> DataPlane:
     from fabric_data_plane.keys import KeyCache
 
     resolved = settings or get_settings()
+    tls = upstream_tls(resolved)
+    if tls:
+        logger.info(
+            "model host connections use TLS (client certificate: %s, pinned authority: %s)",
+            "yes" if "cert" in tls else "no",
+            "yes" if "verify" in tls else "no",
+        )
     return DataPlane(
         settings=resolved,
         keys=keys or KeyCache(resolved),
         # Follows the file the agent rewrites rather than reading it once.
         registry=ReloadingRegistry(resolved.deployments_file),
-        client=httpx.AsyncClient(),
+        client=httpx.AsyncClient(**tls),
     )
 
 

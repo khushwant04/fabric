@@ -144,6 +144,16 @@ spec:
               value: {{ .Values.dataPlane.limits.burst | quote }}
             - name: FABRIC_DP_MAX_IN_FLIGHT_PER_ACCOUNT
               value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | quote }}
+            {{- if .Values.dataPlane.upstreamTls.clientSecret }}
+            - name: FABRIC_DP_UPSTREAM_CLIENT_CERT
+              value: /etc/fabric/upstream-tls/tls.crt
+            - name: FABRIC_DP_UPSTREAM_CLIENT_KEY
+              value: /etc/fabric/upstream-tls/tls.key
+            {{- end }}
+            {{- if .Values.dataPlane.upstreamTls.caSecret }}
+            - name: FABRIC_DP_UPSTREAM_CA_BUNDLE
+              value: /etc/fabric/upstream-ca/ca.crt
+            {{- end }}
           ports:
             - name: inference
               containerPort: 8080

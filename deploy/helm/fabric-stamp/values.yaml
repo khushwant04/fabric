@@ -137,6 +137,20 @@ dataPlane:
     # a value near that server's own concurrency is the useful setting.
     maxInFlightPerAccount: 0
 
+  # Mutual TLS to the model host. Unset means plain HTTP, which is what a single-pod
+  # stamp uses: the host is reachable only inside the pod's network namespace or through
+  # a Service the NetworkPolicy restricts. This matters once the host runs as a separate
+  # workload, possibly on another node.
+  #
+  # Both halves are needed to mean anything: a client certificate proves who is calling,
+  # and a pinned authority proves who answered.
+  upstreamTls:
+    # Secret holding tls.crt and tls.key for the data plane to present. A cert-manager
+    # Certificate produces exactly this shape.
+    clientSecret: ""
+    # Secret or ConfigMap holding ca.crt for verifying the model host.
+    caSecret: ""
+
   replicas: 1
   logLevel: INFO
   usageBufferSize: 10000
