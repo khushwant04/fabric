@@ -117,6 +117,12 @@ func (m ModelHost) Enabled() bool {
 	return m.Image != ""
 }
 
+// startupFailureThreshold allows 20 minutes at a 10s period. A cold model on a small
+// GPU spends most of that compiling, and the cost of being generous is only a slower
+// report of a genuinely broken server, while the cost of being strict is killing a
+// working one.
+const startupFailureThreshold = 120
+
 // modelCacheMountPath is where weights are visible inside the container.
 const modelCacheMountPath = "/model-cache"
 
@@ -263,11 +269,21 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 			// is generous rather than tight.
 			"failureThreshold": 60,
 		},
+		// A startup probe rather than a long liveness delay. Guessing how long a model
+		// server needs is how a healthy server gets killed: a fixed delay plus a failure
+		// threshold is a deadline, and a T4 compiling graphs for a cold model overran it,
+		// so the container was restarted mid-startup and lost the compilation it had
+		// done. A startup probe gives it a generous window to answer once, and liveness
+		// only begins after that succeeds.
+		"startupProbe": map[string]any{
+			"httpGet":          map[string]any{"path": "/health", "port": "http"},
+			"periodSeconds":    10,
+			"failureThreshold": startupFailureThreshold,
+		},
 		"livenessProbe": map[string]any{
-			"httpGet":             map[string]any{"path": "/health", "port": "http"},
-			"initialDelaySeconds": 300,
-			"periodSeconds":       30,
-			"failureThreshold":    6,
+			"httpGet":          map[string]any{"path": "/health", "port": "http"},
+			"periodSeconds":    30,
+			"failureThreshold": 6,
 		},
 		"volumeMounts": []map[string]any{
 			// A model server needs writable scratch and shared memory; the image is
@@ -281,6 +297,12 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 		"env": []map[string]any{
 			{"name": "HF_HOME", "value": modelCacheMountPath},
 			{"name": "HF_HUB_CACHE", "value": modelCacheMountPath + "/hub"},
+			// Compiled graphs belong on the node's disk for the same reason weights do:
+			// they are expensive to produce and identical on every start. Left on the
+			// container filesystem, a restart recompiles from scratch, which is what
+			// turned one overrunning startup into a loop of them.
+			{"name": "VLLM_CACHE_ROOT", "value": modelCacheMountPath + "/vllm"},
+			{"name": "TORCHINDUCTOR_CACHE_DIR", "value": modelCacheMountPath + "/inductor"},
 		},
 	}
 

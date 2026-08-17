@@ -477,3 +477,28 @@ func TestCacheCanBeDisabled(t *testing.T) {
 		t.Fatalf("expected an ephemeral cache: %s", body)
 	}
 }
+
+func TestStartupIsGatedByAProbeRatherThanAGuessedDelay(t *testing.T) {
+	// A fixed liveness delay plus a failure threshold is a deadline, and a T4 compiling
+	// graphs for a cold model overran it: the container was restarted mid-startup and
+	// lost the compilation it had done, which turned one slow start into a loop.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	body := string(encoded)
+	if !strings.Contains(body, "startupProbe") {
+		t.Fatalf("startup is not gated by a probe: %s", body)
+	}
+	// Liveness must not carry its own long delay, or it becomes the deadline again.
+	if strings.Contains(body, "initialDelaySeconds\":300") {
+		t.Fatal("liveness still guesses how long startup takes")
+	}
+	// Compiled graphs are as expensive to reproduce as weights and just as identical.
+	if !strings.Contains(body, "VLLM_CACHE_ROOT") {
+		t.Fatalf("compilation is not cached on the node: %s", body)
+	}
+}
