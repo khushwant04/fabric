@@ -657,6 +657,7 @@
           "deployments"
         ],
         "summary": "Create deployment intent",
+        "description": "Create deployment intent, once per idempotency key.\n\nA caller that loses the response to this request has no safe move without a key:\nretrying may create a second deployment, and not retrying may leave none. With a\nkey, the retry returns the first deployment instead of creating another.",
         "operationId": "create_v1_accounts__account_id__deployments_post",
         "parameters": [
           {
@@ -670,6 +671,22 @@
               "title": "Account Id"
             },
             "description": "Account identifier"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "requestBody": {

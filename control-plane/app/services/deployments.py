@@ -275,6 +275,7 @@ async def create_placement(
     session.add(placement)
     await session.flush()
 
+
     await record_audit(
         session,
         account_id=account_id,

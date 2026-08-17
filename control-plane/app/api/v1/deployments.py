@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Path, Response, status
+from fastapi import APIRouter, Depends, Header, Path, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
@@ -19,6 +19,7 @@ from app.schemas import (
     PlacementCreateRequest,
     PlacementResponse,
 )
+from app.services import idempotency as idempotency_key_service
 from app.services.deployments import (
     create_deployment,
     create_placement,
@@ -44,9 +45,36 @@ _BASE = "/v1/accounts/{account_id}/deployments"
 )
 async def create(
     payload: DeploymentCreateRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_WRITE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> DeploymentResponse:
+    """Create deployment intent, once per idempotency key.
+
+    A caller that loses the response to this request has no safe move without a key:
+    retrying may create a second deployment, and not retrying may leave none. With a
+    key, the retry returns the first deployment instead of creating another.
+    """
+    key = idempotency_key_service.normalize(idempotency_key)
+
+    if key is not None:
+        reservation = await idempotency_key_service.reserve(
+            session,
+            account_id=principal.account_id,
+            principal_id=principal.principal_id or uuid.UUID(int=0),
+            operation="deployments.create",
+            key=key,
+        )
+        if reservation.replayed:
+            # The first request already created it, so this returns that rather than
+            # acting again. A caller cannot tell the difference, which is the point.
+            existing = await get_deployment(
+                session,
+                principal.account_id,
+                uuid.UUID(reservation.response_reference),
+            )
+            return DeploymentResponse.model_validate(existing)
+
     deployment = await create_deployment(
         session,
         account_id=principal.account_id,
@@ -55,6 +83,19 @@ async def create(
         spec=payload.spec.model_dump(mode="json"),
         actor_principal_id=principal.principal_id,
     )
+
+    if key is not None:
+        # Recorded in the same transaction as the deployment, so a rollback takes the
+        # claim with it and the caller may retry for real.
+        await idempotency_key_service.record_result(
+            session,
+            account_id=principal.account_id,
+            principal_id=principal.principal_id or uuid.UUID(int=0),
+            operation="deployments.create",
+            key=key,
+            reference=str(deployment.id),
+        )
+
     await session.commit()
     return DeploymentResponse.model_validate(deployment)
 

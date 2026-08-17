@@ -46,8 +46,33 @@ and forced. Managed providers hand out such roles by default, so the control pla
 checks its own role at startup and logs the gap, and
 `control-plane/scripts/create-app-role.sql` creates a role the policies bind.
 
-Not implemented in the service: outbox
-delivery workers, request idempotency (the `idempotency_keys` table has no handler),
+### Outbox delivery and idempotent requests
+
+Writers for the transactional outbox already existed: `publish_outbox` is called wherever
+a durable event belongs, so deployment changes, placements, enrollments, and revocations
+were already recorded in the same transaction as the change. What was missing was
+delivery. Nothing drained the table, so events accumulated as an unread log, which is
+indistinguishable from a working outbox until an event needs to have arrived.
+
+A worker now drains it on an interval inside the API process. Each event is attempted in
+its own nested transaction, so one failure neither rolls back events already delivered in
+the batch nor stops the rest. Delivery is at-least-once, oldest first so a stuck event
+cannot starve newer ones behind it, and an event that fails ten times is left unprocessed
+rather than deleted, because a consumer that has failed ten times is broken and removing
+the evidence would hide it. The default consumer logs, since Fabric has no message bus and
+inventing one here would be speculative; a real consumer replaces it without touching the
+writers.
+
+`Idempotency-Key` is honoured on deployment creation. A caller that loses the response has
+no safe move without it: retrying may create a second deployment, not retrying may leave
+none. The key is claimed by an insert rather than a check followed by a write, so two
+concurrent retries cannot both proceed, and it is scoped to an account, a principal, and an
+operation, because a key is a client's label for one intended action rather than a global
+identifier. A claimed key with no recorded result answers 409 rather than blocking, since
+there is nothing yet to replay. Keys lapse after 24 hours and are purged in bounded
+batches, elevated because purging spans accounts.
+
+Not implemented in the service: request idempotency (the `idempotency_keys` table has no handler),
 agent/telemetry credential rotation, and managed-capacity entitlement management
 through the API.
 
