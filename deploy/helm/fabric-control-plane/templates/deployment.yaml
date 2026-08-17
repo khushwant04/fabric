@@ -90,6 +90,19 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.spreadAcrossNodes }}
+      # Preferred, not required: two replicas on one node survive a pod failure but not a
+      # node failure, which is most of what replicas are for. Required would leave the
+      # second replica permanently Pending on a single-node cluster, so the weaker rule is
+      # the one that helps in both cases.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "fabric-control-plane.selectorLabels" . | nindent 14 }}
+      {{- end }}
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}

@@ -115,6 +115,9 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
+# Spread replicas over nodes so a node failure does not take the API with it.
+spreadAcrossNodes: true
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
