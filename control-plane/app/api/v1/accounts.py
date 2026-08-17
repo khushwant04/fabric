@@ -30,6 +30,7 @@ from app.schemas import (
     MemberCreateRequest,
     MembershipResponse,
     MeResponse,
+    SelfResponse,
     UserResponse,
 )
 from app.services.accounts import add_member, create_account, get_account, list_members
@@ -46,6 +47,29 @@ router = APIRouter(tags=["accounts"])
 def _membership_response(account_id: uuid.UUID, user_id: uuid.UUID, role: str, statusv: str):
     return MembershipResponse(
         account_id=account_id, user_id=user_id, role=role, status=statusv
+    )
+
+
+@router.get(
+    "/v1/self",
+    response_model=SelfResponse,
+    summary="Identity behind the presented Fabric token",
+)
+async def read_self(
+    principal: PrincipalContext = Depends(require_control_principal),
+) -> SelfResponse:
+    """Resolve the caller from the token alone, with no identity provider involved.
+
+    /v1/me answers for a person who logged in through Auth0. A caller holding only an API
+    key has no such identity, and without this would have to be told its own account id
+    out of band.
+    """
+    return SelfResponse(
+        account_id=principal.account_id,
+        principal_type=principal.principal_type,
+        principal_id=principal.principal_id,
+        scopes=sorted(principal.scopes),
+        audience=principal.audience,
     )
 
 

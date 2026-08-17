@@ -6,6 +6,8 @@ bodies, and client headers are never authoritative sources of account identity.
 
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -90,7 +92,33 @@ async def require_auth0_user(
 
     Used for onboarding endpoints that must work before any membership exists.
     """
-    return await verifier.verify(extract_bearer_token(request))
+    token = extract_bearer_token(request)
+    # A Fabric token presented here is a caller asking a human-login endpoint to accept a
+    # machine credential. Say that, rather than attempting Auth0 validation and reporting
+    # whatever the identity provider does with a token that was never meant for it, which
+    # surfaced as "signing keys could not be retrieved" and blamed the wrong component.
+    if _looks_like_a_fabric_token(token):
+        raise Unauthorized(
+            "auth0_login_required",
+            "This endpoint authenticates a person through Auth0. A Fabric token cannot be "
+            "used here; see /v1/self for the identity behind an API key.",
+        )
+    return await verifier.verify(token)
+
+
+def _looks_like_a_fabric_token(token: str) -> bool:
+    """Whether a bearer was issued by this control plane, read without verifying it.
+
+    Only used to choose the error message, never to grant anything, so an unverified
+    read of the issuer claim is safe here.
+    """
+    try:
+        payload = token.split(".")[1]
+        padded = payload + "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(padded))
+    except Exception:
+        return False
+    return claims.get("iss") == get_settings().jwt_issuer
 
 
 def _principal_from_claims(claims: dict, audience: str) -> PrincipalContext:
