@@ -208,6 +208,10 @@ spec:
             - --credential-file=/etc/fabric/collector/telemetry-credential
             - --interval={{ .Values.collector.interval }}
             - --queue-capacity={{ .Values.collector.queueCapacity }}
+            {{- with .Values.collector.metrics.endpoint }}
+            - --metrics-endpoint={{ . }}
+            - --metrics-interval={{ $.Values.collector.metrics.interval }}
+            {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

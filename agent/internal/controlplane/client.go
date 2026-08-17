@@ -291,3 +291,12 @@ func (c *Client) ReportUsage(ctx context.Context, records []UsageRecord) (*Usage
 	}
 	return &result, nil
 }
+
+// ReportMetrics submits one metrics sample for this stamp.
+//
+// Separate from usage on purpose: usage is billing-relevant and must not be lost, so it
+// is retried and deduplicated, while a metrics sample is superseded by the next one and
+// retrying a stale reading would report the past as the present.
+func (c *Client) ReportMetrics(ctx context.Context, report any) error {
+	return c.do(ctx, http.MethodPost, "/v1/telemetry/metrics", report, nil, true)
+}

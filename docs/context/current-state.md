@@ -256,8 +256,21 @@ can never be accepted. Per-record rejections are permanent by nature — an unpl
 deployment or an out-of-window timestamp — so they are logged and discarded rather
 than resent forever. 10 Go tests cover this.
 
-Not implemented: runtime and GPU metrics collection, and any store or dashboard that
-consumes usage.
+GPU and runtime metrics are collected alongside usage. The collector samples devices with
+`nvidia-smi` and scrapes an allowlist of the model host's own series, on a separate
+interval from usage: usage is billing-relevant and should be prompt, while metrics
+frequency is a cost decision. A failed metrics report is dropped rather than queued,
+because the next sample supersedes it and retrying would report the past as the present;
+the queue exists for usage, where every record matters.
+
+The control plane accepts them on `POST /v1/telemetry/metrics` under the same credential
+rules as usage, and they are deliberately not stored as rows. A table would be a
+time-series database with no retention, no downsampling, and no query language, growing
+without bound while being awkward to read. The latest sample is kept on the stamp so an
+operator can see it and the rest is logged, which keeps the path real without pretending a
+relational table is a metrics system.
+
+Not implemented: a metrics store, which is an infrastructure choice, and any dashboard.
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 

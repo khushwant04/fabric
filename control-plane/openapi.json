@@ -1722,6 +1722,48 @@
           }
         }
       }
+    },
+    "/v1/telemetry/metrics": {
+      "post": {
+        "tags": [
+          "telemetry"
+        ],
+        "summary": "Report GPU and runtime metrics for this stamp",
+        "description": "Accept a stamp's periodic sample of its devices and model host.\n\nMetrics are operational signal, not billing input, and they are deliberately not\nstored as rows: a time series belongs in a time-series store, and adding a table here\nwould create one with no retention policy, no downsampling, and no query language.\nFabric has no such store yet, so the samples are recorded on the stamp's heartbeat\nstate and logged, which keeps the path real and gives a consumer something to read\nwithout pretending a database is a metrics system.",
+        "operationId": "report_metrics_v1_telemetry_metrics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetricsReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsAcceptedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2361,6 +2403,80 @@
         "title": "EntitlementResponse",
         "description": "Whether an account may place onto Fabric's own managed capacity."
       },
+      "GPUSampleRequest": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 0.0,
+            "title": "Index"
+          },
+          "product": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Product"
+          },
+          "utilization_gpu_percent": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Utilization Gpu Percent"
+          },
+          "utilization_memory_percent": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Utilization Memory Percent"
+          },
+          "memory_used_mib": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Memory Used Mib"
+          },
+          "memory_total_mib": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Memory Total Mib"
+          },
+          "temperature_c": {
+            "type": "number",
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Temperature C"
+          },
+          "power_draw_w": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Power Draw W"
+          },
+          "sm_clock_mhz": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Sm Clock Mhz"
+          },
+          "sm_clock_max_mhz": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Sm Clock Max Mhz"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "index",
+          "product",
+          "utilization_gpu_percent",
+          "utilization_memory_percent",
+          "memory_used_mib",
+          "memory_total_mib",
+          "temperature_c",
+          "power_draw_w",
+          "sm_clock_mhz",
+          "sm_clock_max_mhz"
+        ],
+        "title": "GPUSampleRequest",
+        "description": "One reading of one device on a stamp."
+      },
       "GpuCapability": {
         "properties": {
           "product": {
@@ -2563,6 +2679,57 @@
         ],
         "title": "MembershipResponse"
       },
+      "MetricsAcceptedResponse": {
+        "properties": {
+          "stamp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stamp Id"
+          },
+          "gpus_recorded": {
+            "type": "integer",
+            "title": "Gpus Recorded"
+          },
+          "runtime_recorded": {
+            "type": "boolean",
+            "title": "Runtime Recorded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stamp_id",
+          "gpus_recorded",
+          "runtime_recorded"
+        ],
+        "title": "MetricsAcceptedResponse"
+      },
+      "MetricsReportRequest": {
+        "properties": {
+          "collected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Collected At"
+          },
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/GPUSampleRequest"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Gpus"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeSampleRequest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "collected_at"
+        ],
+        "title": "MetricsReportRequest",
+        "description": "A stamp's periodic sample.\n\nCarries no account and no stamp, for the same reason usage records do not: both are\nderived from the telemetry credential, so a stamp cannot report as another."
+      },
       "PlacementCreateRequest": {
         "properties": {
           "stamp_id": {
@@ -2649,6 +2816,45 @@
         },
         "type": "object",
         "title": "ResourceSpec"
+      },
+      "RuntimeSampleRequest": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Source",
+            "default": ""
+          },
+          "reachable": {
+            "type": "boolean",
+            "title": "Reachable",
+            "default": false
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "maxProperties": 64,
+            "title": "Values"
+          },
+          "unreachable_cause": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unreachable Cause"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RuntimeSampleRequest",
+        "description": "What the model host reported about itself, or why it could not be read."
       },
       "RuntimeSpec": {
         "properties": {

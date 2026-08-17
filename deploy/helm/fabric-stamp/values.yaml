@@ -115,6 +115,14 @@ operator:
 collector:
   enabled: true
   interval: 60s
+  # GPU and runtime metrics, sampled on their own interval: usage is billing-relevant and
+  # should be forwarded promptly, while metrics frequency is a cost decision, and tying
+  # the two together would force one to follow the other.
+  metrics:
+    # Empty disables collection. With the operator managing the host this is normally its
+    # Service; a host operated elsewhere may not expose metrics at all.
+    endpoint: ""
+    interval: 30s
   # Records held while the control plane is unreachable. Oldest are dropped when
   # full, and drops are logged.
   queueCapacity: 10000

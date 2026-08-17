@@ -209,9 +209,53 @@ func (c *Collector) RunOnce(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
+// MetricsEndpoint is the model host's metrics URL, and MetricsInterval how often to
+// sample it. An empty endpoint disables metrics entirely, which is the case on a stamp
+// whose host is operated elsewhere and does not expose one.
+type MetricsOptions struct {
+	Endpoint string
+	Interval time.Duration
+}
+
 // Run forwards usage on an interval until the context ends or a permanent
 // rejection makes further attempts pointless.
 func (c *Collector) Run(ctx context.Context, interval time.Duration) error {
+	return c.RunWithMetrics(ctx, interval, MetricsOptions{})
+}
+
+// RunWithMetrics also samples GPU and runtime metrics on their own interval.
+//
+// Two intervals rather than one: usage should be forwarded promptly because it is
+// billing-relevant, while metrics are a sampled signal whose frequency is a cost
+// decision, and tying them together would force one to follow the other.
+func (c *Collector) RunWithMetrics(
+	ctx context.Context, interval time.Duration, metrics MetricsOptions,
+) error {
+	if metrics.Endpoint != "" && metrics.Interval > 0 {
+		go c.sampleMetrics(ctx, metrics)
+	}
+	return c.runUsage(ctx, interval)
+}
+
+// sampleMetrics reports metrics until the context ends. Failures never stop it: a stamp
+// that cannot report metrics should still report usage.
+func (c *Collector) sampleMetrics(ctx context.Context, metrics MetricsOptions) {
+	ticker := time.NewTicker(metrics.Interval)
+	defer ticker.Stop()
+
+	for {
+		if err := c.ForwardMetrics(ctx, metrics.Endpoint); err != nil {
+			c.logf("metrics not reported: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (c *Collector) runUsage(ctx context.Context, interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

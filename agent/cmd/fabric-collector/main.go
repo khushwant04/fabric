@@ -43,7 +43,12 @@ func main() {
 			"Data-plane administrative base URL")
 		credentialFile = flag.String("credential-file", env("FABRIC_COLLECTOR_CREDENTIAL_FILE", ""),
 			"File holding the write-only telemetry credential")
-		interval = flag.Duration("interval", 60*time.Second, "Forwarding interval")
+		interval        = flag.Duration("interval", 60*time.Second, "Forwarding interval")
+		metricsEndpoint = flag.String(
+			"metrics-endpoint", env("FABRIC_COLLECTOR_METRICS_ENDPOINT", ""),
+			"model host metrics URL; empty disables metrics collection")
+		metricsInterval = flag.Duration("metrics-interval", 30*time.Second,
+			"how often to sample GPU and runtime metrics")
 		capacity = flag.Int("queue-capacity", 10000,
 			"Maximum records held while the control plane is unreachable")
 		timeout        = flag.Duration("timeout", 30*time.Second, "Per-request timeout")
@@ -103,7 +108,14 @@ func main() {
 	}
 
 	logger.Printf("forwarding usage from %s to %s every %s", *dataPlane, *controlPlane, *interval)
-	if err := worker.Run(ctx, *interval); err != nil && ctx.Err() == nil {
+	if *metricsEndpoint != "" {
+		logger.Printf("sampling metrics from %s every %s", *metricsEndpoint, *metricsInterval)
+	}
+	metrics := collector.MetricsOptions{
+		Endpoint: *metricsEndpoint,
+		Interval: *metricsInterval,
+	}
+	if err := worker.RunWithMetrics(ctx, *interval, metrics); err != nil && ctx.Err() == nil {
 		logger.Fatalf("collector stopped: %v", err)
 	}
 }
