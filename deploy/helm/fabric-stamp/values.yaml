@@ -182,6 +182,25 @@ dataPlane:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 1, memory: 1Gi}
 
+# Public exposure of the inference listener through an existing Istio ingress gateway.
+# Only the inference listener is reachable: the administrative listener the collector
+# drains is not in the Service, so nothing here can route to it.
+istio:
+  enabled: false
+  hosts: []
+  gatewaySelector:
+    istio: aks-istio-ingressgateway-external
+  tls:
+    # secret             terminate TLS at the gateway from a Kubernetes secret and
+    #                    redirect plaintext, which is what a token-bearing API needs.
+    # terminatedUpstream something in front already terminates TLS and reaches the
+    #                    cluster over HTTP, leaving that hop unencrypted.
+    mode: secret
+    credentialName: ""
+  # A generation, or a stream held open while tokens are produced, outlives any timeout
+  # chosen for an ordinary API.
+  timeout: 600s
+
 service:
   type: ClusterIP
   port: 80
