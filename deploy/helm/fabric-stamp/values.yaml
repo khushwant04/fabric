@@ -172,6 +172,22 @@ containerSecurityContext:
   capabilities:
     drop: ["ALL"]
 
+# Where the model host runs. These apply to the operator-managed host rather than to the
+# agent and data plane, which need no GPU and should stay schedulable anywhere: pinning
+# them to GPU nodes would waste capacity that only the server can use.
+gpu:
+  # Label selecting GPU nodes. The NVIDIA device plugin sets accelerator labels, and the
+  # exact key differs by distribution, so it is a value rather than an assumption.
+  nodeSelector: {}
+  # GPU nodes are commonly tainted so that only workloads asking for a device land on
+  # them, which means the host needs a matching toleration to schedule at all.
+  tolerations: []
+  # Set when a cluster routes GPU workloads through a specific runtime.
+  runtimeClassName: ""
+  # Spreads hosts across nodes, so two deployments on one stamp do not contend for one
+  # device while another node sits idle.
+  spreadAcrossNodes: true
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

@@ -56,10 +56,19 @@ spec:
             {{- with .cacheClaim }}
             - --model-host-cache-claim={{ . }}
             {{- end }}
-            {{- with .runtimeClassName }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.gpu.runtimeClassName }}
             - --model-host-runtime-class={{ . }}
             {{- end }}
+            {{- range $key, $value := .Values.gpu.nodeSelector }}
+            - --model-host-node-selector={{ $key }}={{ $value }}
             {{- end }}
+            {{- range .Values.gpu.tolerations }}
+            - --model-host-toleration={{ .key }}{{ if .value }}={{ .value }}{{ end }}:{{ .effect | default "NoSchedule" }}
+            {{- end }}
+            {{- if .Values.gpu.spreadAcrossNodes }}
+            - --model-host-spread-across-nodes
             {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}

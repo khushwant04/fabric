@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,9 +69,21 @@ func main() {
 			"PersistentVolumeClaim for the weight cache, so a restart does not refetch")
 		hostRuntimeClass = flag.String("model-host-runtime-class",
 			envOr("FABRIC_OPERATOR_RUNTIME_CLASS", ""), "RuntimeClass for GPU nodes")
+		hostSpread = flag.Bool("model-host-spread-across-nodes", false,
+			"prefer placing model hosts on different nodes")
+
 		once = flag.Bool("once", false, "reconcile once and exit")
 		show = flag.Bool("version", false, "print the version and exit")
 	)
+
+	// Repeatable, so a cluster's GPU labels and taints are expressed as they are rather
+	// than squeezed into one string.
+	var nodeSelectorEntries, tolerationEntries multiFlag
+	flag.Var(&nodeSelectorEntries, "model-host-node-selector",
+		"node selector as key=value; repeat for several")
+	flag.Var(&tolerationEntries, "model-host-toleration",
+		"toleration as key[=value]:effect; repeat for several")
+
 	flag.Parse()
 
 	if *show {
@@ -106,7 +119,22 @@ func main() {
 		Port:                 *hostPort,
 		CacheClaim:           *hostCache,
 		RuntimeClassName:     *hostRuntimeClass,
+		SpreadAcrossNodes:    *hostSpread,
 	}
+
+	selector, err := operator.ParseNodeSelector(nodeSelectorEntries)
+	if err != nil {
+		log.Error("invalid node selector", "error", err)
+		os.Exit(1)
+	}
+	host.NodeSelector = selector
+
+	tolerations, err := operator.ParseTolerations(tolerationEntries)
+	if err != nil {
+		log.Error("invalid toleration", "error", err)
+		os.Exit(1)
+	}
+	host.Tolerations = tolerations
 	if host.Enabled() {
 		// Checked here rather than discovered by a server that starts and then fails:
 		// without these the container would either load nothing or answer to a name
@@ -148,4 +176,14 @@ func main() {
 		log.Error("operator stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+// multiFlag collects a flag given more than once.
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, ",") }
+
+func (m *multiFlag) Set(value string) error {
+	*m = append(*m, value)
+	return nil
 }

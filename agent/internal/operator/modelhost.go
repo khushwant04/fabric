@@ -50,6 +50,49 @@ type ModelHost struct {
 	// CacheClaim mounts an existing PersistentVolumeClaim at the model cache path, so
 	// weights survive a restart instead of being pulled again.
 	CacheClaim string
+	// SpreadAcrossNodes keeps hosts on different nodes, so two deployments on one stamp
+	// do not contend for a single device while another node sits idle.
+	SpreadAcrossNodes bool
+}
+
+// ParseNodeSelector reads repeated key=value flags into a selector.
+func ParseNodeSelector(entries []string) (map[string]string, error) {
+	selector := map[string]string{}
+	for _, entry := range entries {
+		key, value, found := strings.Cut(entry, "=")
+		if !found || key == "" {
+			return nil, fmt.Errorf("node selector %q must be key=value", entry)
+		}
+		selector[key] = value
+	}
+	return selector, nil
+}
+
+// ParseTolerations reads repeated key[=value]:effect flags.
+//
+// A GPU node is usually tainted so only workloads that ask for a device land on it,
+// which means the host cannot schedule at all without a matching toleration. Parsing is
+// strict because a silently ignored toleration looks like a scheduler problem later.
+func ParseTolerations(entries []string) ([]map[string]any, error) {
+	tolerations := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		spec, effect, found := strings.Cut(entry, ":")
+		if !found || spec == "" {
+			return nil, fmt.Errorf("toleration %q must be key[=value]:effect", entry)
+		}
+		key, value, hasValue := strings.Cut(spec, "=")
+		toleration := map[string]any{"key": key, "effect": effect}
+		if hasValue && value != "" {
+			toleration["operator"] = "Equal"
+			toleration["value"] = value
+		} else {
+			// Exists rather than Equal: a taint with no value is the common shape for
+			// "this node has a GPU", and Equal with an empty value would not match it.
+			toleration["operator"] = "Exists"
+		}
+		tolerations = append(tolerations, toleration)
+	}
+	return tolerations, nil
 }
 
 // Enabled reports whether the operator should manage a host at all.
@@ -209,6 +252,28 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 	}
 	if len(host.Tolerations) > 0 {
 		podSpec["tolerations"] = host.Tolerations
+	}
+	if host.SpreadAcrossNodes {
+		// Anti-affinity between model hosts, not a hard constraint: on a single-node
+		// stamp a required rule would leave the second deployment permanently Pending,
+		// which is worse than sharing a node.
+		podSpec["affinity"] = map[string]any{
+			"podAntiAffinity": map[string]any{
+				"preferredDuringSchedulingIgnoredDuringExecution": []map[string]any{
+					{
+						"weight": 100,
+						"podAffinityTerm": map[string]any{
+							"topologyKey": "kubernetes.io/hostname",
+							"labelSelector": map[string]any{
+								"matchLabels": map[string]string{
+									"app.kubernetes.io/name": "fabric-model-host",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
 	}
 
 	return deployment{

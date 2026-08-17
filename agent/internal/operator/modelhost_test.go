@@ -354,3 +354,69 @@ func TestAForeignWorkloadIsNotDeleted(t *testing.T) {
 		t.Fatal("an unrelated workload was deleted")
 	}
 }
+
+func TestNodeSelectorParsing(t *testing.T) {
+	selector, err := ParseNodeSelector([]string{"nvidia.com/gpu.present=true", "zone=a"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if selector["nvidia.com/gpu.present"] != "true" || selector["zone"] != "a" {
+		t.Fatalf("unexpected selector: %v", selector)
+	}
+
+	// A malformed entry fails loudly: a silently dropped selector looks like a
+	// scheduler problem much later.
+	if _, err := ParseNodeSelector([]string{"missing-value"}); err == nil {
+		t.Fatal("a selector without a value was accepted")
+	}
+}
+
+func TestTolerationParsing(t *testing.T) {
+	tolerations, err := ParseTolerations([]string{
+		"nvidia.com/gpu:NoSchedule", "dedicated=inference:NoExecute",
+	})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// A taint with no value is the common "this node has a GPU" shape, and Equal with an
+	// empty value would not match it.
+	if tolerations[0]["operator"] != "Exists" || tolerations[0]["effect"] != "NoSchedule" {
+		t.Fatalf("unexpected toleration: %v", tolerations[0])
+	}
+	if tolerations[1]["operator"] != "Equal" || tolerations[1]["value"] != "inference" {
+		t.Fatalf("unexpected toleration: %v", tolerations[1])
+	}
+
+	if _, err := ParseTolerations([]string{"no-effect"}); err == nil {
+		t.Fatal("a toleration without an effect was accepted")
+	}
+}
+
+func TestSchedulingIsAppliedToTheHostPod(t *testing.T) {
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+	host := testHost()
+	host.NodeSelector = map[string]string{"nvidia.com/gpu.present": "true"}
+	host.Tolerations, _ = ParseTolerations([]string{"nvidia.com/gpu:NoSchedule"})
+	host.RuntimeClassName = "nvidia"
+	host.SpreadAcrossNodes = true
+
+	if _, err := hostReconciler(client, host).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	body := string(encoded)
+	for _, expected := range []string{
+		"nvidia.com/gpu.present", "tolerations", "runtimeClassName", "podAntiAffinity",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("host pod is missing %q", expected)
+		}
+	}
+	// Preferred, not required: on a single-node stamp a hard rule would leave the
+	// second deployment permanently Pending, which is worse than sharing a node.
+	if !strings.Contains(body, "preferredDuringSchedulingIgnoredDuringExecution") {
+		t.Fatal("anti-affinity is required rather than preferred")
+	}
+}

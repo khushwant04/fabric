@@ -145,6 +145,9 @@ and while it is starting the phase is `pending`.
 | Generous readiness threshold | Weight loading is slow, and a tight probe restarts the pod before it finishes |
 | Hosts pruned by label | An operator that restarted would otherwise leak a workload holding a GPU |
 | Workload permissions only with an image | An operator that runs no server cannot create workloads either |
+| GPU scheduling on the host alone | The agent, data plane, and collector need no device, and pinning them to GPU nodes would waste capacity only the server can use |
+| Anti-affinity preferred, not required | On a single-node stamp a hard rule leaves the second deployment permanently Pending, which is worse than sharing a node |
+| Tolerations default to `Exists` without a value | A taint meaning "this node has a GPU" carries no value, and `Equal` with an empty value would not match it |
 
 The CRD is annotated `helm.sh/resource-policy: keep`: deleting a CRD deletes every
 custom resource of that kind, so an accidental uninstall would withdraw every deployment
