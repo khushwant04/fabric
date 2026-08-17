@@ -176,6 +176,22 @@ should use. Verified end to end: an API key exchanged over the public hostname r
 token whose issuer is that hostname, and the same hostname serves the JWKS that verifies
 it.
 
+The data plane's inference listener is exposed the same way, on its own hostname, and
+only that listener: the administrative listener the collector drains is not in the
+Service at all, so no route can reach it. Its gateway timeout is deliberately long,
+because a generation, or a stream held open while tokens are produced, outlives any
+timeout chosen for an ordinary API, and cutting one off mid-answer would bill for work
+never received.
+
+Gateway port names are derived from the release. Several Gateway resources bind the same
+shared ingress workload and Istio merges the servers declared for a port, so two of them
+naming a port identically is a conflict waiting to happen.
+
+Where a CDN proxies these hostnames, its own origin timeout applies on top of the
+gateway's. On plans that cap it at 100 seconds, a non-streaming completion longer than
+that is cut off by the CDN regardless of what the cluster does, so streaming responses
+are the safe default for long generations.
+
 The cluster enforces NetworkPolicy through Cilium and runs Gatekeeper with every
 constraint in `dryrun`, so policy reports violations rather than rejecting workloads. The
 control plane is reached over in-cluster DNS while its public hostname is pending, but
