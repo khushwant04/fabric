@@ -147,6 +147,26 @@ and while it is starting the phase is `pending`.
 | Workload permissions only with an image | An operator that runs no server cannot create workloads either |
 | Weights cached on the node's own disk | They are large, immutable, and only useful to a pod already scheduled there; a GPU SKU's ephemeral disk is local NVMe and already paid for |
 | `float16` rather than `bfloat16` by default | A T4 is compute capability 7.5 with no bfloat16 support, and a server asked for it refuses to start |
+| A startup probe rather than a long liveness delay | A fixed delay plus a failure threshold is a deadline; a cold model compiling graphs on a T4 overran 480 seconds and was killed mid-startup, losing the compilation each time |
+| Compiled graphs cached beside the weights | Expensive to produce, identical on every start, and only useful to a pod already on that node |
+| A placeholder upstream when the operator owns the host | The operator's Service is named after a deployment ID that does not exist at install time, so an unroutable placeholder fails closed until a deployment is placed |
+
+## Deployed environment
+
+One AKS cluster in `centralindia` runs both planes, in separate namespaces, against an
+Azure PostgreSQL server. Measured on that cluster:
+
+| Observation | Value |
+|---|---|
+| Model load | 4.25 GiB of weights in 3.3 s from the node's own disk |
+| Cold start to serving | about 510 s, most of it compiling graphs |
+| Startup window allowed | 20 minutes, after 480 s proved too strict |
+| Attribution | 19 input and 4 output tokens, matching the server's own count |
+
+The cluster enforces NetworkPolicy through Cilium and runs Gatekeeper with every
+constraint in `dryrun`, so policy reports violations rather than rejecting workloads. The
+control plane is reached over in-cluster DNS while its public hostname is pending, but
+tokens still carry the public issuer, so the same tokens stay valid once it is exposed.
 | GPU scheduling on the host alone | The agent, data plane, and collector need no device, and pinning them to GPU nodes would waste capacity only the server can use |
 | Anti-affinity preferred, not required | On a single-node stamp a hard rule leaves the second deployment permanently Pending, which is worse than sharing a node |
 | Tolerations default to `Exists` without a value | A taint meaning "this node has a GPU" carries no value, and `Equal` with an empty value would not match it |

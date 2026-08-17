@@ -27,14 +27,20 @@ A stamp can be installed on Kubernetes with the chart in [`deploy/`](deploy/), a
 [`deploy/scripts/kind-e2e.sh`](deploy/scripts/kind-e2e.sh) verifies the whole loop on
 a throwaway cluster.
 
-A vLLM host has been run on the development GPU serving the launch model, with the
-whole platform loop verified against it: real inference through the data plane, and the
-model's own token counts attributed centrally. That host runs vLLM's own kernels; the
-Fabric substitution is not registered in it, because the version that supports the
-model moved the gated-delta code after the version the adapter targets.
+The platform runs on managed Kubernetes. A control plane and a managed stamp are
+deployed on AKS against Azure PostgreSQL with row-level security in force, and the
+operator runs a vLLM host on a T4 that serves the launch model: a placement creates the
+host, an account's inference token is verified locally by the data plane, real tokens are
+generated on the GPU, and the model's own token counts are attributed back to the account,
+deployment, and stamp. Weights and compiled graphs are cached on the GPU node's own disk.
 
-There is currently no managed AKS/k3s environment, metrics pipeline, dashboard, or
-A10/T4 benchmark result.
+That host runs vLLM's own kernels. The Fabric substitution is not registered in it,
+because the version that supports the model moved the gated-delta code after the version
+the adapter targets.
+
+There is currently no metrics pipeline, dashboard, or T4 benchmark result, and the control
+plane is not yet exposed publicly: it is reached inside the cluster while DNS and a
+certificate for its hostname are pending.
 
 ## Run the control plane
 
