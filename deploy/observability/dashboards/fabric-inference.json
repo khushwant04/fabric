@@ -1,0 +1,151 @@
+{
+  "title": "Fabric — Inference Platform",
+  "uid": "fabric-inference",
+  "tags": ["fabric"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Serving throughput",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Output tokens per second, by deployment",
+      "description": "The model's own count of generated tokens. Split by deployment so two hosts serving the same model can be compared directly.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "tokens/sec" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (deployment_id) (rate(vllm:generation_tokens_total[1m]))",
+          "legendFormat": "{{deployment_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Time to first token (p95)",
+      "description": "What a caller waits before anything comes back. Latency the engine attributes to itself, not including the gateway.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (deployment_id, le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))",
+          "legendFormat": "{{deployment_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests running and queued",
+      "description": "Queued requests mean the engine is saturated: work has arrived that it cannot start yet.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "sum by (deployment_id) (vllm:num_requests_running)",
+          "legendFormat": "running {{deployment_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (deployment_id) (vllm:num_requests_waiting)",
+          "legendFormat": "waiting {{deployment_id}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Time per output token (p95)",
+      "description": "Steady-state decode speed once generation has begun, which is what a long reply is bound by.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (deployment_id, le) (rate(vllm:request_time_per_output_token_seconds_bucket[5m])))",
+          "legendFormat": "{{deployment_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Gateway — what the engine cannot see",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests by outcome",
+      "description": "Includes refusals. A request rejected for an expired token, an unowned deployment, or a concurrency cap never reaches a model host, so it appears in no engine metric at all.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(fabric_dp_requests_total[1m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway latency (p95) and in-flight",
+      "description": "End-to-end as the customer experiences it: authentication, authorization, limits, and the upstream together.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (deployment_id, le) (rate(fabric_dp_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{deployment_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(fabric_dp_requests_in_flight)",
+          "legendFormat": "in flight",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "GPU",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 }
+    },
+    {
+      "type": "timeseries",
+      "title": "GPU utilisation",
+      "description": "Per physical GPU. A serving host that is not utilisation-bound is bound by something else, which is usually memory bandwidth or arrival rate.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "targets": [
+        { "expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "{{Hostname}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GPU memory used",
+      "description": "Weights, activations, and the KV cache together.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "DCGM_FI_DEV_FB_USED", "legendFormat": "{{Hostname}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "KV cache utilisation",
+      "description": "How full the paged cache is. Approaching full is what makes the engine queue rather than admit.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (deployment_id) (vllm:kv_cache_usage_perc)",
+          "legendFormat": "{{deployment_id}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
