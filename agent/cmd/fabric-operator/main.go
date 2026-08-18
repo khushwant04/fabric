@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,15 @@ import (
 )
 
 const version = "0.1.0"
+
+func envInt(name string, fallback int) int {
+	if raw := os.Getenv(name); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil {
+			return value
+		}
+	}
+	return fallback
+}
 
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
@@ -67,6 +77,12 @@ func main() {
 		hostPort  = flag.Int("model-host-port", 8000, "port the server listens on")
 		hostCache = flag.String("model-host-cache-claim", envOr("FABRIC_OPERATOR_CACHE_CLAIM", ""),
 			"PersistentVolumeClaim for the weight cache when the mode is pvc")
+		kernelBlockV = flag.Int("model-host-kernel-block-v",
+			envInt("FABRIC_OPERATOR_KERNEL_BLOCK_V", 0),
+			"value-tile width for the Fabric kernel, 0 to leave it to the kernel")
+		kernelNumWarps = flag.Int("model-host-kernel-num-warps",
+			envInt("FABRIC_OPERATOR_KERNEL_NUM_WARPS", 0),
+			"warps per program for the Fabric kernel, 0 to leave it to the kernel")
 		hostCacheMode = flag.String("model-host-cache-mode",
 			envOr("FABRIC_OPERATOR_CACHE_MODE", "hostPath"),
 			"where weights are cached: hostPath, pvc, or none")
@@ -130,6 +146,8 @@ func main() {
 		EnforceEager:         *hostEager,
 		DType:                *hostDType,
 		Port:                 *hostPort,
+		KernelBlockV:         *kernelBlockV,
+		KernelNumWarps:       *kernelNumWarps,
 		CacheMode:            *hostCacheMode,
 		CacheHostPath:        *hostCachePath,
 		CacheClaim:           *hostCache,

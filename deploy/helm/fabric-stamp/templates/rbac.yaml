@@ -102,3 +102,33 @@ subjects:
     name: {{ include "fabric-stamp.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
+---
+# Nodes are cluster scoped, so describing the hardware needs a cluster role. This is the
+# operator's only permission outside its own namespace, and it is read-only on one
+# resource: several serving settings are properties of the GPU rather than preferences, and
+# a value the hardware cannot execute does not degrade serving, it prevents it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-operator-nodes
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-operator-nodes
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "fabric-stamp.fullname" . }}-operator-nodes
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.fullname" . }}-operator
+    namespace: {{ .Release.Namespace }}

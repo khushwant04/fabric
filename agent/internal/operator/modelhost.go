@@ -56,7 +56,10 @@ type ModelHost struct {
 	// GPU node's ephemeral disk is both fast and already paid for. A single shared claim
 	// was the previous behaviour and was wrong: ReadWriteOnce cannot attach to two nodes,
 	// so the second host on a second node would never start.
-	CacheMode string
+	// KernelBlockV and KernelNumWarps override the Fabric kernel's tiling when it is used.
+	KernelBlockV   int
+	KernelNumWarps int
+	CacheMode      string
 	// CacheHostPath is the directory used when CacheMode is "hostPath". On AKS the
 	// ephemeral disk is mounted at /mnt, which is why the default lives under it.
 	CacheHostPath string
@@ -129,11 +132,22 @@ const startupFailureThreshold = 120
 // conservative and serves the model server's own kernel, because choosing between them
 // automatically would need a policy grounded in measurements this platform does not yet
 // hold for every shape it might serve. A deployment that wants the substitution says so.
-func kernelEnvironment(mode string) []map[string]any {
+func (m ModelHost) kernelEnvironment(mode string) []map[string]any {
 	if mode != "fabric" {
 		return nil
 	}
-	return []map[string]any{{"name": "FABRIC_KERNEL", "value": "1"}}
+	env := []map[string]any{{"name": "FABRIC_KERNEL", "value": "1"}}
+	// Passed through so the kernel's tiling can be measured against a running host
+	// without building an image for every shape. The best shape depends on how the host
+	// runs the kernel, not only on the GPU: captured into a CUDA graph there is no launch
+	// to overlap, and a shape tuned with launches in view loses in service.
+	if m.KernelBlockV > 0 {
+		env = append(env, map[string]any{"name": "FABRIC_KERNEL_BLOCK_V", "value": strconv.Itoa(m.KernelBlockV)})
+	}
+	if m.KernelNumWarps > 0 {
+		env = append(env, map[string]any{"name": "FABRIC_KERNEL_NUM_WARPS", "value": strconv.Itoa(m.KernelNumWarps)})
+	}
+	return env
 }
 
 // modelCacheMountPath is where weights are visible inside the container.
@@ -307,7 +321,7 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 		// Pointed at the mount explicitly rather than relying on the image's default
 		// cache location, which differs between images and would silently put a
 		// multi-gigabyte download on the container filesystem.
-		"env": append(kernelEnvironment(item.Spec.KernelMode), []map[string]any{
+		"env": append(host.kernelEnvironment(item.Spec.KernelMode), []map[string]any{
 			{"name": "HF_HOME", "value": modelCacheMountPath},
 			{"name": "HF_HUB_CACHE", "value": modelCacheMountPath + "/hub"},
 			// Compiled graphs belong on the node's disk for the same reason weights do:

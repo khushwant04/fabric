@@ -133,6 +133,10 @@ type Options struct {
 type Reconciler struct {
 	client  *kube.Client
 	options Options
+	// profiled records that the hardware has been described. Capability does not change
+	// while a node runs, so listing nodes every pass would spend a cluster read per
+	// interval on an answer that does not move.
+	profiled bool
 }
 
 // New builds a reconciler.
@@ -217,6 +221,10 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	ready := map[string]bool{}
 	decisions := map[string]RolloutDecision{}
 	if r.options.ModelHost.Enabled() {
+		// Settings that depend on the hardware are derived before any host is created,
+		// once per pass. A value that cannot work on this GPU is corrected here rather
+		// than discovered when the container exits.
+		r.applyHardwareProfile(ctx)
 		result.HostsTotal = len(serving)
 		// Counted across the pass so the stamp's budget for simultaneous changes is
 		// respected: without this every deployment would change release at once and a
@@ -543,4 +551,53 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// applyHardwareProfile adjusts host settings to the GPUs this stamp actually has.
+//
+// Profiled once and remembered, because nodes do not change capability while running and
+// listing them on every pass would add a cluster read per interval for an answer that does
+// not move. A pool that is replaced changes the node names, which is what invalidates it.
+func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
+	if r.profiled {
+		return
+	}
+
+	profiles, err := ProfileGPUNodes(ctx, r.client, r.options.ModelHost.NodeSelector)
+	if err != nil {
+		// Not fatal. Refusing to serve because the hardware could not be described would
+		// turn a missing permission into an outage, and the configured values may well be
+		// correct. It is logged loudly because an unprofiled stamp is one where a wrong
+		// setting will surface as a crash loop instead.
+		r.options.Log.Warn("could not profile gpu nodes; using configured settings unchanged",
+			"error", err)
+		r.profiled = true
+		return
+	}
+
+	if len(profiles) == 0 {
+		r.options.Log.Warn("no gpu nodes advertise an allocatable device",
+			"selector", r.options.ModelHost.NodeSelector)
+		r.profiled = true
+		return
+	}
+
+	for _, profile := range profiles {
+		r.options.Log.Info("gpu profiled",
+			"node", profile.Node, "model", profile.Model,
+			"compute_capability", profile.Capability.String(),
+			"memory_mib", profile.MemoryMiB, "gpus", profile.Count,
+			"source", profile.Source)
+	}
+
+	adjusted, changes := applyProfile(r.options.ModelHost, profiles)
+	for _, change := range changes {
+		// Recorded at warning level: the platform is overriding what someone asked for,
+		// and doing that silently is its own kind of failure.
+		r.options.Log.Warn("host setting adjusted for this hardware",
+			"setting", change.Setting, "requested", change.From,
+			"applied", change.To, "reason", change.Reason)
+	}
+	r.options.ModelHost = adjusted
+	r.profiled = true
 }
