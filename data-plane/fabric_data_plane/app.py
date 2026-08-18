@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -38,6 +39,7 @@ from fabric_data_plane.errors import (
     api_error_handler,
 )
 from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
+from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.usage import UsageBuffer, UsageRecord
 
@@ -65,6 +67,7 @@ class DataPlane:
         self.registry = registry
         self.client = client
         self.usage = UsageBuffer(settings.usage_buffer_size)
+        self.metrics = Metrics()
         self.rate_limiter = RateLimiter(
             RateLimit(
                 requests_per_minute=settings.rate_limit_requests_per_minute,
@@ -119,6 +122,7 @@ async def _proxy(
     upstream_path: str,
 ) -> JSONResponse | StreamingResponse:
     """Authenticate, authorize, then forward to the deployment's model host."""
+    started = time.perf_counter()
     principal = plane.authenticate(request.headers.get("authorization"))
     payload = await _read_json(request)
     model = _requested_model(payload)
@@ -132,6 +136,13 @@ async def _proxy(
     # never reaches the GPU.
     wait = plane.rate_limiter.check(principal.account_id)
     if wait is not None:
+        # Counted here because a refused request reaches no model host, so it appears in
+        # no engine metric: from the engine's side this traffic never happened.
+        plane.metrics.refused(
+            deployment=str(deployment.deployment_id),
+            account=str(principal.account_id),
+            reason="rate_limited",
+        )
         raise TooManyRequests(
             "rate_limited",
             "This account has exceeded its request rate on this stamp",
@@ -139,6 +150,11 @@ async def _proxy(
         )
 
     if not await plane.concurrency.acquire(principal.account_id):
+        plane.metrics.refused(
+            deployment=str(deployment.deployment_id),
+            account=str(principal.account_id),
+            reason="too_many_in_flight",
+        )
         raise TooManyRequests(
             "too_many_in_flight",
             "This account has too many requests in flight on this stamp",
@@ -151,6 +167,10 @@ async def _proxy(
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
     url = f"{deployment.upstream_url}{upstream_path}"
     headers = forwardable_headers(dict(request.headers))
+
+    deployment_label = str(deployment.deployment_id)
+    account_label = str(principal.account_id)
+    plane.metrics.request_started(deployment_label)
 
     if not streaming:
         # try/finally rather than a context manager: the slot must be returned whether
@@ -176,11 +196,28 @@ async def _proxy(
                     "error": {"code": "upstream_invalid_response", "message": "Non-JSON reply"}
                 }
 
+            usage = body.get("usage") if isinstance(body, dict) else None
             if response.is_success and isinstance(body, dict):
                 plane.record_usage(principal, deployment, body, streamed=False)
                 # Answer with the customer-facing alias, not the upstream's name.
                 body = {**body, "model": deployment.model_alias}
+            plane.metrics.request_finished(
+                deployment=deployment_label,
+                account=account_label,
+                outcome="ok" if response.is_success else "upstream_error",
+                duration_seconds=time.perf_counter() - started,
+                input_tokens=int((usage or {}).get("prompt_tokens") or 0),
+                output_tokens=int((usage or {}).get("completion_tokens") or 0),
+            )
             return JSONResponse(status_code=response.status_code, content=body)
+        except UpstreamUnavailable:
+            plane.metrics.request_finished(
+                deployment=deployment_label,
+                account=account_label,
+                outcome="upstream_unavailable",
+                duration_seconds=time.perf_counter() - started,
+            )
+            raise
         finally:
             await plane.concurrency.release(principal.account_id)
 
@@ -204,6 +241,14 @@ async def _proxy(
             # an error event in the stream itself.
             yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
         finally:
+            # Recorded when the stream ends rather than when it starts, because that is
+            # when the model stopped working for this request.
+            plane.metrics.request_finished(
+                deployment=deployment_label,
+                account=account_label,
+                outcome="ok_streamed",
+                duration_seconds=time.perf_counter() - started,
+            )
             await plane.concurrency.release(principal.account_id)
 
     # Token counts are not reliably present in a streamed reply, so the record
@@ -229,6 +274,17 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
                 for deployment in plane.registry.for_account(principal.account_id)
             ],
         }
+
+    @router.get("/metrics", summary="Prometheus metrics")
+    async def metrics() -> Response:
+        """Unauthenticated on purpose.
+
+        Prometheus scrapes without credentials, and this exposes counts and latencies
+        rather than prompts or replies. It is on the inference listener because that is
+        the listener with a Service in front of it; the administrative listener is
+        deliberately reachable only from inside the pod.
+        """
+        return Response(content=plane.metrics.render(), media_type="text/plain; version=0.0.4")
 
     @router.post(CHAT_COMPLETIONS_PATH, summary="Chat completion")
     async def chat_completions(request: Request):

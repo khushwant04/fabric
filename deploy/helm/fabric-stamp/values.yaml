@@ -102,6 +102,13 @@ operator:
     #             will mount it; a ReadWriteOnce claim cannot attach to two nodes.
     #   none      refetch on every start. Predictable, and correct where no local disk
     #             exists, at the cost of the download.
+    # Tiling for the Fabric kernel, when a deployment asks for it. Zero leaves the
+    # choice to the kernel. The right shape depends on how the host runs it: captured
+    # into a CUDA graph there is no launch to overlap, so a shape tuned by timing
+    # individual launches loses in service.
+    kernel:
+      blockV: 0
+      numWarps: 0
     cache:
       mode: hostPath
       # AKS mounts the ephemeral disk at /mnt.
@@ -200,6 +207,12 @@ istio:
   # A generation, or a stream held open while tokens are produced, outlives any timeout
   # chosen for an ordinary API.
   timeout: 600s
+
+# Prometheus scraping of the model hosts and the gateway. Off by default because it
+# requires the ServiceMonitor CRD, which only exists where Prometheus is installed.
+monitoring:
+  enabled: false
+  interval: 15s
 
 service:
   type: ClusterIP
