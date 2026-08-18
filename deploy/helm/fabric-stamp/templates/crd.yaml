@@ -87,6 +87,13 @@ spec:
                   type: string
                   description: Model name the upstream host expects.
                   maxLength: 200
+                kernelMode:
+                  type: string
+                  description: |
+                    Which decode kernel the model host should use. "fabric" selects the
+                    Fabric substitution, "standard" the server's own, and "auto" leaves
+                    the choice to the platform, which currently means the server's own.
+                  enum: [auto, fabric, standard]
                 generation:
                   type: integer
                   description: Control-plane generation this declaration came from.

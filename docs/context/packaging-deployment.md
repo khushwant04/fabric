@@ -151,6 +151,37 @@ and while it is starting the phase is `pending`.
 | Compiled graphs cached beside the weights | Expensive to produce, identical on every start, and only useful to a pod already on that node |
 | A placeholder upstream when the operator owns the host | The operator's Service is named after a deployment ID that does not exist at install time, so an unroutable placeholder fails closed until a deployment is placed |
 
+## Hardware profiling
+
+Several serving settings are properties of the GPU rather than preferences, and getting one
+wrong does not make serving slower, it prevents it. A host asked for bfloat16 on a T4 exits
+before it listens, because compute capability 7.5 has no bfloat16 at all. That happened
+here, from a chart default that was correct on the GPU it was written for.
+
+The operator therefore describes the hardware before it creates anything. It reads the GPU
+nodes matching its own placement selector, prefers labels naming the device where GPU
+feature discovery provides them, and otherwise infers the device from the machine type,
+because compute capability is a property of the chip and the chip is implied by the SKU.
+Which of the two it used is recorded, so a profile inferred from a machine type can be told
+apart from one measured on the device.
+
+Only settings that cannot work are changed. A merely slower choice is left alone: silently
+improving a value would make the platform unpredictable, and the operator who set it may
+know something the platform does not. When a value is overridden the reason names the
+hardware, at warning level, because changing what somebody asked for without saying so is
+its own kind of failure.
+
+Where a pool holds different GPUs, the weakest decides. A host may be scheduled onto any
+node in the pool, and a setting that only works on the best of them fails intermittently,
+which is harder to diagnose than failing always.
+
+| Observation from the deployed cluster | |
+|---|---|
+| Profiled | `Tesla T4`, compute capability 7.5, 16384 MiB, 1 GPU per node |
+| Source | machine type `Standard_NC4as_T4_v3` |
+| Requested | `bfloat16` |
+| Applied | `float16`, with the reason recorded |
+
 ## Deployed environment
 
 One AKS cluster in `centralindia` runs both planes, in separate namespaces, against an

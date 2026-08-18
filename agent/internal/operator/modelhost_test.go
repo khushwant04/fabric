@@ -502,3 +502,29 @@ func TestStartupIsGatedByAProbeRatherThanAGuessedDelay(t *testing.T) {
 		t.Fatalf("compilation is not cached on the node: %s", body)
 	}
 }
+
+func TestOnlyAnExplicitRequestSelectsTheFabricKernel(t *testing.T) {
+	// The control plane has accepted a kernel choice per deployment since the beginning
+	// and nothing acted on it, so a deployment could ask for the Fabric kernel and be
+	// served by the model server's own.
+	for mode, expected := range map[string]bool{
+		"fabric":   true,
+		"standard": false,
+		"auto":     false,
+		"":         false,
+	} {
+		resource := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+		resource.Spec.KernelMode = mode
+		state, client := newHostServer(t, resource)
+
+		if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+			t.Fatalf("reconcile with mode %q: %v", mode, err)
+		}
+
+		encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+		got := strings.Contains(string(encoded), "FABRIC_KERNEL")
+		if got != expected {
+			t.Fatalf("mode %q: substitution enabled = %v, want %v", mode, got, expected)
+		}
+	}
+}

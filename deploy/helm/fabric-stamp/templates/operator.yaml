@@ -58,6 +58,12 @@ spec:
             {{- if .enforceEager }}
             - --model-host-enforce-eager
             {{- end }}
+            {{- if gt (int .kernel.blockV) 0 }}
+            - --model-host-kernel-block-v={{ .kernel.blockV }}
+            {{- end }}
+            {{- if gt (int .kernel.numWarps) 0 }}
+            - --model-host-kernel-num-warps={{ .kernel.numWarps }}
+            {{- end }}
             - --model-host-cache-mode={{ .cache.mode }}
             {{- with .cache.hostPath }}
             - --model-host-cache-host-path={{ . }}

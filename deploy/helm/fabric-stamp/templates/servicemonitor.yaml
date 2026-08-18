@@ -1,0 +1,52 @@
+{{- if .Values.monitoring.enabled }}
+# Scrapes whatever model hosts exist, rather than a fixed list. The operator creates and
+# removes hosts as deployments are placed and withdrawn, so a selector on the label it
+# sets keeps monitoring correct without anything else being updated.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-model-hosts
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fabric-model-host
+  endpoints:
+    # The model server publishes its own engine metrics here: queue depth, cache use,
+    # time to first token, tokens produced.
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.interval }}
+      relabelings:
+        # Carried through so a dashboard can separate one deployment from another, which
+        # is what makes a comparison between two hosts of the same model possible.
+        - sourceLabels: [__meta_kubernetes_service_label_fabric_khushwant_dev_deployment_id]
+          targetLabel: deployment_id
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: gpu_node
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-data-plane
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "fabric-stamp.selectorLabels" . | nindent 6 }}
+  endpoints:
+    # The gateway's own view: what it accepted, refused, and how long upstreams took.
+    # Distinct from the engine's metrics, because a request refused before it reaches a
+    # model host never appears in the engine's numbers at all.
+    - port: inference
+      path: /metrics
+      interval: {{ .Values.monitoring.interval }}
+{{- end }}

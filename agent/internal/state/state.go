@@ -46,6 +46,10 @@ type Deployment struct {
 	ModelAlias    string `json:"model_alias"`
 	UpstreamURL   string `json:"upstream_url"`
 	UpstreamModel string `json:"upstream_model,omitempty"`
+	// KernelMode is carried for the operator's benefit, not the data plane's: the data
+	// plane reads the keys it knows and ignores the rest, while the operator needs to
+	// know which decode kernel the deployment asked for.
+	KernelMode string `json:"kernel_mode,omitempty"`
 }
 
 // DeploymentsFile is the document the data plane loads.
