@@ -8,6 +8,7 @@ from app.api.v1 import (
     accounts,
     api_keys,
     deployments,
+    identity_providers,
     service_principals,
     stamps,
     system,
@@ -21,6 +22,7 @@ api_router.include_router(tokens.router)
 api_router.include_router(accounts.router)
 api_router.include_router(service_principals.router)
 api_router.include_router(api_keys.router)
+api_router.include_router(identity_providers.router)
 api_router.include_router(deployments.router)
 api_router.include_router(stamps.router)
 api_router.include_router(telemetry.router)
