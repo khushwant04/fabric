@@ -25,11 +25,49 @@ class TokenRequest(BaseModel):
     the account from the stored key record and ignores any selector.
     """
 
-    grant_type: Literal["auth0_token", "api_key"]
+    grant_type: Literal["auth0_token", "api_key", "oidc_token"]
     audience: Literal["fabric-control", "fabric-inference"] = scope_defs.AUDIENCE_CONTROL
-    assertion: str | None = Field(default=None, description="Auth0 access token")
+    assertion: str | None = Field(
+        default=None,
+        description="Access token from Auth0 or from the account's own OIDC provider",
+    )
     api_key: str | None = Field(default=None, description="Fabric API key")
     account_id: uuid.UUID | None = None
+
+
+class OIDCProviderRequest(BaseModel):
+    """An identity provider an account brings for its own people."""
+
+    issuer: str = Field(description="Issuer URL, matched exactly against token claims")
+    audience: str = Field(description="Audience the provider mints for this platform")
+    jwks_uri: str | None = Field(
+        default=None,
+        description="Signing keys. Discovered from the issuer when omitted, which is "
+        "preferable: the provider's own document is authoritative.",
+    )
+    subject_claim: str = Field(default="sub", max_length=100)
+    email_claim: str = Field(default="email", max_length=100)
+    auto_provision_role: Literal["viewer", "developer"] | None = Field(
+        default=None,
+        description="Role granted on first sign-in to a verified person with no "
+        "membership. Omitted means people are admitted individually.",
+    )
+
+
+class OIDCProviderResponse(BaseModel):
+    id: uuid.UUID
+    account_id: uuid.UUID
+    issuer: str
+    jwks_uri: str
+    audience: str
+    subject_claim: str
+    email_claim: str
+    auto_provision_role: str | None
+    status: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TokenResponse(BaseModel):

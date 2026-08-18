@@ -161,6 +161,39 @@ class ServicePrincipal(Base):
     )
 
 
+class AccountOIDCProvider(Base):
+    """An identity provider an account brings for its own people.
+
+    Fabric's own Auth0 tenant works for Fabric's staff and serves customers badly: it asks
+    every organisation to keep its people in a directory it does not control. An account
+    that points at its own issuer has its own people recognised without moving them.
+    """
+
+    __tablename__ = "account_oidc_providers"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    issuer: Mapped[str] = mapped_column(String(500), nullable=False)
+    jwks_uri: Mapped[str] = mapped_column(String(500), nullable=False)
+    audience: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Providers disagree about which claim carries a stable identifier: "sub" is standard,
+    # some deployments prefer "oid" or "upn". A provider that cannot be configured cannot
+    # be used.
+    subject_claim: Mapped[str] = mapped_column(String(100), nullable=False, default="sub")
+    email_claim: Mapped[str] = mapped_column(String(100), nullable=False, default="email")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    # When set, a verified person with no membership is given this role on first sign-in.
+    # Off unless chosen: recognition proves identity, not authorisation.
+    auto_provision_role: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[dt.datetime] = _created_at()
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+
+
 class ApiKey(Base):
     """An account-owned long-lived credential exchanged for short-lived JWTs."""
 
