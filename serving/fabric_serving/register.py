@@ -37,11 +37,34 @@ _CALLER_MODULES = ("vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn",)
 
 _OP_NAME = "fused_recurrent_gated_delta_rule_packed_decode"
 
-#: Chosen by measurement on the T4, where a 16-wide value tile with one warp was fastest
-#: or tied at every batch size tried. The reasoning beforehand pointed the other way, at
-#: wider tiles reading q and k fewer times, and the hardware disagreed: a small GPU would
-#: rather have more programs to overlap than less repeated work per program.
-_TILE = {"block_v": 16, "num_warps": 1}
+#: The default is vLLM's own tiling, so a substitution that nobody has tuned is a
+#: like-for-like swap of the arithmetic and not an accidental change of shape.
+#:
+#: A 16-wide tile measured faster in isolation and slower in service. The difference is
+#: where the kernel runs: vLLM captures decode into CUDA graphs, and inside a graph there
+#: is no launch to overlap, so a shape that won by hiding launch overhead has nothing left
+#: to win with and pays for reading q and k once per tile. Tiles are therefore chosen by
+#: measuring the way the host runs them, and are overridable per host so that measurement
+#: does not need a new image.
+_DEFAULT_TILE = {"block_v": 32, "num_warps": 1}
+
+
+def _tile_from_environment() -> dict[str, int]:
+    tile = dict(_DEFAULT_TILE)
+    for key, variable in (("block_v", "FABRIC_KERNEL_BLOCK_V"), ("num_warps", "FABRIC_KERNEL_NUM_WARPS")):
+        raw = os.environ.get(variable, "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value > 0:
+            tile[key] = value
+    return tile
+
+
+_TILE = _tile_from_environment()
 
 
 def _fabric_packed_decode(*args: Any, **kwargs: Any):

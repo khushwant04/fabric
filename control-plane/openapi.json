@@ -963,6 +963,141 @@
         "title": "MetricsReportRequest",
         "type": "object"
       },
+      "OIDCProviderRequest": {
+        "description": "An identity provider an account brings for its own people.",
+        "properties": {
+          "audience": {
+            "description": "Audience the provider mints for this platform",
+            "title": "Audience",
+            "type": "string"
+          },
+          "auto_provision_role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "viewer",
+                  "developer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Role granted on first sign-in to a verified person with no membership. Omitted means people are admitted individually.",
+            "title": "Auto Provision Role"
+          },
+          "email_claim": {
+            "default": "email",
+            "maxLength": 100,
+            "title": "Email Claim",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "Issuer URL, matched exactly against token claims",
+            "title": "Issuer",
+            "type": "string"
+          },
+          "jwks_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Signing keys. Discovered from the issuer when omitted, which is preferable: the provider's own document is authoritative.",
+            "title": "Jwks Uri"
+          },
+          "subject_claim": {
+            "default": "sub",
+            "maxLength": 100,
+            "title": "Subject Claim",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer",
+          "audience"
+        ],
+        "title": "OIDCProviderRequest",
+        "type": "object"
+      },
+      "OIDCProviderResponse": {
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "audience": {
+            "title": "Audience",
+            "type": "string"
+          },
+          "auto_provision_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Provision Role"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email_claim": {
+            "title": "Email Claim",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "issuer": {
+            "title": "Issuer",
+            "type": "string"
+          },
+          "jwks_uri": {
+            "title": "Jwks Uri",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subject_claim": {
+            "title": "Subject Claim",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "issuer",
+          "jwks_uri",
+          "audience",
+          "subject_claim",
+          "email_claim",
+          "auto_provision_role",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OIDCProviderResponse",
+        "type": "object"
+      },
       "PlacementCreateRequest": {
         "properties": {
           "stamp_id": {
@@ -1684,7 +1819,7 @@
                 "type": "null"
               }
             ],
-            "description": "Auth0 access token",
+            "description": "Access token from Auth0 or from the account's own OIDC provider",
             "title": "Assertion"
           },
           "audience": {
@@ -1699,7 +1834,8 @@
           "grant_type": {
             "enum": [
               "auth0_token",
-              "api_key"
+              "api_key",
+              "oidc_token"
             ],
             "title": "Grant Type",
             "type": "string"
@@ -3026,6 +3162,142 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/oidc-provider": {
+      "delete": {
+        "description": "Remove the provider.\n\nPeople already recognised through it keep their local records and memberships, so\nremoving a provider withdraws a way of proving identity rather than deleting the\nidentities. Tokens already issued remain valid until they expire, as with every other\ncredential here.",
+        "operationId": "remove_provider_v1_accounts__account_id__oidc_provider_delete",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop trusting this account's identity provider",
+        "tags": [
+          "identity-providers"
+        ]
+      },
+      "get": {
+        "operationId": "read_provider_v1_accounts__account_id__oidc_provider_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OIDCProviderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read this account's identity provider",
+        "tags": [
+          "identity-providers"
+        ]
+      },
+      "put": {
+        "description": "Point the account at its own issuer.\n\nIdempotent: an account has one provider, and registering again replaces it. Several\nwould make \"which provider does this token belong to\" a guess, and guessing which\nissuer to trust is how a token from one directory is accepted as another's.",
+        "operationId": "put_provider_v1_accounts__account_id__oidc_provider_put",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OIDCProviderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OIDCProviderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register or replace this account's identity provider",
+        "tags": [
+          "identity-providers"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/service-principals": {
       "get": {
         "operationId": "list_all_v1_accounts__account_id__service_principals_get",
@@ -3722,7 +3994,7 @@
     },
     "/v1/token": {
       "post": {
-        "description": "Issue exactly one account-bound Fabric token.\n\nAuth0 exchange resolves account membership and honors an explicit\n``account_id``. API-key exchange ignores any selector and derives the account\nand scopes from the stored key record.",
+        "description": "Issue exactly one account-bound Fabric token.\n\nAuth0 exchange resolves account membership and honors an explicit\n``account_id``. API-key exchange ignores any selector and derives the account\nand scopes from the stored key record. OIDC exchange derives the account from\nwhichever one registered the token's issuer.",
         "operationId": "create_token_v1_token_post",
         "requestBody": {
           "content": {

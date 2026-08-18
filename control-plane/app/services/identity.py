@@ -24,6 +24,8 @@ from app.models import (
     User,
 )
 from app.schemas import TokenResponse
+from app.services import oidc
+from app.services.accounts import add_member
 from app.services.audit import record_audit
 
 
@@ -150,6 +152,87 @@ async def exchange_auth0_token(
     )
     return TokenResponse(
         access_token=token,
+        expires_in=expires_in,
+        account_id=account.id,
+        scope=" ".join(granted),
+    )
+
+
+async def exchange_oidc_token(
+    session: AsyncSession, token: str, *, audience: str
+) -> TokenResponse:
+    """Exchange a token from an account's own identity provider for a Fabric JWT.
+
+    The account is not selected by the caller here, unlike the Auth0 path. It is whichever
+    account registered the token's issuer, which is a fact about the provider rather than a
+    claim in the request: a person authenticated by an organisation's directory is a person
+    of that organisation.
+
+    Membership is still required. Being recognised by an account's provider proves who
+    somebody is, not that they were granted access, and conflating the two would let anyone
+    with a directory account hold a platform credential.
+    """
+    # Runs before an account is known: the issuer is matched against registered providers,
+    # and only then does an owning account exist as a fact.
+    await declare_system(session)
+
+    identity = await oidc.verify_token(session, token)
+    user = await oidc.ensure_user(session, identity)
+
+    memberships = await active_memberships(session, user.id)
+    selected = next(
+        (pair for pair in memberships if pair[1].id == identity.account_id),
+        None,
+    )
+    if selected is None:
+        provider = await oidc.get_provider(session, account_id=identity.account_id)
+        if provider.auto_provision_role is None:
+            raise Forbidden(
+                "account_membership_required",
+                "This identity is recognised by the account's provider but has no active "
+                "membership of it",
+            )
+        # Provisioned on first sign-in because the account asked for that. The role comes
+        # from the provider's configuration rather than from anything in the token: a claim
+        # deciding its own privileges would let whoever controls the directory grant
+        # themselves whatever they liked.
+        await add_member(
+            session,
+            account_id=identity.account_id,
+            auth0_subject=identity.namespaced_subject,
+            email=identity.email,
+            role=provider.auto_provision_role,
+            actor_id=f"oidc:{identity.issuer}",
+        )
+        memberships = await active_memberships(session, user.id)
+        selected = next(
+            (pair for pair in memberships if pair[1].id == identity.account_id),
+            None,
+        )
+        if selected is None:  # pragma: no cover - defensive
+            raise Forbidden(
+                "account_membership_required",
+                "Membership could not be provisioned for this identity",
+            )
+
+    membership, account = selected
+    settings = get_settings()
+    ttl = (
+        settings.inference_token_ttl_seconds
+        if audience == scope_defs.AUDIENCE_INFERENCE
+        else settings.control_token_ttl_seconds
+    )
+    granted = _scopes_for_audience(audience, scope_defs.scopes_for_role(membership.role))
+    issued, expires_in, _expires_at = issue_token(
+        subject=str(user.id),
+        audience=audience,
+        account_id=account.id,
+        principal_type="user",
+        scopes=granted,
+        ttl_seconds=ttl,
+    )
+    return TokenResponse(
+        access_token=issued,
         expires_in=expires_in,
         account_id=account.id,
         scope=" ".join(granted),

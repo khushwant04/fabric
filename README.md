@@ -144,7 +144,9 @@ The frontend currently displays starter content and is not connected to a Fabric
 
 ## Documentation
 
-Start with the [project context index](docs/context/README.md).
+Start with the [project context index](docs/context/README.md), or the
+[project review](docs/project-review.md) for the problem statement, methodology, measured
+results, and what is deliberately not claimed.
 
 - [Current implementation](docs/context/current-state.md)
 - [Product requirements](docs/context/product-requirements.md)

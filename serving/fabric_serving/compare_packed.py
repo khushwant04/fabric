@@ -28,6 +28,9 @@ from fabric_serving.vllm_ops import resolve  # noqa: E402
 # model nobody is serving.
 LAUNCH_MODEL = {"H": 16, "HV": 16, "K": 128, "V": 128}
 
+#: Set by the command line before any sampler is built.
+_USE_GRAPH = False
+
 
 def make_inputs(batch: int, shapes: dict[str, int], dtype: torch.dtype, seed: int = 0):
     torch.manual_seed(seed)
@@ -117,6 +120,58 @@ def _sampler(fn, inputs, dtype, **kwargs):
     return sample
 
 
+def _graph_sampler(fn, inputs, dtype, **kwargs):
+    """Return a sampler that replays the kernel from a captured CUDA graph.
+
+    This is how vLLM runs decode. Timing individual launches answers a different
+    question: it includes the host enqueueing the work, so a kernel shaped to hide launch
+    overhead looks better than it will ever be in service, which is exactly the mistake a
+    first tuning pass made here.
+    """
+    HV, V = inputs["shapes"]
+    batch = inputs["mixed_qkv"].shape[0]
+    state = inputs["state"].clone()
+    out = torch.empty(batch, 1, HV, V, device="cuda", dtype=dtype)
+    inner = 20
+
+    def once():
+        fn(
+            inputs["mixed_qkv"], inputs["a"], inputs["b"], inputs["A_log"],
+            inputs["dt_bias"], inputs["scale"], state, out, inputs["indices"], True,
+            **kwargs,
+        )
+
+    # Warm up on a side stream before capture, as capture refuses to record a kernel that
+    # still needs compiling.
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):
+        for _ in range(5):
+            once()
+    torch.cuda.current_stream().wait_stream(side)
+    torch.cuda.synchronize()
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        for _ in range(inner):
+            once()
+
+    def sample() -> float:
+        state.copy_(inputs["state"])
+        torch.cuda.synchronize()
+        first = torch.cuda.Event(enable_timing=True)
+        last = torch.cuda.Event(enable_timing=True)
+        first.record()
+        graph.replay()
+        last.record()
+        torch.cuda.synchronize()
+        return first.elapsed_time(last) * 1000.0 / inner
+
+    for _ in range(3):
+        sample()
+    return sample
+
+
 def compare_interleaved(candidates: dict, inputs, dtype, rounds: int) -> dict[str, float]:
     """Time several implementations by alternating between them.
 
@@ -125,7 +180,8 @@ def compare_interleaved(candidates: dict, inputs, dtype, rounds: int) -> dict[st
     vLLM slower at eight sequences than at sixteen, which cannot be true. Alternating
     spreads any drift across all of them equally.
     """
-    samplers = {name: _sampler(fn, inputs, dtype, **kw) for name, (fn, kw) in candidates.items()}
+    build = _graph_sampler if _USE_GRAPH else _sampler
+    samplers = {name: build(fn, inputs, dtype, **kw) for name, (fn, kw) in candidates.items()}
     collected: dict[str, list[float]] = {name: [] for name in samplers}
     for _ in range(rounds):
         for name, sample in samplers.items():
@@ -141,7 +197,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reps", type=int, default=200)
     parser.add_argument("--sweep", action="store_true", help="also try other tile shapes")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--cuda-graph",
+        action="store_true",
+        help="replay from a captured graph, which is how vLLM runs decode",
+    )
     args = parser.parse_args(argv)
+
+    global _USE_GRAPH
+    _USE_GRAPH = args.cuda_graph
 
     if not torch.cuda.is_available():
         print("no CUDA device", file=sys.stderr)
@@ -221,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
         "vllm_module": ops.module,
         "dtype": args.dtype,
         "shapes": LAUNCH_MODEL,
+        "measured_in_cuda_graph": args.cuda_graph,
         "results": results,
     }
 
