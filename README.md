@@ -1,171 +1,269 @@
 # Fabric
 
-Fabric is an early-stage project for building a technically differentiated, managed inference platform for a private, version-pinned launch model. The intended platform combines a vLLM serving host, Fabric Triton kernels, direct regional inference data planes, and declarative deployment to T4 AKS and GPU VM/k3s stamps.
+A managed inference platform. Customers get an OpenAI-compatible API; the platform runs the
+GPUs, enforces tenant isolation, meters usage, and reconciles declared intent onto real
+hardware.
 
-> **Project status:** Research prototype. The managed platform is planned and is not implemented yet. See [Current State](docs/context/current-state.md) for the exact boundary.
+Built around a strict control-plane/data-plane split: inference never traverses the control
+plane, so serving continues when the control plane does not.
 
-## What exists today
+**Status.** Deployed and serving. Two NVIDIA T4 nodes on Azure Kubernetes, PostgreSQL with
+row-level security in force, three public HTTPS endpoints, per-request metering. The frontend
+is a scaffold and there is no autoscaling. See [Current state](docs/context/current-state.md)
+for the exact boundary, and the [project review](docs/project-review.md) for measured results
+and the claims those measurements do not support.
 
-- A control-plane API in [`control-plane/`](control-plane/) with Auth0 validation, accounts and memberships, API keys, token exchange, deployment intent, and inference-stamp enrollment.
-- A shape-generic, single-token gated-delta Triton kernel in [`runtime/kernels/gated_delta_decode.py`](runtime/kernels/gated_delta_decode.py).
-- A CUDA correctness and microbenchmark harness in [`runtime/benchmarks/gated_delta_decode_bench.py`](runtime/benchmarks/gated_delta_decode_bench.py).
-- A host-facing kernel dispatch and fallback layer in [`runtime/integration/dispatch.py`](runtime/integration/dispatch.py) implementing the `auto`/`fabric`/`standard` kernel modes; no model host calls it yet.
-- A Go cluster agent in [`agent/`](agent/) that enrolls a stamp, pulls desired state, renders the data plane's local configuration, and reports status; it creates no Kubernetes resources.
-- A Go usage collector in [`agent/cmd/fabric-collector/`](agent/cmd/fabric-collector/) that drains the data plane and forwards usage with a write-only telemetry credential it cannot use for anything else.
-- A `FabricModelDeployment` CRD and a cluster-local operator in [`agent/`](agent/) that reconcile placed deployments into the data plane's configuration and report what was applied; the operator creates no model-host workload.
-- Container images and Helm charts in [`deploy/`](deploy/) that install a stamp — agent, data plane, collector, and optionally the operator — and the control plane itself on Kubernetes, verified on a real cluster against PostgreSQL with row-level security in force.
-- An inference data plane in [`data-plane/`](data-plane/) that verifies Fabric inference JWTs locally, enforces account ownership of deployments, and proxies OpenAI-compatible requests to a model host.
-- A vLLM decode-op substitution in [`serving/`](serving/) that returns identical outputs to vLLM's own gated-delta kernel. At the launch model's own layer shapes it is 1.19x at single-sequence decode and at parity (0.98–1.00x) at 16 and 32 sequences, per three committed artifacts; it is not registered in a live vLLM instance.
-- A Next.js 16 frontend scaffold in [`v1/`](v1/) whose page and metadata still contain starter content; it has no Fabric product workflow.
-- A vendored Transformers checkout in [`utils/transformers/`](utils/transformers/) used as a model implementation reference.
+---
 
-Usage flows end to end: the data plane buffers records, the `fabric-collector`
-binary drains and forwards them, and the control plane attributes them to the
-account and stamp. No metrics pipeline or dashboard consumes them yet.
+## Architecture
 
-A stamp can be installed on Kubernetes with the chart in [`deploy/`](deploy/), and
-[`deploy/scripts/kind-e2e.sh`](deploy/scripts/kind-e2e.sh) verifies the whole loop on
-a throwaway cluster.
+```
+                        CUSTOMER
+                           |
+        +------------------+------------------+
+        | control operations          inference requests
+        v                                     v
++---------------------------+     +---------------------------+
+|      CONTROL PLANE        |     |   DATA PLANE (in stamp)   |
+|                           |     |                           |
+|  accounts, members        |     |  verifies JWT locally     |
+|  API keys, OIDC providers |     |  enforces ownership       |
+|  token exchange (RS256)   |     |  rate + concurrency caps  |
+|  deployments, placements  |     |  proxies to model host    |
+|  stamp enrollment         |     |  buffers usage            |
+|  usage ingestion          |     |  publishes metrics        |
++-------------+-------------+     +-------------+-------------+
+              |  PostgreSQL                    |
+              |  (RLS forced)                  v
+              |                    +---------------------------+
+              |                    |  MODEL HOST (vLLM, GPU)   |
+              |                    |  weights on node NVMe     |
+              |                    |  Fabric or vLLM kernel    |
+              |                    +---------------------------+
+              |  desired state                 ^
+              |  (outbound only)               | creates
+              v                                |
++--------------------------------------------------------------+
+|                     STAMP (Kubernetes)                       |
+|  AGENT ----> renders data-plane config, publishes CRD        |
+|  OPERATOR -> reconciles CRD into host + Service, rollout     |
+|  COLLECTOR-> drains usage, forwards write-only telemetry     |
++--------------------------------------------------------------+
+```
 
-The platform runs on managed Kubernetes. A control plane and a managed stamp are
-deployed on AKS against Azure PostgreSQL with row-level security in force, and the
-operator runs a vLLM host on a T4 that serves the launch model: a placement creates the
-host, an account's inference token is verified locally by the data plane, real tokens are
-generated on the GPU, and the model's own token counts are attributed back to the account,
-deployment, and stamp. Weights and compiled graphs are cached on the GPU node's own disk.
+The agent polls outbound only. The control plane never dials into a customer cluster.
 
-That host runs vLLM's own kernels. The Fabric substitution is not registered in it,
-because the version that supports the model moved the gated-delta code after the version
-the adapter targets.
+---
 
-There is currently no metrics pipeline, dashboard, or T4 benchmark result, and the control
-plane is not yet exposed publicly: it is reached inside the cluster while DNS and a
-certificate for its hostname are pending.
+## What it does
 
-## Run the control plane
+| Capability | Detail |
+|---|---|
+| **OpenAI-compatible serving** | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, streaming. Verified against the official `openai` Python SDK |
+| **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
+| **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
+| **Declarative deployment** | A customer declares intent; the operator reconciles GPU hosts to match, one at a time, rolling back a release that never becomes ready |
+| **Hardware-aware configuration** | The operator profiles its GPU nodes and corrects settings the hardware cannot execute, naming the reason |
+| **Per-deployment kernel selection** | `kernel_mode` chooses the Fabric decode kernel or the server's own, from one image |
+| **Metering** | The model's own token counts attributed to account, deployment, and cluster |
+| **Observability** | Prometheus and Grafana over engine, gateway, and GPU metrics |
+
+---
+
+## Quick start
+
+Inference uses a short-lived token obtained by exchanging an API key. The data plane verifies
+that token locally, which is why serving does not depend on the control plane being reachable.
+
+```python
+import os, requests
+from openai import OpenAI
+
+token = requests.post(
+    "https://fabric-cp-api.hexelstudio.com/v1/token",
+    json={
+        "grant_type": "api_key",
+        "api_key": os.environ["FABRIC_API_KEY"],
+        "audience": "fabric-inference",
+    },
+    timeout=20,
+).json()["access_token"]
+
+client = OpenAI(
+    base_url="https://fabric-inference-api.hexelstudio.com/v1",
+    api_key=token,
+)
+
+stream = client.chat.completions.create(
+    model="launch-model",
+    messages=[{"role": "user", "content": "Explain how rivers shape land."}],
+    max_tokens=256,
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+Pass the exchanged token as `api_key`, not the `fab_key_…` value: the raw key is refused by
+the data plane, which only trusts Fabric-signed tokens. Tokens are short-lived, so long-running
+clients should re-exchange.
+
+---
+
+## Running it locally
+
+Each component is independent and pins its own dependencies.
 
 ```bash
+# Control plane
 cd control-plane
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e '.[dev]'
-cp .env.example .env          # then set database, Auth0, and signing values
+cp .env.example .env                       # database, identity, signing values
 openssl genrsa -out signing.pem 2048
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m app.cli seed-system-account
+.venv/bin/python -m app.cli bootstrap-account --slug acme --email ops@acme.test
 .venv/bin/python -m uvicorn app.main:app --reload --port 8080
 ```
 
-Quality gates: `.venv/bin/ruff check app tests migrations` and `.venv/bin/python -m pytest -q`.
-Tests run on SQLite by default; set `FABRIC_TEST_DATABASE_URL` to a PostgreSQL URL to
-run the same suite against the engine used in production.
-Details and Auth0 setup are in [Control-Plane Service](docs/context/control-plane-service.md).
+`bootstrap-account` exists because every other route to an account runs through an identity
+provider, which makes the first account impossible to create before one is configured. It is
+a command rather than an endpoint on purpose: an unauthenticated endpoint that created tenants
+would be a hole, while a command requires database credentials.
 
-## Architecture direction
+```bash
+# Agent, operator, collector
+cd agent && go test ./... && go build ./...
 
-The planned MVP is intentionally narrow:
+# Data plane
+cd data-plane && .venv/bin/python -m pytest -q
 
-- Text inference for the supported launch model, one replica per GPU.
-- vLLM continuous batching with validated Fabric kernels and safe fallback.
-- Strict control-plane/data-plane separation; normal inference does not traverse the control plane.
-- Auth0 for human login and Fabric-owned API keys exchanged for short-lived JWTs.
-- Kubernetes inference stamps with an outbound cluster agent, narrow local operator, and asynchronous telemetry collector for both managed-serverless and BYOI modes.
-- T4 FP16 as the production profile; A10 FP16/BF16 for research; RTX 4070 for local development.
+# Kernels (needs a CUDA GPU)
+cd runtime && .venv/bin/python -m harness.runner --target rtx4070-dev
+```
 
-Agent-aware session caching, multimodal serving, quantization, speculative decoding, LoRA, disaggregated prefill, and multi-node tensor parallelism are deferred.
+Declaring a harness target that does not match the GPU present fails closed, so a development
+measurement cannot be recorded as a production result.
+
+### On a cluster
+
+```bash
+deploy/scripts/kind-e2e.sh                 # whole loop on a throwaway cluster
+helm install cp deploy/helm/fabric-control-plane -n fabric-system
+helm install stamp deploy/helm/fabric-stamp -n fabric
+```
+
+Details in [Packaging and deployment](docs/context/packaging-deployment.md).
+
+---
+
+## Measured results
+
+From the deployed cluster. Full context, including what these numbers do not show, is in the
+[project review](docs/project-review.md).
+
+| Observation | Value |
+|---|---|
+| Weights load from node-local NVMe | 4.25 GiB in 3.3 s |
+| Cold start to first healthy response | ~510 s, mostly graph compilation |
+| Single-stream decode | ~16 ms per token (~63 tokens/s) |
+| Time to first token (p95) | 1.6 s |
+| Concurrency cap | 30 parallel requests → 5 served, 25 refused `429` with `Retry-After` |
+| GPU profile detected | `Tesla T4`, compute capability 7.5, 16384 MiB |
+
+### The decode kernel
+
+A fused single-token gated-delta kernel replacing the one vLLM calls, doing QKV unpacking,
+normalisation, gate derivation, the recurrence, and state scatter in one launch.
+
+| Measured inside a CUDA graph, T4, launch-model shapes | vLLM | Fabric | |
+|---|---|---|---|
+| 1 sequence | 20.37 µs | 11.30 µs | **1.81x** |
+| 4 sequences | 33.59 µs | 26.77 µs | 1.06x |
+| 16 and 32 sequences | — | — | parity |
+
+Output and next recurrent state are **bit-identical** to vLLM's kernel at every batch size
+tested.
+
+**What is not claimed:** that the platform serves tokens faster. This operation is roughly 2%
+of a token's cost, so eliminating it entirely would move end-to-end throughput by about that
+much, and no end-to-end advantage was demonstrated. Parity at higher batch is what the
+arithmetic requires: the step rewrites the whole recurrent state each token, about 2 MB at
+these shapes, so both implementations meet the same bandwidth limit.
+
+---
+
+## Verification
+
+```
+Go (agent, operator, collector)      83 tests
+Control plane (SQLite)              116 tests
+Control plane (PostgreSQL)          126 tests
+Data plane                           66 tests
+Runtime (kernels, harness)           75 tests
+Serving (vLLM integration)           23 tests
+Cluster                              end-to-end on a throwaway cluster
+```
+
+The control-plane suite runs against both engines because row-level security is a no-op on
+SQLite: only the PostgreSQL run proves isolation is enforced.
+
+---
 
 ## Repository layout
 
-| Path | Purpose | Status |
+| Path | Contents | Status |
 |---|---|---|
-| [`docs/context/`](docs/context/) | Product, architecture, design, roadmap, risks, and ADRs | Living source of project context |
-| [`control-plane/`](control-plane/) | FastAPI control-plane API and PostgreSQL schema | Initial version implemented |
-| [`runtime/kernels/`](runtime/kernels/) | Fabric GPU kernel prototypes | One gated-delta kernel implemented |
-| [`runtime/integration/`](runtime/integration/) | Host-facing kernel dispatch, fallback, and telemetry | Implemented; no host calls it yet |
-| [`runtime/benchmarks/`](runtime/benchmarks/) | Correctness and microbenchmark harnesses | Local prototype implemented |
-| [`agent/`](agent/) | Go cluster agent, usage collector, and operator | Implemented; no model-host workload |
-| [`data-plane/`](data-plane/) | Inference ingress: local token verification, routing, proxying | Implemented; no model host wired to it |
-| [`serving/`](serving/) | vLLM host integration and decode-op substitution | Verified against vLLM's kernel; not registered in a live host |
-| [`deploy/`](deploy/) | Container images, stamp Helm chart, cluster verification | Implemented for a stamp; no CRD or operator |
-| [`scripts/`](scripts/) | A10 research-host provisioning (driver, CUDA, envs) and measurement runbook | Implemented |
+| [`control-plane/`](control-plane/) | FastAPI control plane, schema, migrations | Implemented |
+| [`data-plane/`](data-plane/) | Inference gateway: verification, routing, limits, metrics | Implemented |
+| [`agent/`](agent/) | Go agent, operator, usage collector | Implemented |
+| [`runtime/`](runtime/) | Triton kernels, dispatch, benchmark harness, artifacts | One kernel, measured |
+| [`serving/`](serving/) | vLLM integration and kernel registration | Registered in a live host |
+| [`deploy/`](deploy/) | Images, Helm charts, observability, cluster scripts | Implemented |
+| [`docs/`](docs/) | Architecture, design, ADRs, project review | Living context |
 | [`v1/`](v1/) | Next.js frontend | Scaffold only |
-| [`utils/transformers/`](utils/transformers/) | Vendored upstream model reference | Not a Fabric runtime integration |
+| [`utils/transformers/`](utils/transformers/) | Vendored model reference | Not a runtime integration |
 
-## Run the current kernel harness
-
-The harness requires a CUDA-capable NVIDIA GPU. Dependencies are pinned in
-[`runtime/pyproject.toml`](runtime/pyproject.toml) (`torch==2.8.0`, `triton==3.4.0`);
-install the CUDA build matching your host.
-
-```bash
-cd runtime
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e '.[dev]'
-# Optional: pinned optimized baseline for like-for-like comparison
-uv pip install --python .venv/bin/python -e '.[dev,baselines]'
-
-# One command per target; writes a versioned artifact under runtime/artifacts/
-.venv/bin/python -m harness.runner --target rtx4070-dev
-.venv/bin/python -m harness.runner --target rtx4070-dev --check-only
-.venv/bin/python -m harness.runner --target rtx4070-dev --dry-run
-
-# Harness tests (no GPU required)
-.venv/bin/python -m pytest -q
-```
-
-Declaring a target that does not match the GPU present fails closed, so a
-development measurement cannot be recorded as A10 or T4 evidence. Every artifact
-records its environment, configuration, and a content hash, and states its own
-claim scope. One run covers single-step correctness, long-generation drift, a
-value-tile sweep with compiled-kernel metadata, eager-versus-Triton timing, a
-comparison against the pinned optimized baseline, and a profile pass for occupancy,
-bandwidth utilization, and cold/warm first-use latency.
-
-The underlying script can also be driven directly:
-
-```bash
-python runtime/benchmarks/gated_delta_decode_bench.py --check-only --dtype float16
-python runtime/benchmarks/gated_delta_decode_bench.py --dtype float16 --block-v 32
-```
-
-Timings against the eager reference are not a performance claim: the reference is a
-readable formulation, not a tuned implementation. Against the pinned FLA baseline on
-the development GPU the kernel is at parity for small batches and modestly faster at
-batch 8. No A10 or T4 measurement exists, so nothing here is a production result.
-
-## Run the frontend scaffold
-
-```bash
-cd v1
-npm ci
-npm run dev
-```
-
-The frontend currently displays starter content and is not connected to a Fabric backend.
+---
 
 ## Documentation
 
-Start with the [project context index](docs/context/README.md), or the
-[project review](docs/project-review.md) for the problem statement, methodology, measured
-results, and what is deliberately not claimed.
+Start with the [project review](docs/project-review.md) or the
+[context index](docs/context/README.md).
 
-- [Current implementation](docs/context/current-state.md)
-- [Product requirements](docs/context/product-requirements.md)
-- [Architecture requirements](docs/context/architecture-requirements.md)
-- [Control-plane data and API design](docs/context/control-plane-data-api-design.md)
-- [Control-plane service](docs/context/control-plane-service.md)
-- [Inference data plane](docs/context/data-plane-service.md)
-- [Cluster agent and usage collector](docs/context/cluster-agent-service.md)
-- [Packaging and deployment](docs/context/packaging-deployment.md)
-- [System design](docs/context/system-design.md)
-- [Runtime design](docs/context/runtime-design.md)
-- [Benchmark and research plan](docs/context/benchmark-research-plan.md)
-- [Security and identity](docs/context/security-identity.md)
-- [Operator and deployment design](docs/context/operator-deployment.md)
-- [Observability and SLOs](docs/context/observability-slos.md)
-- [Roadmap](docs/context/roadmap.md)
-- [Risks and open questions](docs/context/risks-open-questions.md)
-- [Architecture decision records](docs/context/adrs/README.md)
+**Design and state**
+[Current state](docs/context/current-state.md) ·
+[System design](docs/context/system-design.md) ·
+[Architecture requirements](docs/context/architecture-requirements.md) ·
+[Product requirements](docs/context/product-requirements.md)
+
+**Services**
+[Control plane](docs/context/control-plane-service.md) ·
+[Control-plane data and API](docs/context/control-plane-data-api-design.md) ·
+[Data plane](docs/context/data-plane-service.md) ·
+[Agent and collector](docs/context/cluster-agent-service.md) ·
+[Operator and deployment](docs/context/operator-deployment.md)
+
+**Runtime and research**
+[Runtime design](docs/context/runtime-design.md) ·
+[Benchmark plan](docs/context/benchmark-research-plan.md)
+
+**Operations**
+[Packaging and deployment](docs/context/packaging-deployment.md) ·
+[Observability and SLOs](docs/context/observability-slos.md) ·
+[Security and identity](docs/context/security-identity.md)
+
+**Direction**
+[Roadmap](docs/context/roadmap.md) ·
+[Risks and open questions](docs/context/risks-open-questions.md) ·
+[Architecture decision records](docs/context/adrs/README.md)
+
+---
 
 ## Documentation policy
 
-Code is the source of truth. Planned behavior is labeled as planned, benchmark claims remain tied to reproducible artifacts and exact hardware, and durable architecture changes are recorded through ADRs. Project documentation lives under [`docs/`](docs/); this root README is intentionally an index and quick-start guide.
+Code is the source of truth. Documentation describes what is implemented; planned behaviour is
+labelled as planned. Benchmark claims stay tied to reproducible artifacts and exact hardware,
+and durable architecture decisions are recorded as ADRs. Project documentation lives under
+[`docs/`](docs/); this file is an index and quick start.
