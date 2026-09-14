@@ -57,7 +57,23 @@ type Spec struct {
 	// property of what is being served, and because two deployments on one stamp
 	// differing only in this is how the two are compared.
 	KernelMode string `json:"kernelMode,omitempty"`
-	Generation int    `json:"generation"`
+	// Replicas is how many model-host replicas serve this deployment. A fleet is
+	// expressed by asking for more than one (ADR 0010): each replica is one pod holding
+	// one GPU, and the data plane balances across them. Absent or zero means one, so a
+	// deployment that predates this field is unchanged.
+	Replicas   int `json:"replicas,omitempty"`
+	Generation int `json:"generation"`
+}
+
+// DesiredReplicas is the replica count to run, defaulting to one when unset.
+//
+// A deployment declared before replicas existed carries zero here, which must mean the
+// single replica it has always had rather than none.
+func (s Spec) DesiredReplicas() int {
+	if s.Replicas < 1 {
+		return 1
+	}
+	return s.Replicas
 }
 
 // Condition is a standard Kubernetes-style status condition.
@@ -105,12 +121,26 @@ type modelDeploymentList struct {
 // data plane's contract, not the CRD's, and the two are deliberately decoupled: the
 // custom resource is the cluster's API and can grow, while this file is consumed by a
 // running process and changes only when that consumer does.
+//
+// A deployment is served by a pool of backends (ADR 0010). The data plane accepts both
+// a single upstream_url (a one-backend pool) and a backends list, so the operator can
+// publish concrete pod endpoints as backends while a stamp with no operator keeps
+// writing the single upstream_url. When the operator publishes backends it still writes
+// upstream_url as the first backend's address, so an older data plane that only reads
+// upstream_url keeps working.
 type dataPlaneEntry struct {
-	DeploymentID  string `json:"deployment_id"`
-	AccountID     string `json:"account_id"`
-	ModelAlias    string `json:"model_alias"`
-	UpstreamURL   string `json:"upstream_url"`
-	UpstreamModel string `json:"upstream_model,omitempty"`
+	DeploymentID  string             `json:"deployment_id"`
+	AccountID     string             `json:"account_id"`
+	ModelAlias    string             `json:"model_alias"`
+	UpstreamURL   string             `json:"upstream_url"`
+	UpstreamModel string             `json:"upstream_model,omitempty"`
+	Backends      []dataPlaneBackend `json:"backends,omitempty"`
+}
+
+// dataPlaneBackend is one model-host endpoint in a deployment's pool.
+type dataPlaneBackend struct {
+	URL string `json:"url"`
+	ID  string `json:"id,omitempty"`
 }
 
 // Options configures a reconciler.
@@ -220,6 +250,10 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	// make the data plane fail requests it could otherwise queue behind readiness.
 	ready := map[string]bool{}
 	decisions := map[string]RolloutDecision{}
+	// Concrete pool per deployment, discovered from the headless Service's endpoints.
+	// Only populated when the operator runs the host; otherwise the single upstream_url
+	// the agent rendered is published unchanged.
+	backends := map[string][]dataPlaneBackend{}
 	if r.options.ModelHost.Enabled() {
 		// Settings that depend on the hardware are derived before any host is created,
 		// once per pass. A value that cannot work on this GPU is corrected here rather
@@ -270,6 +304,10 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 			// The operator owns the host, so it decides the upstream, overriding
 			// whatever the agent guessed at declaration time.
 			serving[index].Spec.UpstreamURL = r.hostUpstream(serving[index])
+			// The concrete pool the data plane balances across: the ready pod endpoints
+			// behind the headless Service, or the Service address itself when none are
+			// resolvable yet (ADR 0010).
+			backends[serving[index].Spec.DeploymentID] = r.discoverBackends(ctx, serving[index])
 		}
 
 		if err := r.pruneHosts(ctx, serving); err != nil {
@@ -277,7 +315,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 		}
 	}
 
-	changed, err := r.applyConfigMap(ctx, serving)
+	changed, err := r.applyConfigMap(ctx, serving, backends)
 	if err != nil {
 		return result, err
 	}
@@ -306,16 +344,29 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 // Entries are sorted by deployment id so an unchanged set produces an identical
 // document, which is what lets the reconciler avoid a write and the data plane avoid
 // a reload.
-func renderConfig(items []ModelDeployment) (string, error) {
+//
+// backends maps a deployment id to the concrete pool the operator discovered for it.
+// When present the entry carries a backends list and upstream_url is set to the first
+// backend so an older data plane that reads only upstream_url still works (ADR 0010).
+// When absent the entry keeps the single upstream_url shape, which is what a stamp with
+// no operator, or one whose endpoints are not yet resolvable, produces.
+func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBackend) (string, error) {
 	entries := make([]dataPlaneEntry, 0, len(items))
 	for _, item := range items {
-		entries = append(entries, dataPlaneEntry{
+		entry := dataPlaneEntry{
 			DeploymentID:  item.Spec.DeploymentID,
 			AccountID:     item.Spec.AccountID,
 			ModelAlias:    item.Spec.ModelAlias,
 			UpstreamURL:   item.Spec.UpstreamURL,
 			UpstreamModel: item.Spec.UpstreamModel,
-		})
+		}
+		if pool := backends[item.Spec.DeploymentID]; len(pool) > 0 {
+			entry.Backends = pool
+			// Keep upstream_url populated with the first backend so a data plane that
+			// predates the pool still reaches a live host rather than nothing.
+			entry.UpstreamURL = pool[0].URL
+		}
+		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].DeploymentID < entries[j].DeploymentID
@@ -335,8 +386,10 @@ type configMap struct {
 	Data       map[string]string `json:"data,omitempty"`
 }
 
-func (r *Reconciler) applyConfigMap(ctx context.Context, items []ModelDeployment) (bool, error) {
-	document, err := renderConfig(items)
+func (r *Reconciler) applyConfigMap(
+	ctx context.Context, items []ModelDeployment, backends map[string][]dataPlaneBackend,
+) (bool, error) {
+	document, err := renderConfig(items, backends)
 	if err != nil {
 		return false, err
 	}

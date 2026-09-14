@@ -16,7 +16,9 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
+import threading
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -40,6 +42,7 @@ from fabric_data_plane.errors import (
 )
 from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.metrics import Metrics
+from fabric_data_plane.pool import BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.usage import UsageBuffer, UsageRecord
 
@@ -68,6 +71,12 @@ class DataPlane:
         self.client = client
         self.usage = UsageBuffer(settings.usage_buffer_size)
         self.metrics = Metrics()
+        # One pool per deployment, memoised so per-backend health survives across the
+        # requests that deployment serves rather than resetting each call. Keyed by
+        # deployment id because the registry may hand back an equal-but-new Deployment on
+        # a reload; the health that matters is per stable deployment, not per object.
+        self._pools: dict[uuid.UUID, BackendPool] = {}
+        self._pools_lock = threading.Lock()
         self.rate_limiter = RateLimiter(
             RateLimit(
                 requests_per_minute=settings.rate_limit_requests_per_minute,
@@ -82,6 +91,24 @@ class DataPlane:
     def authenticate(self, authorization: str | None) -> InferencePrincipal:
         token = extract_bearer_token(authorization)
         return verify_inference_token(token, settings=self.settings, keys=self.keys)
+
+    def pool_for(self, deployment: Deployment) -> BackendPool:
+        """Return the backend pool for a deployment, built once and reused.
+
+        Memoised by deployment id so per-backend health accumulates across requests. A
+        reload that changes a deployment's backend set rebuilds the pool, so a departed
+        backend is not carried forward under stale health.
+        """
+        with self._pools_lock:
+            pool = self._pools.get(deployment.deployment_id)
+            current_ids = tuple(b.backend_id for b in deployment.backends)
+            if pool is None or tuple(b.backend_id for b in pool.backends) != current_ids:
+                pool = deployment.build_pool(
+                    failure_threshold=self.settings.backend_failure_threshold,
+                    recovery_seconds=self.settings.backend_recovery_seconds,
+                )
+                self._pools[deployment.deployment_id] = pool
+            return pool
 
     def record_usage(
         self, principal: InferencePrincipal, deployment: Deployment, payload: Any, streamed: bool
@@ -165,8 +192,11 @@ async def _proxy(
 
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
-    url = f"{deployment.upstream_url}{upstream_path}"
     headers = forwardable_headers(dict(request.headers))
+
+    # A deployment is served by a pool of backends (ADR 0010). The pool skips a backend
+    # that is ejected or unhealthy, so a healthy replica is chosen even when one is down.
+    pool = plane.pool_for(deployment)
 
     deployment_label = str(deployment.deployment_id)
     account_label = str(principal.account_id)
@@ -177,17 +207,44 @@ async def _proxy(
         # the upstream answers, fails, or the request is cancelled, and a leaked slot
         # permanently reduces the account's concurrency until the process restarts.
         try:
-            try:
-                response = await plane.client.post(
-                    url,
-                    json=upstream_payload,
-                    headers=headers,
-                    timeout=plane.settings.upstream_timeout_seconds,
-                )
-            except httpx.HTTPError as exc:
-                raise UpstreamUnavailable(
-                    "upstream_unavailable", "The model host did not respond"
-                ) from exc
+            # Backends that fail this request are excluded from reselection so a retry
+            # lands on a different replica without waiting for the failure count to cross
+            # the ejection threshold.
+            tried: set[str] = set()
+            while True:
+                backend = pool.select(exclude=tried)
+                if backend is None:
+                    # Every backend is ejected or has already failed this request: there
+                    # is nowhere healthy left to send it.
+                    plane.metrics.request_finished(
+                        deployment=deployment_label,
+                        account=account_label,
+                        outcome="upstream_unavailable",
+                        duration_seconds=time.perf_counter() - started,
+                    )
+                    raise UpstreamUnavailable(
+                        "upstream_unavailable", "No healthy model host is available"
+                    )
+
+                url = f"{backend.url}{upstream_path}"
+                try:
+                    response = await plane.client.post(
+                        url,
+                        json=upstream_payload,
+                        headers=headers,
+                        timeout=plane.settings.upstream_timeout_seconds,
+                    )
+                except httpx.HTTPError as exc:
+                    # A connection-level failure ejects the backend after enough of them
+                    # and retries on another; it is not surfaced to the caller while a
+                    # healthy backend remains.
+                    logger.warning("backend %s failed: %s", backend.backend_id, exc)
+                    pool.health.record_failure(backend)
+                    tried.add(backend.backend_id)
+                    continue
+
+                pool.health.record_success(backend)
+                break
 
             try:
                 body = response.json()
@@ -211,15 +268,24 @@ async def _proxy(
             )
             return JSONResponse(status_code=response.status_code, content=body)
         except UpstreamUnavailable:
-            plane.metrics.request_finished(
-                deployment=deployment_label,
-                account=account_label,
-                outcome="upstream_unavailable",
-                duration_seconds=time.perf_counter() - started,
-            )
             raise
         finally:
             await plane.concurrency.release(principal.account_id)
+
+    # A streamed response has already committed to one backend by the time bytes flow, so
+    # it cannot transparently retry on another the way a non-streamed request can: the
+    # reply has begun. It still picks a healthy backend and records the backend's health.
+    stream_backend = pool.select()
+    if stream_backend is None:
+        await plane.concurrency.release(principal.account_id)
+        plane.metrics.request_finished(
+            deployment=deployment_label,
+            account=account_label,
+            outcome="upstream_unavailable",
+            duration_seconds=time.perf_counter() - started,
+        )
+        raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
+    stream_url = f"{stream_backend.url}{upstream_path}"
 
     async def stream() -> AsyncIterator[bytes]:
         # A streamed request holds its slot until the last chunk, which is correct: the
@@ -228,15 +294,17 @@ async def _proxy(
         try:
             async with plane.client.stream(
                 "POST",
-                url,
+                stream_url,
                 json=upstream_payload,
                 headers=headers,
                 timeout=plane.settings.upstream_timeout_seconds,
             ) as upstream:
                 async for chunk in upstream.aiter_bytes():
                     yield chunk
+            pool.health.record_success(stream_backend)
         except httpx.HTTPError as exc:
             logger.warning("upstream stream failed: %s", exc)
+            pool.health.record_failure(stream_backend)
             # The response has already begun, so the only honest signal left is
             # an error event in the stream itself.
             yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'

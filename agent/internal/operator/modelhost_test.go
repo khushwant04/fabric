@@ -24,6 +24,15 @@ type hostServer struct {
 	deleted    []string
 	readyAfter int
 	gets       int
+	// endpoints maps a host name to the pod endpoints its headless Service selects,
+	// stood in for the EndpointSlices the operator reads.
+	endpoints map[string][]endpointAddress
+}
+
+// endpointAddress is one pod endpoint in the fake, with its readiness.
+type endpointAddress struct {
+	Address string
+	Ready   bool
 }
 
 func testHost() ModelHost {
@@ -48,6 +57,7 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 		resources: map[string]*ModelDeployment{},
 		deploys:   map[string]*deployment{},
 		services:  map[string]*service{},
+		endpoints: map[string][]endpointAddress{},
 	}
 	for i := range items {
 		item := items[i]
@@ -159,6 +169,34 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 			return
 		}
 		writeJSON(w, 200, existing)
+	})
+
+	esPath := fmt.Sprintf("/apis/discovery.k8s.io/v1/namespaces/%s/endpointslices", namespace)
+	mux.HandleFunc(esPath, func(w http.ResponseWriter, r *http.Request) {
+		// The label selector names the Service, so the slices returned are the ones for
+		// that host. It arrives URL-encoded (kubernetes.io/service-name%3D<name>).
+		selector := r.URL.Query().Get("labelSelector")
+		serviceName := ""
+		if _, value, found := strings.Cut(selector, "kubernetes.io/service-name="); found {
+			serviceName = value
+		}
+		list := endpointSliceList{}
+		if addresses, ok := state.endpoints[serviceName]; ok {
+			slice := endpointSlice{}
+			for _, addr := range addresses {
+				ready := addr.Ready
+				endpoint := struct {
+					Addresses  []string `json:"addresses"`
+					Conditions struct {
+						Ready *bool `json:"ready,omitempty"`
+					} `json:"conditions"`
+				}{Addresses: []string{addr.Address}}
+				endpoint.Conditions.Ready = &ready
+				slice.Endpoints = append(slice.Endpoints, endpoint)
+			}
+			list.Items = append(list.Items, slice)
+		}
+		writeJSON(w, 200, list)
 	})
 
 	mux.HandleFunc(cmPath, func(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +538,110 @@ func TestStartupIsGatedByAProbeRatherThanAGuessedDelay(t *testing.T) {
 	// Compiled graphs are as expensive to reproduce as weights and just as identical.
 	if !strings.Contains(body, "VLLM_CACHE_ROOT") {
 		t.Fatalf("compilation is not cached on the node: %s", body)
+	}
+}
+
+func TestReplicaCountComesFromTheDeployment(t *testing.T) {
+	// The operator hardcoded a single replica, so a deployment could ask for a fleet and
+	// get one host (ADR 0010). The rendered Deployment must carry the requested count.
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.Replicas = 4
+	state, client := newHostServer(t, item)
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	host := state.deploys["fabric-host-dep-a"]
+	if host == nil {
+		t.Fatalf("no model host was created: %v", state.deploys)
+	}
+	if got := host.Spec["replicas"]; fmt.Sprintf("%v", got) != "4" {
+		t.Fatalf("replicas = %v, want 4", got)
+	}
+	// Recreate is kept for now: M3 replaces the rollout strategy.
+	encoded, _ := json.Marshal(host.Spec)
+	if !strings.Contains(string(encoded), `"type":"Recreate"`) {
+		t.Fatal("the rollout strategy changed unexpectedly")
+	}
+}
+
+func TestReplicaCountDefaultsToOneWhenUnset(t *testing.T) {
+	// A deployment that predates the replicas field carries zero, which must mean the
+	// single replica it has always had rather than none.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := state.deploys["fabric-host-dep-a"].Spec["replicas"]; fmt.Sprintf("%v", got) != "1" {
+		t.Fatalf("replicas = %v, want 1 by default", got)
+	}
+}
+
+func TestTheHostServiceIsHeadless(t *testing.T) {
+	// A headless Service exposes the pod endpoints individually so the data plane can
+	// discover and balance across them, rather than hiding them behind one ClusterIP
+	// that kube-proxy spreads opaquely (ADR 0010).
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	svc := state.services["fabric-host-dep-a"]
+	if svc == nil {
+		t.Fatal("no Service was created")
+	}
+	if svc.Spec["clusterIP"] != "None" {
+		t.Fatalf("service is not headless: clusterIP = %v", svc.Spec["clusterIP"])
+	}
+}
+
+func TestBackendsArePublishedFromReadyEndpoints(t *testing.T) {
+	// The operator publishes the concrete pod endpoints as a backends list so the data
+	// plane balances across them (ADR 0010). An unready endpoint is skipped.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+	state.endpoints["fabric-host-dep-a"] = []endpointAddress{
+		{Address: "10.0.0.1", Ready: true},
+		{Address: "10.0.0.2", Ready: true},
+		{Address: "10.0.0.3", Ready: false},
+	}
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	entries := decodeConfig(t, state.configMap)
+	if len(entries) != 1 {
+		t.Fatalf("expected one deployment entry, got %d", len(entries))
+	}
+	urls := make([]string, 0, len(entries[0].Backends))
+	for _, backend := range entries[0].Backends {
+		urls = append(urls, backend.URL)
+	}
+	want := []string{"http://10.0.0.1:8000", "http://10.0.0.2:8000"}
+	if fmt.Sprintf("%v", urls) != fmt.Sprintf("%v", want) {
+		t.Fatalf("published backends = %v, want %v (the unready endpoint must be skipped)", urls, want)
+	}
+	// upstream_url stays populated so a data plane that predates the pool still reaches a
+	// live host.
+	if entries[0].UpstreamURL != "http://10.0.0.1:8000" {
+		t.Fatalf("upstream_url = %q, want the first backend", entries[0].UpstreamURL)
+	}
+}
+
+func TestBackendsFallBackToTheServiceAddressWithoutEndpoints(t *testing.T) {
+	// While the pods are still starting no endpoint is ready, so the Service DNS name is
+	// published as a single backend and the deployment is served rather than handed an
+	// empty pool.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	entries := decodeConfig(t, state.configMap)
+	want := fmt.Sprintf("http://fabric-host-dep-a.%s.svc:8000", namespace)
+	if len(entries[0].Backends) != 1 || entries[0].Backends[0].URL != want {
+		t.Fatalf("fallback backend = %v, want a single %q", entries[0].Backends, want)
 	}
 }
 

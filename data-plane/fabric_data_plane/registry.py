@@ -22,24 +22,57 @@ import uuid
 from typing import Any
 
 from fabric_data_plane.errors import Forbidden, NotFound
+from fabric_data_plane.pool import Backend, BackendHealth, BackendPool
 
 logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
 class Deployment:
-    """One locally served deployment."""
+    """One locally served deployment.
+
+    A deployment is served by a *pool* of backends (ADR 0010). For backward
+    compatibility a single ``upstream_url`` is still accepted and becomes a one-backend
+    pool: constructing ``Deployment(..., upstream_url=...)`` keeps working, and so does
+    the existing single-``upstream_url`` ``deployments.json`` shape. Supplying
+    ``backends`` (a list of :class:`~fabric_data_plane.pool.Backend`) is the fleet shape;
+    the two are mutually exclusive inputs and ``backends`` wins when both are present.
+    """
 
     deployment_id: uuid.UUID
     account_id: uuid.UUID
     model_alias: str
-    upstream_url: str
+    upstream_url: str | None = None
     upstream_model: str | None = None
+    backends: tuple[Backend, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.backends:
+            if not self.upstream_url:
+                raise ValueError("a deployment needs an upstream_url or a backends list")
+            url = self.upstream_url.rstrip("/")
+            object.__setattr__(self, "backends", (Backend(url=url, backend_id=url),))
 
     @property
     def upstream_model_name(self) -> str:
         """Model name the upstream host expects, defaulting to the alias."""
         return self.upstream_model or self.model_alias
+
+    def build_pool(
+        self, *, failure_threshold: int = 3, recovery_seconds: float = 30.0
+    ) -> BackendPool:
+        """Build a fresh pool with per-backend health for this deployment.
+
+        The caller memoises the result so health survives across requests; the pool is
+        built here so the backend set is defined in one place. ``select`` on the returned
+        pool is a single healthy pick (round-robin), with strategies deferred to M2.
+        """
+        health = BackendHealth(
+            list(self.backends),
+            failure_threshold=failure_threshold,
+            recovery_seconds=recovery_seconds,
+        )
+        return BackendPool(list(self.backends), health)
 
 
 class DeploymentRegistry:
@@ -65,16 +98,43 @@ class DeploymentRegistry:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> DeploymentRegistry:
         deployments = [
-            Deployment(
-                deployment_id=uuid.UUID(str(entry["deployment_id"])),
-                account_id=uuid.UUID(str(entry["account_id"])),
-                model_alias=str(entry["model_alias"]),
-                upstream_url=str(entry["upstream_url"]).rstrip("/"),
-                upstream_model=entry.get("upstream_model"),
-            )
-            for entry in payload.get("deployments", [])
+            cls._deployment_from_entry(entry) for entry in payload.get("deployments", [])
         ]
         return cls(deployments)
+
+    @staticmethod
+    def _deployment_from_entry(entry: dict[str, Any]) -> Deployment:
+        """Parse one configuration entry into a Deployment.
+
+        Accepts both shapes: a ``backends`` list (each with a ``url`` and an optional
+        ``id`` and ``weight``) is the fleet shape, and a single ``upstream_url`` is the
+        legacy shape that becomes a one-backend pool. ``backends`` wins if both appear,
+        so a configuration mid-migration is unambiguous.
+        """
+        raw_backends = entry.get("backends")
+        backends: tuple[Backend, ...] = ()
+        if raw_backends:
+            parsed: list[Backend] = []
+            for item in raw_backends:
+                url = str(item["url"]).rstrip("/")
+                parsed.append(
+                    Backend(
+                        url=url,
+                        backend_id=str(item.get("id") or url),
+                        weight=float(item.get("weight", 1.0)),
+                    )
+                )
+            backends = tuple(parsed)
+
+        upstream_url = entry.get("upstream_url")
+        return Deployment(
+            deployment_id=uuid.UUID(str(entry["deployment_id"])),
+            account_id=uuid.UUID(str(entry["account_id"])),
+            model_alias=str(entry["model_alias"]),
+            upstream_url=str(upstream_url).rstrip("/") if upstream_url else None,
+            upstream_model=entry.get("upstream_model"),
+            backends=backends,
+        )
 
     @classmethod
     def load(cls, path: str | pathlib.Path) -> DeploymentRegistry:

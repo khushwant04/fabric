@@ -245,6 +245,48 @@ async def test_placement_and_desired_state_round_trip(client: AsyncClient) -> No
     assert resent.json()["deployments"][0]["desired_generation"] == 2
 
 
+async def test_spec_replicas_flows_into_desired_state(client: AsyncClient) -> None:
+    """The agent reads spec.replicas to size the fleet, so it must reach desired state.
+
+    DeploymentSpec has carried a replica count since the beginning; the operator now
+    honours it (ADR 0010), which is only possible if it survives verbatim from the
+    stored desired_spec into the assignment the agent reads.
+    """
+    account_id, token = await onboard(client, "replicas-user", "replicas-account")
+    created = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "fleet",
+            "model_alias": "launch-model",
+            "spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 5},
+        },
+        headers=bearer(token),
+    )
+    assert created.status_code == 201, created.text
+    deployment = created.json()
+    # Stored on the deployment record as declared.
+    assert deployment["desired_spec"]["replicas"] == 5
+
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id = enrolled["stamp"]["id"]
+    agent = enrolled["agent_credential"]
+
+    placed = await client.post(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}/placements",
+        json={"stamp_id": stamp_id},
+        headers=bearer(token),
+    )
+    assert placed.status_code == 201
+
+    desired = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state?after_generation=0", headers=bearer(agent)
+    )
+    assert desired.status_code == 200
+    assignment = desired.json()["deployments"][0]
+    # The agent's replicasFromSpec reads spec["replicas"]; it must be present and intact.
+    assert assignment["spec"]["replicas"] == 5
+
+
 async def test_agent_cannot_use_another_stamp_path(client: AsyncClient) -> None:
     account_id, token = await onboard(client, "path-user", "path-account")
     first = await enroll_stamp(client, account_id, token, name="one")

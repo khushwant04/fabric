@@ -265,6 +265,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 			entry.UpstreamModel = release
 		}
 		entry.KernelMode = kernelModeFromSpec(assignment.Spec)
+		entry.Replicas = replicasFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || previous != entry {
 			changed = true
 			a.log.Info("configured deployment",
@@ -462,6 +463,30 @@ func kernelModeFromSpec(spec map[string]any) string {
 	default:
 		return ""
 	}
+}
+
+// replicasFromSpec extracts how many model-host replicas the deployment asks for.
+//
+// The control plane's DeploymentSpec has carried replicas (1-32) since the beginning and
+// the operator ignored it, hardcoding one, so a deployment could ask for a fleet and get
+// a single host (ADR 0010). An absent, non-numeric, or below-one value is reported as
+// zero, which the operator reads as the single replica the deployment has always had:
+// the agent does not reject a value a newer control plane might send, for the same reason
+// kernelModeFromSpec does not.
+func replicasFromSpec(spec map[string]any) int {
+	// JSON numbers decode into float64 through an any-typed map, so both shapes are
+	// accepted rather than assuming one decoder.
+	switch value := spec["replicas"].(type) {
+	case float64:
+		if value >= 1 {
+			return int(value)
+		}
+	case int:
+		if value >= 1 {
+			return value
+		}
+	}
+	return 0
 }
 
 // releaseFromSpec extracts the runtime release the host should serve.

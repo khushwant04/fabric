@@ -169,6 +169,16 @@ permissions.
 
 Not implemented: rollback and progressive rollout. The model host image itself is not built by Fabric.
 
+A deployment can ask for more than one replica, and the operator honours it (ADR 0010):
+the model-host Deployment is sized from `spec.replicas` (default one, range 1-32,
+flowing control plane -> agent -> custom resource -> operator) rather than the single
+replica it used to hardcode, and each replica is one pod holding one GPU. The per-host
+Service is headless (`clusterIP: None`) so the pod endpoints are individually
+discoverable, and the operator reads the ready endpoints and publishes them into the
+data plane's configuration as a `backends` list for the data plane to balance across,
+falling back to the Service address while pods are still starting. The rollout strategy
+stays `Recreate` for now.
+
 ### Control-plane packaging
 
 `deploy/helm/fabric-control-plane/` installs the control plane, with migrations as a
@@ -306,6 +316,14 @@ when both the control plane and data plane are importable.
 - Deployments are read from a local file the cluster agent would write. Model name
   selects a candidate; ownership is decided from the verified token's account, so
   naming another account's model returns a refusal and never reaches the host.
+- A deployment is served by a **pool of backends**, not a single host (ADR 0010).
+  The configuration accepts both the legacy single `upstream_url` (loaded as a
+  one-backend pool) and a `backends` list, and the data plane tracks each backend's
+  health per process: a backend whose connection fails is ejected after a threshold
+  and skipped, and a non-streamed request reselects a remaining healthy backend, so
+  killing one replica does not fail requests. Ejection is a cooldown, not a
+  permanent write-off, so a host that restarts is used again. Selection is a single
+  healthy pick (round-robin); pluggable balancing strategies are deferred.
 - Client `Authorization` and `X-Fabric-*` ownership headers are dropped before
   proxying, and the reply reports the customer's alias rather than the internal
   release name.
@@ -316,10 +334,10 @@ Verified against the real control plane: a token issued by `POST /v1/token` with
 `audience=fabric-inference` is accepted with the matching account, and a
 control-audience token from the same issuer is rejected as `wrong_audience`.
 
-Not implemented: request quotas and rate limiting, mTLS or network policy to the
-model host, and telemetry export. Usage is buffered locally in a bounded queue
-with no exporter, and nothing writes the deployments file yet because the cluster
-agent does not exist.
+Not implemented: mTLS or network policy to the model host beyond the optional
+client-certificate path, and telemetry export. Usage is buffered locally in a
+bounded queue with no exporter. Balancing across pool backends is a single healthy
+pick; weighted and least-in-flight strategies are deferred.
 
 ### Cluster agent
 

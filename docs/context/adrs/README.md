@@ -14,6 +14,7 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0006](0006-defer-agent-aware-state.md) | Defer agent-aware session/state caching | Deferred |
 | [0007](0007-cluster-agent-and-central-telemetry.md) | Use an outbound cluster agent and asynchronous central telemetry | Planned |
 | [0008](0008-account-scoped-tenancy-and-stamp-credentials.md) | Use account-scoped tenancy and stamp credentials | Planned |
+| [0010](0010-operator-publishes-backends-data-plane-balances.md) | The operator publishes backend addresses and the data plane balances, with a headless Service for discovery | Implemented (pool and health; single healthy-pick, strategies deferred) |
 
 ## ADR status vocabulary
 

@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -385,10 +386,11 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 			Labels:    labels,
 		},
 		Spec: map[string]any{
-			// One replica per deployment: a GPU is not shared between replicas, and
-			// scaling is a placement decision the control plane makes by placing on
-			// more stamps.
-			"replicas": 1,
+			// One pod per replica, each holding one GPU: a fleet is expressed by asking
+			// for more than one replica (ADR 0010), and the data plane balances across
+			// them. Defaults to one when the deployment does not ask, so a deployment
+			// that predates the field is unchanged.
+			"replicas": item.Spec.DesiredReplicas(),
 			"selector": map[string]any{
 				"matchLabels": map[string]string{
 					"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
@@ -423,6 +425,12 @@ func (r *Reconciler) desiredHostService(item ModelDeployment) service {
 			},
 		},
 		Spec: map[string]any{
+			// Headless (clusterIP: None) so the pod endpoints are individually
+			// discoverable rather than hidden behind one virtual IP (ADR 0010). The data
+			// plane balances across the concrete backends the operator publishes; it does
+			// not rely on kube-proxy spreading a ClusterIP, which would be opaque to it
+			// and could not be ejected when one replica fails.
+			"clusterIP": "None",
 			"selector": map[string]string{
 				"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
 				"app.kubernetes.io/name":             "fabric-model-host",
@@ -442,6 +450,81 @@ func (r *Reconciler) hostUpstream(item ModelDeployment) string {
 	return fmt.Sprintf(
 		"http://%s.%s.svc:%d", hostName(item), r.options.Namespace, r.options.ModelHost.Port,
 	)
+}
+
+// endpointSlice is the subset of a discovery.k8s.io EndpointSlice the operator reads.
+type endpointSlice struct {
+	Endpoints []struct {
+		Addresses  []string `json:"addresses"`
+		Conditions struct {
+			// A nil Ready is treated as ready, matching Kubernetes: an unset condition on
+			// a slice means the endpoint's readiness is not being reported, not that it
+			// is unready.
+			Ready *bool `json:"ready,omitempty"`
+		} `json:"conditions"`
+	} `json:"endpoints"`
+}
+
+type endpointSliceList struct {
+	Items []endpointSlice `json:"items"`
+}
+
+// discoverBackends resolves the concrete pool for a deployment (ADR 0010).
+//
+// It lists the EndpointSlices the headless Service selects and turns each ready pod
+// address into a backend. When no ready endpoint is resolvable yet, for example while
+// the pods are still starting, it falls back to the Service's own DNS name as a single
+// backend so the data plane is never handed an empty pool and can queue behind
+// readiness rather than fail. Discovery is on the reconcile path, not the request path,
+// so a slow or failed lookup degrades to the Service address instead of stalling a
+// request.
+func (r *Reconciler) discoverBackends(ctx context.Context, item ModelDeployment) []dataPlaneBackend {
+	fallback := []dataPlaneBackend{{URL: r.hostUpstream(item)}}
+
+	selector := fmt.Sprintf("kubernetes.io/service-name%%3D%s", hostName(item))
+	path := fmt.Sprintf(
+		"/apis/discovery.k8s.io/v1/namespaces/%s/endpointslices?labelSelector=%s",
+		r.options.Namespace, selector,
+	)
+	var list endpointSliceList
+	if err := r.client.Get(ctx, path, &list); err != nil {
+		// Not fatal: the Service DNS name still reaches the ready pods through the
+		// cluster's own resolution, so the deployment is served while discovery recovers.
+		r.options.Log.Warn("could not read endpoints; publishing the service address",
+			"deployment", item.Spec.DeploymentID, "error", err)
+		return fallback
+	}
+
+	backends := make([]dataPlaneBackend, 0)
+	seen := map[string]struct{}{}
+	for _, slice := range list.Items {
+		for _, endpoint := range slice.Endpoints {
+			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+				continue
+			}
+			for _, address := range endpoint.Addresses {
+				if address == "" {
+					continue
+				}
+				if _, dup := seen[address]; dup {
+					continue
+				}
+				seen[address] = struct{}{}
+				backends = append(backends, dataPlaneBackend{
+					URL: fmt.Sprintf("http://%s:%d", address, r.options.ModelHost.Port),
+					ID:  address,
+				})
+			}
+		}
+	}
+
+	if len(backends) == 0 {
+		return fallback
+	}
+	// Sorted so an unchanged endpoint set renders an identical document and the data
+	// plane does not reload for a reordering.
+	sort.Slice(backends, func(i, j int) bool { return backends[i].ID < backends[j].ID })
+	return backends
 }
 
 // applyHost creates or updates the workload for one deployment and reports whether

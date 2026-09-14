@@ -933,3 +933,89 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 		t.Fatalf("an unchanged verdict was resent: %d statuses", len(stub.statuses))
 	}
 }
+
+func TestReplicasFlowFromTheDesiredSpecIntoConfiguration(t *testing.T) {
+	// The control plane has carried a replica count since the beginning and the operator
+	// ignored it. spec.replicas must survive into the rendered configuration so a fleet
+	// is expressible (ADR 0010). JSON numbers arrive as float64 through the any-typed
+	// spec, which the extraction must accept.
+	want := map[string]int{deployA: 3, deployB: 1}
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["replicas"] = float64(3)
+	depB := assignment(deployB, customerB, "beta-model", 2, "release-b")
+	// deployB leaves replicas unset, which must render as the single replica it has
+	// always had rather than zero.
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 2,
+			Deployments:   []controlplane.DesiredDeployment{depA, depB},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	file, err := state.ReadDeployments(filepath.Join(dir, "deployments.json"))
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	byID := map[string]state.Deployment{}
+	for _, entry := range file.Deployments {
+		byID[entry.DeploymentID] = entry
+	}
+	if byID[deployA].Replicas != want[deployA] {
+		t.Fatalf("alpha replicas = %d, want %d", byID[deployA].Replicas, want[deployA])
+	}
+	// An unset count renders as zero on disk, which the operator reads as one; the point
+	// is that it is not silently forced to something else here.
+	if byID[deployB].Replicas != 0 {
+		t.Fatalf("beta replicas = %d, want 0 (absent)", byID[deployB].Replicas)
+	}
+}
+
+func TestReplicasReachTheSinkAsSpecReplicas(t *testing.T) {
+	// With an operator present the agent declares intent as a custom resource; the
+	// replica count must travel on that resource's spec so the operator can honour it.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["replicas"] = float64(4)
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments:   []controlplane.DesiredDeployment{depA},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &recordingSink{}
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            sink,
+	}
+	instance := New(config, discardLogger())
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(sink.applies) != 1 || len(sink.applies[0]) != 1 {
+		t.Fatalf("the sink did not receive the assignment: %+v", sink.applies)
+	}
+	if got := sink.applies[0][0].Replicas; got != 4 {
+		t.Fatalf("replicas reaching the sink = %d, want 4", got)
+	}
+}

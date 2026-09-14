@@ -94,6 +94,14 @@ spec:
                     Fabric substitution, "standard" the server's own, and "auto" leaves
                     the choice to the platform, which currently means the server's own.
                   enum: [auto, fabric, standard]
+                replicas:
+                  type: integer
+                  description: |
+                    How many model-host replicas serve this deployment. Each replica is
+                    one pod holding one GPU and the data plane balances across them; a
+                    fleet is expressed by asking for more than one. Absent means one.
+                  minimum: 1
+                  maximum: 32
                 generation:
                   type: integer
                   description: Control-plane generation this declaration came from.
