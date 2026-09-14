@@ -328,8 +328,25 @@ when both the control plane and data plane are importable.
   health per process: a backend whose connection fails is ejected after a threshold
   and skipped, and a non-streamed request reselects a remaining healthy backend, so
   killing one replica does not fail requests. Ejection is a cooldown, not a
-  permanent write-off, so a host that restarts is used again. Selection is a single
-  healthy pick (round-robin); pluggable balancing strategies are deferred.
+  permanent write-off, so a host that restarts is used again.
+- Selection across the pool is a **per-deployment balancing strategy** (M2, ADR 0010),
+  carried control-plane → agent → CR → data plane and defaulting to `least_in_flight`
+  when unset. `least_in_flight` sends each request to the healthy backend with the
+  fewest requests in flight; `round_robin` cycles the healthy backends;
+  `session_affinity` hashes a session key (a session/user header, else the request's
+  own `user`, else the account) to a stable backend and fails over deterministically
+  when that backend is ejected; `weighted` picks proportionally to each backend's
+  weight. Every strategy chooses only among the backends that are healthy right now, so
+  none can return an ejected host.
+- On a connection failure a **non-streamed** request retries against another healthy
+  backend up to a bounded number of attempts and surfaces `upstream_unavailable` only
+  when none answers, so a fully-ejected pool degrades cleanly rather than looping. A
+  **streamed** request may reselect another backend only before the first byte reaches
+  the client; once any byte has been sent the response is never replayed, and a later
+  failure surfaces as an in-stream error event.
+- Metrics are labelled **per backend** as well as per deployment — request counts and
+  outcomes, in-flight gauge, and ejection events — so each strategy's effect on the
+  spread is measurable.
 - Client `Authorization` and `X-Fabric-*` ownership headers are dropped before
   proxying, and the reply reports the customer's alias rather than the internal
   release name.
@@ -342,8 +359,8 @@ control-audience token from the same issuer is rejected as `wrong_audience`.
 
 Not implemented: mTLS or network policy to the model host beyond the optional
 client-certificate path, and telemetry export. Usage is buffered locally in a
-bounded queue with no exporter. Balancing across pool backends is a single healthy
-pick; weighted and least-in-flight strategies are deferred.
+bounded queue with no exporter. Backend health is tracked per data-plane process,
+the same fleet-level approximation the limits made before the shared-limit backend.
 
 ### Cluster agent
 

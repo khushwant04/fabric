@@ -71,6 +71,39 @@ def test_a_backends_list_loads_and_carries_id_and_weight() -> None:
     assert deployment.backends[1].weight == 1.0
 
 
+def test_strategy_is_parsed_from_the_config_and_defaults_to_least_in_flight() -> None:
+    registry = DeploymentRegistry.from_payload(
+        _payload(
+            {
+                "deployment_id": str(DEP),
+                "account_id": str(ACCOUNT),
+                "model_alias": "launch-model",
+                "upstream_url": "http://model-host.test",
+                "strategy": "weighted",
+            }
+        )
+    )
+    deployment = registry.resolve("launch-model", account_id=ACCOUNT)
+    assert deployment.strategy == "weighted"
+    assert deployment.build_pool().strategy_name == "weighted"
+
+
+def test_strategy_defaults_when_absent() -> None:
+    registry = DeploymentRegistry.from_payload(
+        _payload(
+            {
+                "deployment_id": str(DEP),
+                "account_id": str(ACCOUNT),
+                "model_alias": "launch-model",
+                "upstream_url": "http://model-host.test",
+            }
+        )
+    )
+    deployment = registry.resolve("launch-model", account_id=ACCOUNT)
+    assert deployment.strategy == "least_in_flight"
+    assert deployment.build_pool().strategy_name == "least_in_flight"
+
+
 def test_backends_win_when_both_shapes_are_present() -> None:
     registry = DeploymentRegistry.from_payload(
         _payload(
@@ -101,7 +134,7 @@ def _backends(*urls: str) -> list[Backend]:
 
 
 def test_the_pool_round_robins_across_healthy_backends() -> None:
-    pool = BackendPool(_backends("http://a", "http://b", "http://c"))
+    pool = BackendPool(_backends("http://a", "http://b", "http://c"), strategy="round_robin")
     picks = [pool.select().backend_id for _ in range(6)]
     # Every backend is used and none is starved.
     assert set(picks) == {"http://a", "http://b", "http://c"}
@@ -218,6 +251,10 @@ def _pool_registry() -> DeploymentRegistry:
                     Backend(url="http://a.test", backend_id="pod-a"),
                     Backend(url="http://b.test", backend_id="pod-b"),
                 ),
+                # Round-robin so sequential requests visibly spread; the M1 health
+                # behaviour under test (skip a dead backend, reselect) is independent of
+                # which strategy chooses among the healthy ones.
+                strategy="round_robin",
             )
         ]
     )

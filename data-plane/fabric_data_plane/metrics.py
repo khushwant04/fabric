@@ -38,11 +38,38 @@ class Metrics:
         self._latency_sum: dict[str, float] = defaultdict(float)
         self._latency_count: dict[str, int] = defaultdict(int)
         self._in_flight: dict[str, int] = defaultdict(int)
+        # Per-backend series, so a balancing strategy's effect is measurable: which
+        # backend served how many requests with what outcome, how many are in flight on
+        # each, and how often each was ejected. Labelled by backend in addition to
+        # deployment, because a deployment is now a pool (ADR 0010) and a single
+        # deployment-level number would hide an uneven spread or one hot host.
+        self._backend_requests: dict[tuple[str, str, str], int] = defaultdict(int)
+        self._backend_in_flight: dict[tuple[str, str], int] = defaultdict(int)
+        self._backend_ejections: dict[tuple[str, str], int] = defaultdict(int)
         self._started = time.time()
 
     def request_started(self, deployment: str) -> None:
         with self._lock:
             self._in_flight[deployment] += 1
+
+    def backend_started(self, *, deployment: str, backend: str) -> None:
+        """Record that a request has been dispatched to a specific backend."""
+        with self._lock:
+            self._backend_in_flight[(deployment, backend)] += 1
+
+    def backend_finished(
+        self, *, deployment: str, backend: str, outcome: str
+    ) -> None:
+        """Record that a request to a specific backend has ended, with its outcome."""
+        with self._lock:
+            if self._backend_in_flight.get((deployment, backend), 0) > 0:
+                self._backend_in_flight[(deployment, backend)] -= 1
+            self._backend_requests[(deployment, backend, outcome)] += 1
+
+    def backend_ejected(self, *, deployment: str, backend: str) -> None:
+        """Record that a backend was ejected from a pool after crossing the threshold."""
+        with self._lock:
+            self._backend_ejections[(deployment, backend)] += 1
 
     def request_finished(
         self,
@@ -93,6 +120,9 @@ class Metrics:
             sums = dict(self._latency_sum)
             counts = dict(self._latency_count)
             in_flight = dict(self._in_flight)
+            backend_requests = dict(self._backend_requests)
+            backend_in_flight = dict(self._backend_in_flight)
+            backend_ejections = dict(self._backend_ejections)
             uptime = time.time() - self._started
 
         lines: list[str] = []
@@ -109,6 +139,36 @@ class Metrics:
         lines.append("# TYPE fabric_dp_requests_in_flight gauge")
         for deployment, value in sorted(in_flight.items()):
             lines.append(f'fabric_dp_requests_in_flight{{deployment_id="{deployment}"}} {value}')
+
+        lines.append(
+            "# HELP fabric_dp_backend_requests_total Requests per backend, by outcome."
+        )
+        lines.append("# TYPE fabric_dp_backend_requests_total counter")
+        for (deployment, backend, outcome), value in sorted(backend_requests.items()):
+            lines.append(
+                f'fabric_dp_backend_requests_total{{deployment_id="{deployment}",'
+                f'backend="{backend}",outcome="{outcome}"}} {value}'
+            )
+
+        lines.append(
+            "# HELP fabric_dp_backend_in_flight Requests currently in flight per backend."
+        )
+        lines.append("# TYPE fabric_dp_backend_in_flight gauge")
+        for (deployment, backend), value in sorted(backend_in_flight.items()):
+            lines.append(
+                f'fabric_dp_backend_in_flight{{deployment_id="{deployment}",'
+                f'backend="{backend}"}} {value}'
+            )
+
+        lines.append(
+            "# HELP fabric_dp_backend_ejections_total Times a backend was ejected from a pool."
+        )
+        lines.append("# TYPE fabric_dp_backend_ejections_total counter")
+        for (deployment, backend), value in sorted(backend_ejections.items()):
+            lines.append(
+                f'fabric_dp_backend_ejections_total{{deployment_id="{deployment}",'
+                f'backend="{backend}"}} {value}'
+            )
 
         lines.append("# HELP fabric_dp_tokens_total Tokens the model reported, by direction.")
         lines.append("# TYPE fabric_dp_tokens_total counter")

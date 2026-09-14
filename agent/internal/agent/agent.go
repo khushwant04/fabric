@@ -264,6 +264,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		}
 		entry.KernelMode = kernelModeFromSpec(assignment.Spec)
 		entry.Replicas = replicasFromSpec(assignment.Spec)
+		entry.Strategy = strategyFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || previous != entry {
 			changed = true
 			a.log.Info("configured deployment",
@@ -532,6 +533,29 @@ func replicasFromSpec(spec map[string]any) int {
 		}
 	}
 	return 0
+}
+
+// strategyFromSpec extracts how the data plane should balance across this deployment's
+// backends (M2, ADR 0010).
+//
+// It lives under the runtime sub-spec beside kernel_mode, because both are properties of
+// how the deployment is served. An unrecognised value is treated as unset rather than
+// rejected, matching kernelModeFromSpec: the control plane validates the vocabulary, and
+// an agent that refused a value a newer control plane understands would stop reconciling
+// entirely. Unset carries through as empty, which the data plane reads as its own
+// default of least-in-flight.
+func strategyFromSpec(spec map[string]any) string {
+	runtime, ok := spec["runtime"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	strategy, _ := runtime["strategy"].(string)
+	switch strategy {
+	case "least_in_flight", "round_robin", "session_affinity", "weighted":
+		return strategy
+	default:
+		return ""
+	}
 }
 
 // releaseFromSpec extracts the runtime release the host should serve.

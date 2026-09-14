@@ -1055,3 +1055,116 @@ func TestReplicasReachTheSinkAsSpecReplicas(t *testing.T) {
 		t.Fatalf("replicas reaching the sink = %d, want 4", got)
 	}
 }
+
+func TestStrategyFlowsFromTheDesiredSpecIntoConfiguration(t *testing.T) {
+	// The balancing strategy is a per-deployment field the data plane reads (M2, ADR
+	// 0010). It lives under the runtime sub-spec beside kernel_mode and must survive
+	// into the rendered configuration; an unset one renders empty so the data plane
+	// applies its own default of least-in-flight.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["runtime"].(map[string]any)["strategy"] = "weighted"
+	depB := assignment(deployB, customerB, "beta-model", 2, "release-b")
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 2,
+			Deployments:   []controlplane.DesiredDeployment{depA, depB},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	file, err := state.ReadDeployments(filepath.Join(dir, "deployments.json"))
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	byID := map[string]state.Deployment{}
+	for _, entry := range file.Deployments {
+		byID[entry.DeploymentID] = entry
+	}
+	if byID[deployA].Strategy != "weighted" {
+		t.Fatalf("alpha strategy = %q, want weighted", byID[deployA].Strategy)
+	}
+	if byID[deployB].Strategy != "" {
+		t.Fatalf("beta strategy = %q, want empty (data-plane default)", byID[deployB].Strategy)
+	}
+}
+
+func TestUnknownStrategyIsCarriedAsUnset(t *testing.T) {
+	// A value a newer control plane might send must not stop the agent reconciling; it
+	// is treated as unset so the data plane applies its default, mirroring kernel_mode.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["runtime"].(map[string]any)["strategy"] = "not_a_real_strategy"
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments:   []controlplane.DesiredDeployment{depA},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	file, err := state.ReadDeployments(filepath.Join(dir, "deployments.json"))
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	if file.Deployments[0].Strategy != "" {
+		t.Fatalf("strategy = %q, want empty for an unknown value", file.Deployments[0].Strategy)
+	}
+}
+
+func TestStrategyReachesTheSinkAsSpecStrategy(t *testing.T) {
+	// With an operator present the agent declares intent as a custom resource; the
+	// strategy must travel on that resource's spec so the operator can publish it into
+	// the data plane's configuration document.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["runtime"].(map[string]any)["strategy"] = "session_affinity"
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments:   []controlplane.DesiredDeployment{depA},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &recordingSink{}
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            sink,
+	}
+	instance := New(config, discardLogger())
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(sink.applies) != 1 || len(sink.applies[0]) != 1 {
+		t.Fatalf("the sink did not receive the assignment: %+v", sink.applies)
+	}
+	if got := sink.applies[0][0].Strategy; got != "session_affinity" {
+		t.Fatalf("strategy reaching the sink = %q, want session_affinity", got)
+	}
+}

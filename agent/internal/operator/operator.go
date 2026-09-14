@@ -61,8 +61,14 @@ type Spec struct {
 	// expressed by asking for more than one (ADR 0010): each replica is one pod holding
 	// one GPU, and the data plane balances across them. Absent or zero means one, so a
 	// deployment that predates this field is unchanged.
-	Replicas   int `json:"replicas,omitempty"`
-	Generation int `json:"generation"`
+	Replicas int `json:"replicas,omitempty"`
+	// Strategy is how the data plane balances across this deployment's backends:
+	// "least_in_flight" (the default), "round_robin", "session_affinity", or "weighted"
+	// (M2, ADR 0010). It belongs on the deployment rather than the stamp because the
+	// right choice depends on what is being served, not on where. Empty means the data
+	// plane's own default, which is least-in-flight.
+	Strategy   string `json:"strategy,omitempty"`
+	Generation int    `json:"generation"`
 }
 
 // DesiredReplicas is the replica count to run, defaulting to one when unset.
@@ -137,6 +143,9 @@ type dataPlaneEntry struct {
 	UpstreamURL   string             `json:"upstream_url"`
 	UpstreamModel string             `json:"upstream_model,omitempty"`
 	Backends      []dataPlaneBackend `json:"backends,omitempty"`
+	// Strategy is how the data plane balances across Backends. Omitted when the
+	// deployment does not name one, so the data plane applies its own default.
+	Strategy string `json:"strategy,omitempty"`
 }
 
 // dataPlaneBackend is one model-host endpoint in a deployment's pool.
@@ -361,6 +370,7 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 			ModelAlias:    item.Spec.ModelAlias,
 			UpstreamURL:   item.Spec.UpstreamURL,
 			UpstreamModel: item.Spec.UpstreamModel,
+			Strategy:      item.Spec.Strategy,
 		}
 		if pool := backends[item.Spec.DeploymentID]; len(pool) > 0 {
 			entry.Backends = pool
