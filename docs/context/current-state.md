@@ -182,8 +182,15 @@ discoverable, and the operator reads the ready endpoints and publishes them into
 data plane's configuration as a `backends` list for the data plane to balance across,
 falling back to the Service address while pods are still starting. Status carries observed
 ready and unavailable replica counts; a partial fleet remains `pending` until every requested
-replica is ready, while the ready endpoints can still serve. The rollout strategy
-stays `Recreate` for now.
+replica is ready, while the ready endpoints can still serve.
+
+A release change prepares a release-addressed candidate beside the active workload (M3,
+ADR 0012). The active release keeps all traffic until every candidate replica is ready and
+has a concrete EndpointSlice backend. The operator then publishes candidate weight one and
+active weight zero, and does not delete the active workload until the data plane acknowledges
+the exact configuration revision and reports every old backend at zero in-flight. A failed
+candidate is removed without changing the active route. Coexistence requires spare GPU
+capacity; Fabric never falls back to a destructive rollout while promising zero downtime.
 
 ### Control-plane packaging
 

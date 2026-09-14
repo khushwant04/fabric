@@ -149,9 +149,15 @@ type dataPlaneEntry struct {
 }
 
 // dataPlaneBackend is one model-host endpoint in a deployment's pool.
+//
+// Weight is consulted only by the weighted strategy (FEAT-004), which is how a rollout
+// splits traffic between the old and new release: every backend of a release carries that
+// release's share, so the data plane sends each release traffic in proportion. Omitted
+// when it is the default so a non-rollout pool renders unchanged.
 type dataPlaneBackend struct {
-	URL string `json:"url"`
-	ID  string `json:"id,omitempty"`
+	URL    string  `json:"url"`
+	ID     string  `json:"id,omitempty"`
+	Weight float64 `json:"weight,omitempty"`
 }
 
 // Options configures a reconciler.
@@ -178,6 +184,11 @@ type Reconciler struct {
 	// while a node runs, so listing nodes every pass would spend a cluster read per
 	// interval on an answer that does not move.
 	profiled bool
+	// allocatableGPUs is the total number of GPUs the profiled nodes advertise, retained
+	// from profiling so a rollout can ask whether the stamp has room to run a new release
+	// beside an old one (ADR 0011). Zero when the hardware could not be profiled, which is
+	// read conservatively as "assume there is room" so an unprofilable stamp still rolls.
+	allocatableGPUs int
 }
 
 // New builds a reconciler.
@@ -271,12 +282,20 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 		// than discovered when the container exits.
 		r.applyHardwareProfile(ctx)
 		result.HostsTotal = len(serving)
+		// Whether the stamp has GPU room to run a new release beside an old one during a
+		// rollout, computed once per pass from the hardware profile (ADR 0011). A stamp
+		// that cannot fit both falls back to Recreate rather than deadlocking.
+		canCoexist := r.canCoexist(serving)
+		// The strategy the data plane must use when two releases are being split by
+		// weight overrides whatever the deployment declared, but only for the pass while
+		// the rollout is in flight.
+		rolloutStrategy := map[string]string{}
 		// Counted across the pass so the stamp's budget for simultaneous changes is
 		// respected: without this every deployment would change release at once and a
 		// bad release would take the whole stamp down together.
 		inFlight := 0
 		for index := range serving {
-			state, observeErr := r.observeRollout(ctx, serving[index])
+			state, observeErr := r.observeRollout(ctx, serving[index], canCoexist)
 			if observeErr != nil {
 				r.options.Log.Warn("could not read rollout state",
 					"resource", serving[index].Metadata.Name, "error", observeErr)
@@ -287,7 +306,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 				r.options.Rollout, serving[index], state, inFlight, time.Now(),
 			)
 			decisions[serving[index].Spec.DeploymentID] = decision
-			if decision.Release != state.Current || decision.RolledBack {
+			if decision.Release != state.Current || decision.RolledBack || decision.Coexist {
 				inFlight++
 			}
 			if decision.RolledBack {
@@ -315,13 +334,26 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 			// The operator owns the host, so it decides the upstream, overriding
 			// whatever the agent guessed at declaration time.
 			serving[index].Spec.UpstreamURL = r.hostUpstream(serving[index])
-			// The concrete pool the data plane balances across: the ready pod endpoints
-			// behind the headless Service, or the Service address itself when none are
-			// resolvable yet (ADR 0010).
-			backends[serving[index].Spec.DeploymentID] = r.discoverBackends(ctx, serving[index])
+			// The concrete pool the data plane balances across. During a coexisting
+			// rollout this is the union of both releases' endpoints, each weighted by the
+			// rollout decision so the data plane's weighted strategy splits traffic; the
+			// rest of the time it is the single release's ready endpoints (ADR 0010/0011).
+			pool, strategy := r.rolloutBackends(ctx, serving[index], decision)
+			backends[serving[index].Spec.DeploymentID] = pool
+			if strategy != "" {
+				rolloutStrategy[serving[index].Spec.DeploymentID] = strategy
+			}
 		}
 
-		if err := r.pruneHosts(ctx, serving); err != nil {
+		// A rollout in flight forces the weighted strategy for the deployments it touches,
+		// so the split by weight is honoured regardless of what the deployment declared.
+		for index := range serving {
+			if strategy, ok := rolloutStrategy[serving[index].Spec.DeploymentID]; ok {
+				serving[index].Spec.Strategy = strategy
+			}
+		}
+
+		if err := r.pruneHosts(ctx, serving, decisions); err != nil {
 			r.options.Log.Warn("could not prune model hosts", "error", err)
 		}
 	}
@@ -559,14 +591,27 @@ func (r *Reconciler) appliedReason() string {
 	return "DataPlaneConfigurationRendered"
 }
 
-// pruneHosts removes workloads whose deployment is no longer declared.
+// pruneHosts removes workloads whose deployment is no longer declared, and whose sidecar
+// is not part of a rollout still in flight.
 //
 // Labelled lookup rather than remembered state: an operator that restarted would
-// otherwise leak a GPU-holding workload it had forgotten about.
-func (r *Reconciler) pruneHosts(ctx context.Context, serving []ModelDeployment) error {
+// otherwise leak a GPU-holding workload it had forgotten about. A coexisting rollout's
+// sidecar workload (hostNameForRelease) is a legitimately live host for its deployment
+// while the shift is in progress, so it is kept until the decision says to remove it;
+// pruning it here would tear down the very release that is carrying traffic.
+func (r *Reconciler) pruneHosts(
+	ctx context.Context, serving []ModelDeployment, decisions map[string]RolloutDecision,
+) error {
+	// The workloads that must survive this pass: each deployment's primary host, plus any
+	// sidecar a coexisting rollout is still using.
 	wanted := make(map[string]struct{}, len(serving))
 	for _, item := range serving {
 		wanted[hostName(item)] = struct{}{}
+		decision := decisions[item.Spec.DeploymentID]
+		if decision.Coexist && !decision.RemoveSidecar &&
+			decision.SidecarRelease != "" && decision.SidecarRelease != decision.Release {
+			wanted[hostNameForRelease(item, decision.SidecarRelease)] = struct{}{}
+		}
 	}
 
 	path := fmt.Sprintf(
@@ -591,7 +636,10 @@ func (r *Reconciler) pruneHosts(ctx context.Context, serving []ModelDeployment) 
 			// rather than deleted on a guess.
 			continue
 		}
-		if err := r.deleteHost(ctx, id); err != nil {
+		// Delete by workload name rather than deriving it from the id, so a sidecar
+		// (which shares the id but has a release-suffixed name) is removed correctly once
+		// it is no longer wanted.
+		if err := r.deleteWorkload(ctx, existing.Metadata.Name); err != nil {
 			return err
 		}
 		r.options.Log.Info("model host removed", "deployment", existing.Metadata.Name)
@@ -625,6 +673,45 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) error {
 	}
 }
 
+// canCoexist reports whether the stamp has GPU capacity to run a new release beside the
+// currently-serving ones during a rollout (ADR 0011).
+//
+// A GPU is not shared: each replica of each deployment holds one device, so the committed
+// count is the sum of every serving deployment's replicas times the GPUs per host. A
+// weighted rollout needs one deployment's worth of spare devices on top of that to bring
+// the new release up beside the old. Where the stamp does not have them, the rollout must
+// fall back to Recreate rather than deadlock waiting for a device that will not free, and
+// this is the honest signal that says so.
+//
+// When the hardware could not be profiled (allocatableGPUs is zero) the answer is
+// conservatively "yes": refusing to roll out on a stamp the operator merely failed to
+// measure would be worse than attempting the coexisting path, which the scheduler will
+// still gate on real capacity. The gpu request per host being zero (an upstream-only
+// stamp, no managed host) likewise means there is nothing to contend for, so coexistence
+// is free.
+func (r *Reconciler) canCoexist(serving []ModelDeployment) bool {
+	if r.allocatableGPUs <= 0 {
+		return true
+	}
+	perHost := r.options.ModelHost.GPUs
+	if perHost <= 0 {
+		return true
+	}
+
+	committed := 0
+	largest := 0
+	for _, item := range serving {
+		need := item.Spec.DesiredReplicas() * perHost
+		committed += need
+		if need > largest {
+			largest = need
+		}
+	}
+	// Room for the largest deployment's worth of extra devices is enough to coexist a
+	// single rollout at a time, which is all MaxParallel permits by default.
+	return r.allocatableGPUs-committed >= largest
+}
+
 // applyHardwareProfile adjusts host settings to the GPUs this stamp actually has.
 //
 // Profiled once and remembered, because nodes do not change capability while running and
@@ -654,13 +741,16 @@ func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
 		return
 	}
 
+	total := 0
 	for _, profile := range profiles {
+		total += profile.Count
 		r.options.Log.Info("gpu profiled",
 			"node", profile.Node, "model", profile.Model,
 			"compute_capability", profile.Capability.String(),
 			"memory_mib", profile.MemoryMiB, "gpus", profile.Count,
 			"source", profile.Source)
 	}
+	r.allocatableGPUs = total
 
 	adjusted, changes := applyProfile(r.options.ModelHost, profiles)
 	for _, change := range changes {

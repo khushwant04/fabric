@@ -150,6 +150,27 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 				writeJSON(w, 404, map[string]string{"reason": "NotFound"})
 				return
 			}
+			// Apply the merge patch to the stored object so a later observe reads the new
+			// release annotation, as the real API server would. Only the fields the
+			// operator patches (spec, metadata labels/annotations) are merged.
+			var patch struct {
+				Spec     map[string]any `json:"spec"`
+				Metadata struct {
+					Labels      map[string]string `json:"labels"`
+					Annotations map[string]string `json:"annotations"`
+				} `json:"metadata"`
+			}
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &patch)
+			if patch.Spec != nil {
+				existing.Spec = patch.Spec
+			}
+			if patch.Metadata.Labels != nil {
+				existing.Metadata.Labels = patch.Metadata.Labels
+			}
+			if patch.Metadata.Annotations != nil {
+				existing.Metadata.Annotations = patch.Metadata.Annotations
+			}
 			writeJSON(w, 200, existing)
 		case http.MethodDelete:
 			delete(state.deploys, name)
@@ -739,6 +760,182 @@ func TestBackendsFallBackToTheServiceAddressWithoutEndpoints(t *testing.T) {
 	want := fmt.Sprintf("http://fabric-host-dep-a.%s.svc:8000", namespace)
 	if len(entries[0].Backends) != 1 || entries[0].Backends[0].URL != want {
 		t.Fatalf("fallback backend = %v, want a single %q", entries[0].Backends, want)
+	}
+}
+
+// backendWeights indexes a config entry's backends by URL to their weight, so a test can
+// assert how a weighted rollout split the traffic.
+func backendWeights(entry dataPlaneEntry) map[string]float64 {
+	weights := map[string]float64{}
+	for _, backend := range entry.Backends {
+		weights[backend.URL] += backend.Weight
+	}
+	return weights
+}
+
+func TestAReleaseChangeCoexistsBothReleasesInTheConfig(t *testing.T) {
+	// The downtime-free rollout, end to end through the operator: a release change brings
+	// the new release up beside the old, and the data plane config carries BOTH releases'
+	// backends with weights so the weighted strategy splits traffic (ADR 0011).
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.UpstreamModel = "r1"
+	item.Spec.Replicas = 2
+	state, client := newHostServer(t, item)
+	subject := hostReconciler(client, testHost())
+
+	// First pass: the primary settles on r1 and becomes ready (readyAfter drives it), so
+	// r1 is the observed-good release before the change.
+	state.readyAfter = 1
+	primary := "fabric-host-dep-a"
+	state.endpoints[primary] = []endpointAddress{
+		{Address: "10.0.0.1", Ready: true}, {Address: "10.0.0.2", Ready: true},
+	}
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	// Declare r2. The primary workload rolls to r2, while r1 keeps serving from its
+	// sidecar. Second pass begins the rollout (primary patched to r2, r1 sidecar created).
+	state.resources["alpha"].Spec.UpstreamModel = "r2"
+	state.deploys[primary].Status = nil
+	state.readyAfter = 0
+	sidecar := "fabric-host-dep-a-" + releaseSuffix("r1")
+	state.endpoints[sidecar] = []endpointAddress{{Address: "10.1.0.1", Ready: true}}
+	state.endpoints[primary] = nil
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if _, ok := state.deploys[sidecar]; !ok {
+		t.Fatalf("no sidecar workload was created for the old release: %v", state.deploys)
+	}
+
+	// Third pass: half of the new release's replicas (1 of 2) are ready, so traffic
+	// splits between the two releases. The primary now publishes a ready r2 endpoint.
+	state.deploys[primary].Status = &struct {
+		ReadyReplicas int `json:"readyReplicas,omitempty"`
+		Replicas      int `json:"replicas,omitempty"`
+	}{ReadyReplicas: 1, Replicas: 2}
+	state.readyAfter = 0
+	state.endpoints[primary] = []endpointAddress{{Address: "10.2.0.1", Ready: true}}
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+
+	entries := decodeConfig(t, state.configMap)
+	if len(entries) != 1 {
+		t.Fatalf("expected one deployment entry, got %d", len(entries))
+	}
+	if entries[0].Strategy != "weighted" {
+		t.Fatalf("a coexisting rollout must force the weighted strategy: %q", entries[0].Strategy)
+	}
+	weights := backendWeights(entries[0])
+	// BOTH releases are in the pool with weight, so the data plane splits traffic.
+	if weights["http://10.1.0.1:8000"] <= 0 {
+		t.Fatalf("the old release is not serving during the rollout: %+v", entries[0].Backends)
+	}
+	if weights["http://10.2.0.1:8000"] <= 0 {
+		t.Fatalf("the new release is not receiving its share: %+v", entries[0].Backends)
+	}
+	total := 0.0
+	for _, w := range weights {
+		total += w
+	}
+	if total <= 0 {
+		t.Fatalf("the pool is empty mid-rollout, requests would be dropped: %+v", entries[0].Backends)
+	}
+}
+
+func TestAWeightedRolloutCompletesAndDrainsTheOldRelease(t *testing.T) {
+	// When the new release is fully ready the old release's workload is removed and the
+	// config returns to a single release (ADR 0011).
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.UpstreamModel = "r1"
+	state, client := newHostServer(t, item)
+	subject := hostReconciler(client, testHost())
+	primary := "fabric-host-dep-a"
+	sidecar := "fabric-host-dep-a-" + releaseSuffix("r1")
+
+	// Bring r1 up ready.
+	state.readyAfter = 1
+	state.endpoints[primary] = []endpointAddress{{Address: "10.0.0.1", Ready: true}}
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	// Declare r2 and let it start (primary not ready), creating the r1 sidecar.
+	state.resources["alpha"].Spec.UpstreamModel = "r2"
+	state.deploys[primary].Status = nil
+	state.readyAfter = 0
+	state.endpoints[sidecar] = []endpointAddress{{Address: "10.1.0.1", Ready: true}}
+	state.endpoints[primary] = nil
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if _, ok := state.deploys[sidecar]; !ok {
+		t.Fatal("sidecar was not created")
+	}
+
+	// The rollout must first take effect: after the starting pass the primary is on r2.
+	// Run one more pass so the primary is observed on r2 with the sidecar (the weighted
+	// shift), then mark the primary fully ready and reconcile again to complete it.
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	// Now the primary's r2 is fully ready. The completion pass must drain the r1 sidecar
+	// and return to a single release. Set readiness directly so it is deterministic.
+	state.readyAfter = 1
+	state.deploys[primary].Status = &struct {
+		ReadyReplicas int `json:"readyReplicas,omitempty"`
+		Replicas      int `json:"replicas,omitempty"`
+	}{ReadyReplicas: 1, Replicas: 1}
+	state.endpoints[primary] = []endpointAddress{{Address: "10.2.0.1", Ready: true}}
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("completion pass: %v", err)
+	}
+
+	if _, ok := state.deploys[sidecar]; ok {
+		t.Fatalf("the old release's sidecar was not drained: %v", state.deploys)
+	}
+	entries := decodeConfig(t, state.configMap)
+	urls := map[string]bool{}
+	for _, backend := range entries[0].Backends {
+		urls[backend.URL] = true
+	}
+	if urls["http://10.1.0.1:8000"] {
+		t.Fatalf("the drained release still appears in the pool: %+v", entries[0].Backends)
+	}
+	// The config returns to a single release: the new release's endpoint, and the
+	// strategy is no longer forced to weighted.
+	if !urls["http://10.2.0.1:8000"] {
+		t.Fatalf("the new release is not serving after completion: %+v", entries[0].Backends)
+	}
+	if entries[0].Strategy == "weighted" {
+		t.Fatalf("the config did not return to the deployment's own strategy: %q", entries[0].Strategy)
+	}
+}
+
+func TestARolloutFallsBackToRecreateWithoutSpareGPUs(t *testing.T) {
+	// A stamp whose only GPU is already committed cannot coexist two releases, so the
+	// operator must replace the release in place rather than stand up a sidecar that would
+	// never schedule (ADR 0011). Capacity is asserted directly on the decision path.
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.UpstreamModel = "r1"
+	item.Spec.Replicas = 1
+	_, client := newHostServer(t, item)
+	subject := hostReconciler(client, testHost())
+	// One allocatable GPU, one committed by the single-replica deployment: no room for a
+	// second release.
+	subject.allocatableGPUs = 1
+	subject.profiled = true
+
+	if subject.canCoexist([]ModelDeployment{item}) {
+		t.Fatal("a fully-committed single GPU stamp claimed it could coexist a rollout")
+	}
+
+	// With a spare device it can.
+	subject.allocatableGPUs = 2
+	if !subject.canCoexist([]ModelDeployment{item}) {
+		t.Fatal("a stamp with a spare GPU refused to coexist a rollout")
 	}
 }
 

@@ -528,3 +528,134 @@ def test_removal_to_empty_tombstones_late_backend_metric_updates(pool_plane) -> 
         deployment=label, backend=backend.backend_id, available=True
     )
     assert backend.backend_id not in pool_plane.metrics.render()
+# --- weighted rollout: two releases in one pool (M3, ADR 0011) --------------
+#
+# During a downtime-free release change the operator publishes BOTH releases' backends
+# into one deployment entry, each backend carrying its release's share of the weight, and
+# forces the weighted strategy so the data plane splits traffic between them. These tests
+# use the config document the operator would write and prove the split behaves, and that
+# when the new release reaches the whole weight the old release receives nothing.
+
+
+def _rollout_registry(old_weight: float, new_weight: float) -> DeploymentRegistry:
+    """A deployment mid-rollout: an old release (pod-old) and a new one (pod-new), each
+    with the operator-assigned weight, served by the weighted strategy."""
+    entry = {
+        "deployment_id": str(DEPLOYMENT_A),
+        "account_id": str(ACCOUNT_A),
+        "model_alias": "launch-model",
+        "strategy": "weighted",
+        "backends": [
+            {"url": "http://old.test", "id": "pod-old", "weight": old_weight},
+            {"url": "http://new.test", "id": "pod-new", "weight": new_weight},
+        ],
+    }
+    return DeploymentRegistry.from_payload({"deployments": [entry]})
+
+
+def test_a_two_release_pool_splits_traffic_by_weight() -> None:
+    # A 3:1 split toward the new release means it takes roughly three quarters of the
+    # traffic while the old release drains, but keeps serving its share.
+    import random
+
+    from fabric_data_plane.pool import build_strategy
+
+    registry = _rollout_registry(old_weight=0.25, new_weight=0.75)
+    deployment = registry.resolve("launch-model", account_id=ACCOUNT_A)
+    pool = deployment.build_pool()
+    # A seeded RNG makes the proportion assertable without flakiness.
+    pool._strategy = build_strategy("weighted", pool.health)
+    pool._strategy._rng = random.Random(20240501)
+
+    counts = {"pod-old": 0, "pod-new": 0}
+    for _ in range(4000):
+        counts[pool.select().backend_id] += 1
+
+    # Both releases receive traffic; neither is starved while the shift is in progress.
+    assert counts["pod-old"] > 0
+    assert counts["pod-new"] > 0
+    ratio = counts["pod-new"] / counts["pod-old"]
+    assert 2.4 < ratio < 3.6
+
+
+def test_when_the_new_release_reaches_full_weight_the_old_gets_nothing() -> None:
+    # The completion of a rollout: the operator drops the drained release from the pool
+    # entirely, so the config carries only the new release and it takes everything.
+    entry = {
+        "deployment_id": str(DEPLOYMENT_A),
+        "account_id": str(ACCOUNT_A),
+        "model_alias": "launch-model",
+        "strategy": "weighted",
+        "backends": [{"url": "http://new.test", "id": "pod-new", "weight": 1.0}],
+    }
+    registry = DeploymentRegistry.from_payload({"deployments": [entry]})
+    deployment = registry.resolve("launch-model", account_id=ACCOUNT_A)
+    pool = deployment.build_pool()
+
+    picks = {pool.select().backend_id for _ in range(100)}
+    # Only the new release is ever chosen: the old release receives nothing.
+    assert picks == {"pod-new"}
+
+
+def _rollout_pool_registry() -> DeploymentRegistry:
+    """The mid-rollout deployment reachable through the ingress: old at a.test carries the
+    bulk of the weight, new at b.test a smaller share, served by the weighted strategy."""
+    return DeploymentRegistry(
+        [
+            Deployment(
+                deployment_id=DEPLOYMENT_A,
+                account_id=ACCOUNT_A,
+                model_alias="launch-model",
+                backends=(
+                    Backend(url="http://a.test", backend_id="pod-old", weight=0.6),
+                    Backend(url="http://b.test", backend_id="pod-new", weight=0.4),
+                ),
+                strategy="weighted",
+            )
+        ]
+    )
+
+
+@pytest.fixture
+def rollout_plane(control_plane, multi_upstream: MultiBackendUpstream):
+    from fabric_data_plane.app import DataPlane
+    from fabric_data_plane.keys import KeyCache
+
+    settings = make_settings(backend_failure_threshold=1, backend_recovery_seconds=1000)
+    return DataPlane(
+        settings=settings,
+        keys=KeyCache(settings, client=control_plane.client()),
+        registry=_rollout_pool_registry(),
+        client=multi_upstream.client(),
+    )
+
+
+@pytest.fixture
+async def rollout_client(rollout_plane):
+    from fabric_data_plane.app import create_inference_app
+
+    app = create_inference_app(rollout_plane)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ingress.test") as http:
+        yield http
+
+
+async def test_no_request_is_dropped_across_a_simulated_release_change(
+    rollout_client, signing_key: SigningKey, multi_upstream: MultiBackendUpstream
+) -> None:
+    """The M3 safety property at the data plane: while both releases are in the pool every
+    request is served, and traffic reaches both releases, so a release change serves
+    continuously rather than going offline (ADR 0011)."""
+    for _ in range(20):
+        response = await rollout_client.post(
+            "/v1/chat/completions",
+            json=_chat(),
+            headers={"Authorization": f"Bearer {signing_key.issue()}"},
+        )
+        # Not one request dropped across the shift.
+        assert response.status_code == 200, response.text
+
+    # Both releases carried some of the traffic, so the split is real rather than all
+    # landing on one release.
+    assert "a.test" in multi_upstream.requests
+    assert "b.test" in multi_upstream.requests

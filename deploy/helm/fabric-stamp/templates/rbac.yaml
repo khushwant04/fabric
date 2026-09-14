@@ -47,10 +47,9 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # The headless Service publishes one EndpointSlice entry per ready model-host pod.
-  # The operator reads those addresses and writes the concrete backend pool consumed by
-  # the data plane; without this permission it would permanently fall back to one opaque
-  # Service URL and a multi-replica deployment would not be a Fabric-visible fleet.
+  # The headless Service publishes concrete endpoints for both ordinary fleet routing
+  # (ADR 0010) and release-specific weighted rollout routing (ADR 0012). The operator
+  # only observes these resources; Kubernetes owns EndpointSlice creation.
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch"]
