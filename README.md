@@ -255,7 +255,7 @@ Start with the [project review](docs/project-review.md) or the
 [Security and identity](docs/context/security-identity.md)
 
 **Direction**
-[Research directions](docs/research-directions.md) ·
+[Direction](docs/platform-direction.md) ·
 [Roadmap](docs/context/roadmap.md) ·
 [Risks and open questions](docs/context/risks-open-questions.md) ·
 [Architecture decision records](docs/context/adrs/README.md)
