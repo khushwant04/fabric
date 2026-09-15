@@ -178,14 +178,21 @@ class MultiBackendUpstream:
     def __init__(self) -> None:
         self.requests: list[str] = []
         self.dead: set[str] = set()
+        self.ambiguous_failure: set[str] = set()
+        self.statuses: dict[str, int] = {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
         self.requests.append(host)
         if host in self.dead:
             raise httpx.ConnectError("backend is down", request=request)
+        if host in self.ambiguous_failure:
+            raise httpx.ReadTimeout(
+                "backend timed out after accepting the request", request=request
+            )
+        status_code = self.statuses.get(host, 200)
         return httpx.Response(
-            200,
+            status_code,
             json={
                 "id": "cmpl-1",
                 "object": "chat.completion",
@@ -285,6 +292,59 @@ async def test_killing_one_backend_does_not_fail_requests(
     assert multi_upstream.requests.count("b.test") >= 6
 
 
+async def test_an_ambiguous_failure_is_not_replayed(
+    pool_client, signing_key: SigningKey, multi_upstream: MultiBackendUpstream
+) -> None:
+    """A timeout after acceptance must not execute the completion on a second host."""
+    multi_upstream.ambiguous_failure.add("a.test")
+
+    response = await pool_client.post(
+        "/v1/chat/completions",
+        json=_chat(),
+        headers={"Authorization": f"Bearer {signing_key.issue()}"},
+    )
+
+    assert response.status_code == 503
+    assert multi_upstream.requests == ["a.test"]
+
+
+async def test_a_server_error_marks_the_backend_unhealthy_without_replay(
+    pool_client, signing_key: SigningKey, multi_upstream: MultiBackendUpstream
+) -> None:
+    multi_upstream.statuses["a.test"] = 503
+    headers = {"Authorization": f"Bearer {signing_key.issue()}"}
+
+    first = await pool_client.post("/v1/chat/completions", json=_chat(), headers=headers)
+    second = await pool_client.post("/v1/chat/completions", json=_chat(), headers=headers)
+    third = await pool_client.post("/v1/chat/completions", json=_chat(), headers=headers)
+
+    # The explicit 503 is returned rather than replayed, but threshold=1 ejects that
+    # backend and subsequent requests keep serving on the healthy replica.
+    assert [first.status_code, second.status_code, third.status_code] == [503, 200, 200]
+    assert multi_upstream.requests == ["a.test", "b.test", "b.test"]
+
+
+async def test_a_streamed_server_error_marks_the_backend_unhealthy_without_replay(
+    pool_client, signing_key: SigningKey, multi_upstream: MultiBackendUpstream
+) -> None:
+    multi_upstream.statuses["a.test"] = 503
+    headers = {"Authorization": f"Bearer {signing_key.issue()}"}
+
+    streamed = await pool_client.post(
+        "/v1/chat/completions",
+        json={**_chat(), "stream": True},
+        headers=headers,
+    )
+    second = await pool_client.post("/v1/chat/completions", json=_chat(), headers=headers)
+    third = await pool_client.post("/v1/chat/completions", json=_chat(), headers=headers)
+
+    # The stream is never replayed after it starts. Its 503 health signal ejects a.test,
+    # so both later requests use b.test rather than resetting a.test to healthy.
+    assert streamed.status_code == 200
+    assert [second.status_code, third.status_code] == [200, 200]
+    assert multi_upstream.requests == ["a.test", "b.test", "b.test"]
+
+
 async def test_all_backends_dead_surfaces_as_unavailable(
     pool_client, signing_key: SigningKey, multi_upstream: MultiBackendUpstream
 ) -> None:
@@ -296,3 +356,45 @@ async def test_all_backends_dead_surfaces_as_unavailable(
     )
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "upstream_unavailable"
+
+
+
+def test_a_pool_rebuilds_when_a_stable_backend_id_moves(pool_plane) -> None:
+    """A pod identity may survive while EndpointSlice publishes a new dial address."""
+    before = pool_plane.pool_for(_pool_registry().resolve("launch-model", account_id=ACCOUNT_A))
+    moved = Deployment(
+        deployment_id=DEPLOYMENT_A,
+        account_id=ACCOUNT_A,
+        model_alias="launch-model",
+        backends=(
+            Backend(url="http://a-moved.test", backend_id="pod-a"),
+            Backend(url="http://b.test", backend_id="pod-b"),
+        ),
+    )
+
+    after = pool_plane.pool_for(moved)
+
+    assert after is not before
+    assert [backend.url for backend in after.backends] == [
+        "http://a-moved.test",
+        "http://b.test",
+    ]
+
+
+
+def test_withdrawn_deployment_pools_are_retired(pool_plane) -> None:
+    old_deployment = _pool_registry().resolve("launch-model", account_id=ACCOUNT_A)
+    pool_plane.pool_for(old_deployment)
+
+    replacement_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    replacement = Deployment(
+        deployment_id=replacement_id,
+        account_id=ACCOUNT_A,
+        model_alias="replacement-model",
+        upstream_url="http://replacement.test",
+    )
+    pool_plane.registry = DeploymentRegistry([replacement])
+    pool_plane.pool_for(replacement)
+
+    assert DEPLOYMENT_A not in pool_plane._pools
+    assert replacement_id in pool_plane._pools

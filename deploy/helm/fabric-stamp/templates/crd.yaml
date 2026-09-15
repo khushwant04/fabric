@@ -113,6 +113,12 @@ spec:
                   type: string
                 observedGeneration:
                   type: integer
+                readyReplicas:
+                  type: integer
+                  minimum: 0
+                unavailableReplicas:
+                  type: integer
+                  minimum: 0
                 conditions:
                   type: array
                   items:

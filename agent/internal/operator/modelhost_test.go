@@ -16,23 +16,28 @@ import (
 // hostServer is a fake API server holding custom resources plus the workloads the
 // operator creates for them.
 type hostServer struct {
-	t          *testing.T
-	resources  map[string]*ModelDeployment
-	configMap  *configMap
-	deploys    map[string]*deployment
-	services   map[string]*service
-	deleted    []string
-	readyAfter int
-	gets       int
+	t             *testing.T
+	resources     map[string]*ModelDeployment
+	configMap     *configMap
+	deploys       map[string]*deployment
+	services      map[string]*service
+	deleted       []string
+	readyAfter    int
+	readyReplicas int
+	gets          int
 	// endpoints maps a host name to the pod endpoints its headless Service selects,
 	// stood in for the EndpointSlices the operator reads.
 	endpoints map[string][]endpointAddress
 }
 
-// endpointAddress is one pod endpoint in the fake, with its readiness.
+// endpointAddress is one pod endpoint in the fake, with its readiness and identity.
 type endpointAddress struct {
-	Address string
-	Ready   bool
+	Address     string
+	AddressType string
+	Ready       bool
+	PodUID      string
+	PodName     string
+	Namespace   string
 }
 
 func testHost() ModelHost {
@@ -130,10 +135,14 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 			// Readiness appears only after the configured number of reads, standing in
 			// for a server that takes minutes to load weights.
 			if state.gets >= state.readyAfter && state.readyAfter > 0 {
+				readyReplicas := state.readyReplicas
+				if readyReplicas < 1 {
+					readyReplicas = 1
+				}
 				existing.Status = &struct {
 					ReadyReplicas int `json:"readyReplicas,omitempty"`
 					Replicas      int `json:"replicas,omitempty"`
-				}{ReadyReplicas: 1, Replicas: 1}
+				}{ReadyReplicas: readyReplicas, Replicas: readyReplicas}
 			}
 			writeJSON(w, 200, existing)
 		case http.MethodPatch:
@@ -182,19 +191,29 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 		}
 		list := endpointSliceList{}
 		if addresses, ok := state.endpoints[serviceName]; ok {
-			slice := endpointSlice{}
 			for _, addr := range addresses {
+				addressType := addr.AddressType
+				if addressType == "" {
+					addressType = "IPv4"
+				}
+				slice := endpointSlice{AddressType: addressType}
 				ready := addr.Ready
-				endpoint := struct {
-					Addresses  []string `json:"addresses"`
-					Conditions struct {
-						Ready *bool `json:"ready,omitempty"`
-					} `json:"conditions"`
-				}{Addresses: []string{addr.Address}}
+				endpoint := endpointSliceEndpoint{Addresses: []string{addr.Address}}
 				endpoint.Conditions.Ready = &ready
+				if addr.PodUID != "" || addr.PodName != "" {
+					endpoint.TargetRef = &struct {
+						Kind      string `json:"kind,omitempty"`
+						Namespace string `json:"namespace,omitempty"`
+						Name      string `json:"name,omitempty"`
+						UID       string `json:"uid,omitempty"`
+					}{
+						Kind: "Pod", Namespace: addr.Namespace,
+						Name: addr.PodName, UID: addr.PodUID,
+					}
+				}
 				slice.Endpoints = append(slice.Endpoints, endpoint)
+				list.Items = append(list.Items, slice)
 			}
-			list.Items = append(list.Items, slice)
 		}
 		writeJSON(w, 200, list)
 	})
@@ -352,6 +371,34 @@ func TestHostBecomingReadyIsReported(t *testing.T) {
 	// The reason must not claim only configuration when a host was started too.
 	if byType[ConditionApplied].Reason != "ModelHostAndConfigurationApplied" {
 		t.Fatalf("applied reason understates what happened: %q", byType[ConditionApplied].Reason)
+	}
+}
+
+func TestAPartiallyReadyFleetStaysPending(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.Replicas = 3
+	state, client := newHostServer(t, item)
+	state.readyAfter = 1
+	state.readyReplicas = 1
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	status := state.resources["alpha"].Status
+	if status.Phase != "pending" {
+		t.Fatalf("phase = %q, want pending while only part of the fleet is ready", status.Phase)
+	}
+	if status.ReadyReplicas == nil || *status.ReadyReplicas != 1 {
+		t.Fatalf("ready replicas = %v, want 1", status.ReadyReplicas)
+	}
+	if status.UnavailableReplicas == nil || *status.UnavailableReplicas != 2 {
+		t.Fatalf("unavailable replicas = %v, want 2", status.UnavailableReplicas)
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == ConditionHostReady && condition.Status != "False" {
+			t.Fatalf("partial fleet reported ready: %+v", condition)
+		}
 	}
 }
 
@@ -597,6 +644,26 @@ func TestTheHostServiceIsHeadless(t *testing.T) {
 	}
 }
 
+func TestAnExistingClusterIPServiceIsMigratedToHeadless(t *testing.T) {
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+	state.services["fabric-host-dep-a"] = &service{
+		Metadata: Metadata{Name: "fabric-host-dep-a", Namespace: namespace},
+		Spec: map[string]any{
+			"clusterIP": "10.96.0.25",
+			"selector":  map[string]any{"old": "selector"},
+		},
+	}
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	svc := state.services["fabric-host-dep-a"]
+	if svc == nil || svc.Spec["clusterIP"] != "None" {
+		t.Fatalf("legacy Service was not recreated as headless: %#v", svc)
+	}
+}
+
 func TestBackendsArePublishedFromReadyEndpoints(t *testing.T) {
 	// The operator publishes the concrete pod endpoints as a backends list so the data
 	// plane balances across them (ADR 0010). An unready endpoint is skipped.
@@ -626,6 +693,36 @@ func TestBackendsArePublishedFromReadyEndpoints(t *testing.T) {
 	// live host.
 	if entries[0].UpstreamURL != "http://10.0.0.1:8000" {
 		t.Fatalf("upstream_url = %q, want the first backend", entries[0].UpstreamURL)
+	}
+}
+
+func TestBackendsUsePodIdentityAndRenderIPv6Safely(t *testing.T) {
+	// EndpointSlice targetRef is the stable pod identity. Dual-stack slices may report
+	// the same pod twice, so publish it once (preferring IPv4) while still formatting an
+	// IPv6-only pod as a valid bracketed URL.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+	state.endpoints["fabric-host-dep-a"] = []endpointAddress{
+		{Address: "2001:db8::10", AddressType: "IPv6", Ready: true, PodUID: "pod-a"},
+		{Address: "10.0.0.10", AddressType: "IPv4", Ready: true, PodUID: "pod-a"},
+		{Address: "2001:db8::20", AddressType: "IPv6", Ready: true, PodUID: "pod-b"},
+	}
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	entries := decodeConfig(t, state.configMap)
+	if len(entries[0].Backends) != 2 {
+		t.Fatalf("backends = %v, want one address per pod", entries[0].Backends)
+	}
+	want := []dataPlaneBackend{
+		{ID: "pod-a", URL: "http://10.0.0.10:8000"},
+		{ID: "pod-b", URL: "http://[2001:db8::20]:8000"},
+	}
+	for i := range want {
+		if entries[0].Backends[i].ID != want[i].ID ||
+			entries[0].Backends[i].URL != want[i].URL {
+			t.Fatalf("backend[%d] = %+v, want %+v", i, entries[0].Backends[i], want[i])
+		}
 	}
 }
 

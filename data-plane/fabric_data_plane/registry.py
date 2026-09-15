@@ -166,6 +166,10 @@ class DeploymentRegistry:
             raise Forbidden("model_not_available", "Model is not available to this account")
         return deployment
 
+    def deployment_ids(self) -> frozenset[uuid.UUID]:
+        """Stable identities currently present, used to retire per-deployment state."""
+        return frozenset(self._by_id)
+
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         """Deployments this account may list."""
         return sorted(
@@ -262,6 +266,9 @@ class ReloadingRegistry:
     # The data plane treats this like a registry, so the read surface matches.
     def resolve(self, model: str, *, account_id: uuid.UUID) -> Deployment:
         return self._current().resolve(model, account_id=account_id)
+
+    def deployment_ids(self) -> frozenset[uuid.UUID]:
+        return self._current().deployment_ids()
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         return self._current().for_account(account_id)

@@ -167,7 +167,11 @@ Both modes are verified on a real cluster. Without the operator the agent writes
 file itself, which is a working stamp with one fewer moving part and no Kubernetes
 permissions.
 
-Not implemented: rollback and progressive rollout. The model host image itself is not built by Fabric.
+Release changes are serialized one deployment at a time and automatically roll back to the
+last release observed ready when the new one misses its readiness deadline. Traffic splitting
+is not implemented: the model-host Deployment still uses `Recreate`, so a release change has
+a downtime window. The model-host image itself is supplied by the operator configuration; it
+is not built by Fabric.
 
 A deployment can ask for more than one replica, and the operator honours it (ADR 0010):
 the model-host Deployment is sized from `spec.replicas` (default one, range 1-32,
@@ -176,7 +180,9 @@ replica it used to hardcode, and each replica is one pod holding one GPU. The pe
 Service is headless (`clusterIP: None`) so the pod endpoints are individually
 discoverable, and the operator reads the ready endpoints and publishes them into the
 data plane's configuration as a `backends` list for the data plane to balance across,
-falling back to the Service address while pods are still starting. The rollout strategy
+falling back to the Service address while pods are still starting. Status carries observed
+ready and unavailable replica counts; a partial fleet remains `pending` until every requested
+replica is ready, while the ready endpoints can still serve. The rollout strategy
 stays `Recreate` for now.
 
 ### Control-plane packaging

@@ -171,6 +171,13 @@ func (p *Publisher) Observed(ctx context.Context) (map[string]Status, error) {
 		if item.Status == nil {
 			continue
 		}
+		// Kubernetes preserves the status subresource when a spec update advances the
+		// object's generation. Until the operator observes that new generation, the old
+		// ready phase and replica counts describe the previous release and must not be
+		// forwarded as evidence that the new intent is ready.
+		if item.Status.ObservedGeneration != item.Metadata.Generation {
+			continue
+		}
 		observed[item.Spec.DeploymentID] = *item.Status
 	}
 	return observed, nil
@@ -197,10 +204,13 @@ func (p *Publisher) ObservedConditions(
 				continue
 			}
 			conditions[deploymentID] = agentcontract.ObservedCondition{
-				Reason:             condition.Reason,
-				Message:            condition.Message,
-				Applied:            condition.Status == "True",
-				ObservedGeneration: status.ObservedGeneration,
+				Phase:               status.Phase,
+				Reason:              condition.Reason,
+				Message:             condition.Message,
+				Applied:             condition.Status == "True",
+				ObservedGeneration:  status.ObservedGeneration,
+				ReadyReplicas:       status.ReadyReplicas,
+				UnavailableReplicas: status.UnavailableReplicas,
 			}
 		}
 	}

@@ -88,9 +88,11 @@ type Condition struct {
 
 // Status is what the operator observed, not what was asked for.
 type Status struct {
-	Phase              string      `json:"phase,omitempty"`
-	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
-	Conditions         []Condition `json:"conditions,omitempty"`
+	Phase               string      `json:"phase,omitempty"`
+	ObservedGeneration  int64       `json:"observedGeneration,omitempty"`
+	ReadyReplicas       *int        `json:"readyReplicas,omitempty"`
+	UnavailableReplicas *int        `json:"unavailableReplicas,omitempty"`
+	Conditions          []Condition `json:"conditions,omitempty"`
 }
 
 // Metadata is the subset of object metadata the operator uses.
@@ -248,7 +250,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	// Hosts first, because the address the data plane is given depends on where the
 	// host ended up. A configuration naming a Service that does not exist yet would
 	// make the data plane fail requests it could otherwise queue behind readiness.
-	ready := map[string]bool{}
+	ready := map[string]modelHostReadiness{}
 	decisions := map[string]RolloutDecision{}
 	// Concrete pool per deployment, discovered from the headless Service's endpoints.
 	// Only populated when the operator runs the host; otherwise the single upstream_url
@@ -289,7 +291,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 				result.Deferred++
 			}
 
-			hostReady, hostErr := r.applyHostWithRollout(ctx, serving[index], decision, state)
+			hostReadiness, hostErr := r.applyHostWithRollout(ctx, serving[index], decision, state)
 			if hostErr != nil {
 				// One host failing must not stop the others or discard configuration
 				// already applied for them.
@@ -297,8 +299,8 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 					"resource", serving[index].Metadata.Name, "error", hostErr)
 				continue
 			}
-			ready[serving[index].Spec.DeploymentID] = hostReady
-			if hostReady {
+			ready[serving[index].Spec.DeploymentID] = hostReadiness
+			if hostReadiness.Ready > 0 {
 				result.HostsReady++
 			}
 			// The operator owns the host, so it decides the upstream, overriding
@@ -457,8 +459,9 @@ func (r *Reconciler) statusIsCurrent(item ModelDeployment) bool {
 }
 
 func (r *Reconciler) reportApplied(
-	ctx context.Context, item ModelDeployment, hostReady bool, decision RolloutDecision,
+	ctx context.Context, item ModelDeployment, readiness modelHostReadiness, decision RolloutDecision,
 ) error {
+	hostReady := readiness.fullyReady()
 	now := time.Now().UTC().Format(time.RFC3339)
 	conditions := []Condition{
 		{
@@ -516,13 +519,19 @@ func (r *Reconciler) reportApplied(
 		})
 	}
 
-	patch := map[string]any{
-		"status": Status{
-			Phase:              phase,
-			ObservedGeneration: item.Metadata.Generation,
-			Conditions:         conditions,
-		},
+	status := Status{
+		Phase:              phase,
+		ObservedGeneration: item.Metadata.Generation,
+		Conditions:         conditions,
 	}
+	if r.options.ModelHost.Enabled() {
+		readyReplicas := readiness.Ready
+		unavailableReplicas := max(0, readiness.Desired-readiness.Ready)
+		status.ReadyReplicas = &readyReplicas
+		status.UnavailableReplicas = &unavailableReplicas
+	}
+
+	patch := map[string]any{"status": status}
 
 	path := fmt.Sprintf("%s/%s/status", r.resourcePath(), item.Metadata.Name)
 	if err := r.client.MergePatch(ctx, path, patch, nil); err != nil {

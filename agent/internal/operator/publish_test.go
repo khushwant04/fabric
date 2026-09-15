@@ -133,3 +133,24 @@ func TestObservedStatusComesFromTheCluster(t *testing.T) {
 		t.Fatalf("unexpected reason: %+v", status.Conditions[0])
 	}
 }
+
+func TestObservedStatusIgnoresThePreviousGeneration(t *testing.T) {
+	declared := resource("fabric-dep-a", "dep-a", "acct-a", "alpha-model", 3)
+	declared.Metadata.Labels = map[string]string{"fabric.khushwant.dev/stamp-id": stampID}
+	declared.Status = &Status{
+		Phase:              "ready",
+		ObservedGeneration: 2,
+		Conditions: []Condition{{
+			Type: ConditionApplied, Status: "True", Reason: "ModelHostAndConfigurationApplied",
+		}},
+	}
+	_, client := newAPIServer(t, declared)
+
+	observed, err := NewPublisher(client, namespace, stampID).Observed(context.Background())
+	if err != nil {
+		t.Fatalf("observed: %v", err)
+	}
+	if _, present := observed["dep-a"]; present {
+		t.Fatalf("stale generation-2 status was forwarded for generation 3: %v", observed)
+	}
+}

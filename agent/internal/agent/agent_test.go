@@ -864,9 +864,9 @@ func (s *observingSink) ObservedConditions(
 }
 
 func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
-	// An operator reconciles after the agent declares intent, so the first pass can
-	// only report what the agent did. When the cluster answers, the control plane must
-	// learn that instead, or it keeps the agent's placeholder forever.
+	// An operator reconciles after the agent declares intent, so the first pass has no
+	// readiness evidence and must fail closed as pending. When the cluster answers, the
+	// control plane must learn the observed phase and counts instead.
 	stub := &controlPlaneStub{
 		desired: []controlplane.DesiredState{{
 			StampID:       stampID,
@@ -900,18 +900,27 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 	if len(stub.statuses) != 1 {
 		t.Fatalf("expected one status, got %d", len(stub.statuses))
 	}
-	first := stub.statuses[0].Conditions[0]["reason"]
-	if first != "AgentAppliedLocalConfiguration" {
-		t.Fatalf("the first report should be the agent's own view, got %v", first)
+	first := stub.statuses[0]
+	if first.Conditions[0]["reason"] != "AwaitingOperatorObservation" {
+		t.Fatalf("the first report should fail closed until the operator observes it, got %+v", first)
+	}
+	if first.Phase != "pending" || first.ReadyReplicas != 0 || first.UnavailableReplicas != 1 {
+		t.Fatalf("pre-observation fleet status = %+v", first)
 	}
 
-	// The operator finishes reconciling.
+	// The operator has one of three replicas ready. Replica counts and phase are part of
+	// the verdict: configuration being applied is not the same as the requested fleet
+	// being fully ready.
+	readyOne, unavailableTwo := 1, 2
 	sink.observed = map[string]agentcontract.ObservedCondition{
 		deployA: {
-			Reason:             "DataPlaneConfigurationRendered",
-			Message:            "rendered",
-			Applied:            true,
-			ObservedGeneration: 1,
+			Phase:               "pending",
+			Reason:              "DataPlaneConfigurationRendered",
+			Message:             "rendered",
+			Applied:             true,
+			ObservedGeneration:  1,
+			ReadyReplicas:       &readyOne,
+			UnavailableReplicas: &unavailableTwo,
 		},
 	}
 
@@ -924,6 +933,10 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 	if got := stub.statuses[1].Conditions[0]["reason"]; got != "DataPlaneConfigurationRendered" {
 		t.Fatalf("forwarded reason = %v", got)
 	}
+	if got := stub.statuses[1]; got.Phase != "pending" || got.ReadyReplicas != 1 ||
+		got.UnavailableReplicas != 2 {
+		t.Fatalf("forwarded fleet status = %+v", got)
+	}
 
 	// A verdict that has not changed is not resent every pass.
 	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
@@ -931,6 +944,29 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 	}
 	if len(stub.statuses) != 2 {
 		t.Fatalf("an unchanged verdict was resent: %d statuses", len(stub.statuses))
+	}
+
+	// Replica progress with the same reason is still a changed verdict and must reach
+	// the control plane; otherwise a partially-ready fleet can stay there forever.
+	readyThree, unavailableNone := 3, 0
+	sink.observed[deployA] = agentcontract.ObservedCondition{
+		Phase:               "ready",
+		Reason:              "DataPlaneConfigurationRendered",
+		Message:             "rendered",
+		Applied:             true,
+		ObservedGeneration:  1,
+		ReadyReplicas:       &readyThree,
+		UnavailableReplicas: &unavailableNone,
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("fourth pass: %v", err)
+	}
+	if len(stub.statuses) != 3 {
+		t.Fatalf("replica progress was not forwarded: %d statuses", len(stub.statuses))
+	}
+	if got := stub.statuses[2]; got.Phase != "ready" || got.ReadyReplicas != 3 ||
+		got.UnavailableReplicas != 0 {
+		t.Fatalf("final fleet status = %+v", got)
 	}
 }
 

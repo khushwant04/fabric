@@ -5,10 +5,8 @@
 // path. Each pass reads desired state, renders what the data plane needs, and
 // reports what is observed.
 //
-// This agent does not create Kubernetes resources. That is the operator's job and
-// the operator does not exist yet, so status is reported from what the agent
-// itself applied. The distinction is recorded in the reported conditions rather
-// than being implied.
+// The agent itself does not create Kubernetes resources. That is the operator's job;
+// status distinguishes what the agent wrote from what the operator actually observed.
 package agent
 
 import (
@@ -85,9 +83,9 @@ type Agent struct {
 	pendingStatus map[string]controlplane.DesiredDeployment
 	// What the cluster reported, when an operator is present.
 	observed map[string]agentcontract.ObservedCondition
-	// The reason last accepted by the control plane per deployment, so a changed
-	// verdict is sent and an unchanged one is not resent every pass.
-	reportedReason map[string]string
+	// The cluster observation last accepted by the control plane per deployment, so a
+	// changed phase or replica count is sent and an unchanged one is not resent.
+	reportedObservation map[string]string
 }
 
 // New builds an agent. It does not perform any network call.
@@ -99,13 +97,13 @@ func New(config Config, log *slog.Logger) *Agent {
 		config.RequestTimeout = 30 * time.Second
 	}
 	return &Agent{
-		config:         config,
-		client:         controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
-		log:            log,
-		known:          map[string]state.Deployment{},
-		pendingStatus:  map[string]controlplane.DesiredDeployment{},
-		observed:       map[string]agentcontract.ObservedCondition{},
-		reportedReason: map[string]string{},
+		config:              config,
+		client:              controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
+		log:                 log,
+		known:               map[string]state.Deployment{},
+		pendingStatus:       map[string]controlplane.DesiredDeployment{},
+		observed:            map[string]agentcontract.ObservedCondition{},
+		reportedObservation: map[string]string{},
 	}
 }
 
@@ -314,7 +312,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 				"deployment_id", assignment.DeploymentID, "error", err)
 			continue
 		}
-		a.reportedReason[id] = a.reasonFor(id)
+		a.reportedObservation[id] = a.observationFingerprint(id)
 		delete(a.pendingStatus, id)
 	}
 	return configured, nil
@@ -331,24 +329,53 @@ func (a *Agent) reportStatus(ctx context.Context, assignment controlplane.Desire
 	// itself, which is not an observed rollout.
 	message := "Local data-plane configuration written by the agent"
 
-	if observed, present := a.observed[assignment.DeploymentID]; present {
+	desiredReplicas := replicasFromSpec(assignment.Spec)
+	if desiredReplicas < 1 {
+		desiredReplicas = 1
+	}
+	readyReplicas := desiredReplicas
+	unavailableReplicas := 0
+
+	observed, observationPresent := a.observed[assignment.DeploymentID]
+	_, operatorBacked := a.config.Sink.(StatusSource)
+	if operatorBacked && !observationPresent && !assignment.Deleted {
+		// Declaring a CR is not evidence that any pod is ready. Fail closed until the
+		// operator has written status rather than briefly claiming the whole requested
+		// fleet is serving during every new placement.
+		phase = "pending"
+		readyReplicas = 0
+		unavailableReplicas = desiredReplicas
+		reason = "AwaitingOperatorObservation"
+		message = "Intent declared; waiting for the operator to observe model-host readiness"
+	}
+
+	if observationPresent {
 		// An operator reported on this deployment, so the cluster's verdict replaces
 		// the agent's assertion.
 		reason = observed.Reason
 		message = observed.Message
-		if !observed.Applied {
+		if observed.Phase != "" {
+			phase = observed.Phase
+		} else if !observed.Applied {
 			phase = "pending"
 		}
 		if observed.ObservedGeneration > 0 {
 			generation = int(observed.ObservedGeneration)
 		}
+		if observed.ReadyReplicas != nil {
+			readyReplicas = *observed.ReadyReplicas
+		}
+		if observed.UnavailableReplicas != nil {
+			unavailableReplicas = *observed.UnavailableReplicas
+		}
 	}
 
 	report := controlplane.StatusReport{
-		DeploymentID:       assignment.DeploymentID,
-		ObservedGeneration: &generation,
-		Phase:              phase,
-		ReadyReplicas:      1,
+		DeploymentID:        assignment.DeploymentID,
+		ObservedGeneration:  &generation,
+		Phase:               phase,
+		ReadyReplicas:       readyReplicas,
+		UnavailableReplicas: unavailableReplicas,
 		Conditions: []map[string]any{
 			{
 				"type":    "Configured",
@@ -380,8 +407,8 @@ func (a *Agent) buildSink() {
 // actually did.
 func (a *Agent) queueChangedVerdicts() {
 	for deploymentID := range a.known {
-		reason := a.reasonFor(deploymentID)
-		if a.reportedReason[deploymentID] == reason {
+		fingerprint := a.observationFingerprint(deploymentID)
+		if a.reportedObservation[deploymentID] == fingerprint {
 			continue
 		}
 		if _, queued := a.pendingStatus[deploymentID]; queued {
@@ -391,6 +418,9 @@ func (a *Agent) queueChangedVerdicts() {
 			DeploymentID: deploymentID,
 			AccountID:    a.known[deploymentID].AccountID,
 			ModelAlias:   a.known[deploymentID].ModelAlias,
+			// Preserve the spec so the fallback replica count remains truthful when an
+			// older operator does not publish replica status yet.
+			Spec: map[string]any{"replicas": a.known[deploymentID].Replicas},
 			// The generation this agent has applied, which is what it can honestly
 			// claim to have observed.
 			DesiredGeneration: a.credentials.AckedGeneration,
@@ -398,12 +428,27 @@ func (a *Agent) queueChangedVerdicts() {
 	}
 }
 
-// reasonFor returns the condition reason that would be reported now.
-func (a *Agent) reasonFor(deploymentID string) string {
-	if observed, present := a.observed[deploymentID]; present && observed.Reason != "" {
-		return observed.Reason
+// observationFingerprint is the status detail whose change requires another report.
+func (a *Agent) observationFingerprint(deploymentID string) string {
+	observed, present := a.observed[deploymentID]
+	if !present {
+		if _, operatorBacked := a.config.Sink.(StatusSource); operatorBacked {
+			return "AwaitingOperatorObservation"
+		}
+		return "AgentAppliedLocalConfiguration"
 	}
-	return "AgentAppliedLocalConfiguration"
+	ready, unavailable := -1, -1
+	if observed.ReadyReplicas != nil {
+		ready = *observed.ReadyReplicas
+	}
+	if observed.UnavailableReplicas != nil {
+		unavailable = *observed.UnavailableReplicas
+	}
+	return fmt.Sprintf(
+		"%s|%s|%t|%d|%d|%d",
+		observed.Phase, observed.Reason, observed.Applied,
+		observed.ObservedGeneration, ready, unavailable,
+	)
 }
 
 // refreshObserved reads what the cluster reported, when a sink can tell us.

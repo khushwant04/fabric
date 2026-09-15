@@ -47,6 +47,13 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The headless Service publishes one EndpointSlice entry per ready model-host pod.
+  # The operator reads those addresses and writes the concrete backend pool consumed by
+  # the data plane; without this permission it would permanently fall back to one opaque
+  # Service URL and a multi-replica deployment would not be a Fabric-visible fleet.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
   # Reading pods is how a human debugs a host that will not start; the operator itself
   # relies on the workload's status rather than inspecting pods.
   - apiGroups: [""]

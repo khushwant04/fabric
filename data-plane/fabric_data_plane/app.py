@@ -100,9 +100,19 @@ class DataPlane:
         backend is not carried forward under stale health.
         """
         with self._pools_lock:
+            deployment_ids = getattr(self.registry, "deployment_ids", None)
+            if callable(deployment_ids):
+                active = deployment_ids()
+                for stale_id in self._pools.keys() - active:
+                    del self._pools[stale_id]
+
             pool = self._pools.get(deployment.deployment_id)
-            current_ids = tuple(b.backend_id for b in deployment.backends)
-            if pool is None or tuple(b.backend_id for b in pool.backends) != current_ids:
+            current_backends = tuple(
+                (b.backend_id, b.url, b.weight) for b in deployment.backends
+            )
+            if pool is None or tuple(
+                (b.backend_id, b.url, b.weight) for b in pool.backends
+            ) != current_backends:
                 pool = deployment.build_pool(
                     failure_threshold=self.settings.backend_failure_threshold,
                     recovery_seconds=self.settings.backend_recovery_seconds,
@@ -141,6 +151,16 @@ def _requested_model(payload: dict[str, Any]) -> str:
     if not isinstance(model, str) or not model.strip():
         raise BadRequest("model_required", "A model must be specified")
     return model.strip()
+
+
+def _safe_to_retry_transport_failure(exc: httpx.HTTPError) -> bool:
+    """Whether the request is known not to have reached a model host.
+
+    A completion POST is not idempotent: replaying after a read/write/protocol failure
+    can run and bill it twice because the first host may already be decoding. Only
+    connection establishment failures are transparently retried on another backend.
+    """
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
 
 
 async def _proxy(
@@ -235,15 +255,33 @@ async def _proxy(
                         timeout=plane.settings.upstream_timeout_seconds,
                     )
                 except httpx.HTTPError as exc:
-                    # A connection-level failure ejects the backend after enough of them
-                    # and retries on another; it is not surfaced to the caller while a
-                    # healthy backend remains.
+                    # Health records every transport failure, but transparent replay is
+                    # limited to connection establishment. A read/write/protocol failure
+                    # may happen after this non-idempotent POST was accepted; replaying it
+                    # could run and bill the inference twice.
                     logger.warning("backend %s failed: %s", backend.backend_id, exc)
                     pool.health.record_failure(backend)
-                    tried.add(backend.backend_id)
-                    continue
+                    if _safe_to_retry_transport_failure(exc):
+                        tried.add(backend.backend_id)
+                        continue
+                    plane.metrics.request_finished(
+                        deployment=deployment_label,
+                        account=account_label,
+                        outcome="upstream_unavailable",
+                        duration_seconds=time.perf_counter() - started,
+                    )
+                    raise UpstreamUnavailable(
+                        "upstream_unavailable",
+                        "The model host connection failed after the request may have started",
+                    ) from exc
 
-                pool.health.record_success(backend)
+                # Explicit server failures count against backend health but are returned
+                # as-is. They are not replayed: even a 5xx can be emitted after a model
+                # host accepted this non-idempotent request.
+                if response.status_code >= 500:
+                    pool.health.record_failure(backend)
+                else:
+                    pool.health.record_success(backend)
                 break
 
             try:
@@ -299,9 +337,13 @@ async def _proxy(
                 headers=headers,
                 timeout=plane.settings.upstream_timeout_seconds,
             ) as upstream:
+                upstream_failed = upstream.status_code >= 500
                 async for chunk in upstream.aiter_bytes():
                     yield chunk
-            pool.health.record_success(stream_backend)
+            if upstream_failed:
+                pool.health.record_failure(stream_backend)
+            else:
+                pool.health.record_success(stream_backend)
         except httpx.HTTPError as exc:
             logger.warning("upstream stream failed: %s", exc)
             pool.health.record_failure(stream_backend)
