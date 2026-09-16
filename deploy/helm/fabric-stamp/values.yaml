@@ -46,8 +46,9 @@ stamp:
   gpus: 1
 
 modelHost:
-  # The OpenAI-compatible host the data plane proxies to. Fabric does not deploy
-  # it: no vLLM host exists in this chart.
+  # External OpenAI-compatible fallback used only when the operator is not managing
+  # model hosts. With operator.managedModelHost.image set, placements create their own
+  # model-host workloads and this URL is replaced by the operator.
   url: ""
   # Optional model name override; normally the control plane's release supplies it.
   model: ""
@@ -118,17 +119,17 @@ operator:
   # The ConfigMap the operator renders and the data plane mounts.
   configMapName: fabric-deployments
   interval: 15s
-  # How a change of release is applied. Replacing a model host is not a rolling update:
-  # the GPU cannot be shared, so the old server stops before the new one starts, and the
-  # new one then loads weights for minutes before it can answer.
+  # A release change is prepared beside the active host, then routed, acknowledged,
+  # drained, and cleaned up. This needs one deployment-sized block of spare GPUs during
+  # the rollout; without it the candidate remains Pending while the active release stays up.
   rollout:
     # Generous by necessity. A tight deadline rolls back releases that were about to
     # succeed, and weight loading dominates this number.
     readyTimeout: 15m
-    # One at a time, so a bad release costs one deployment rather than the whole stamp.
+    # One at a time by default. Durable Preparing/Draining status survives operator
+    # restart, so the budget cannot be forgotten mid-rollout.
     maxParallel: 1
-    # Returning to a release that was observed ready beats leaving the stamp serving
-    # nothing until a human intervenes.
+    # A timed-out candidate is removed while the active release and route remain live.
     autoRollback: true
   resources:
     requests: {cpu: 25m, memory: 64Mi}

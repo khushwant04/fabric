@@ -505,7 +505,7 @@ def test_a_pool_rebuilds_strategy_without_losing_health_or_active_load(pool_plan
 
 
 
-def test_removal_to_empty_tombstones_late_backend_metric_updates(pool_plane) -> None:
+def test_removal_to_empty_retains_drain_state_then_tombstones_late_updates(pool_plane) -> None:
     deployment = _pool_registry().resolve("launch-model", account_id=ACCOUNT_A)
     pool = pool_plane.pool_for(deployment)
     backend = pool.backends[0]
@@ -513,22 +513,42 @@ def test_removal_to_empty_tombstones_late_backend_metric_updates(pool_plane) -> 
     pool.health.acquire(backend)
     pool_plane.metrics.backend_started(deployment=label, backend=backend.backend_id)
 
-    pool_plane.registry = DeploymentRegistry([])
+    # Endpoint churn removes the active identity from current membership before the
+    # deployment itself is withdrawn; its retained lease must survive both transitions.
+    remaining = Deployment(
+        deployment_id=DEPLOYMENT_A,
+        account_id=ACCOUNT_A,
+        model_alias="launch-model",
+        backends=(Backend(url="http://b.test", backend_id="pod-b"),),
+    )
+    pool_plane.registry = DeploymentRegistry([remaining], revision="churn")
+    pool_plane.pool_for(remaining)
+
+    pool_plane.registry = DeploymentRegistry([], revision="withdrawn")
     pool_plane.reconcile_pools()
     assert DEPLOYMENT_A not in pool_plane._pools
-    assert backend.backend_id not in pool_plane.metrics.render()
+    assert DEPLOYMENT_A in pool_plane._retired_pools
+    retired = pool_plane.router_state()
+    assert retired["revision"] == "withdrawn"
+    assert any(
+        item["backend_id"] == backend.backend_id and item["in_flight"] == 1
+        for item in retired["backends"]
+    )
 
-    # An attempt dispatched before withdrawal finishes later. Its release must not
-    # resurrect metric labels for a backend that is no longer routable.
     pool.health.release(backend)
     pool_plane.metrics.backend_finished(
         deployment=label, backend=backend.backend_id, outcome="ok"
     )
+    # A status poll observes zero, retires the pool, and tombstones its metric labels.
+    assert pool_plane.router_state()["backends"] == []
+    assert DEPLOYMENT_A not in pool_plane._retired_pools
     pool_plane.metrics.backend_health(
         deployment=label, backend=backend.backend_id, available=True
     )
     assert backend.backend_id not in pool_plane.metrics.render()
-# --- weighted rollout: two releases in one pool (M3, ADR 0011) --------------
+
+
+# --- weighted rollout: two releases in one pool (M3, ADR 0012) --------------
 #
 # During a downtime-free release change the operator publishes BOTH releases' backends
 # into one deployment entry, each backend carrying its release's share of the weight, and

@@ -95,6 +95,7 @@ class DataPlane:
         # deployment id because the registry may hand back an equal-but-new Deployment on
         # a reload; the health that matters is per stable deployment, not per object.
         self._pools: dict[uuid.UUID, BackendPool] = {}
+        self._retired_pools: dict[uuid.UUID, BackendPool] = {}
         self._pools_lock = threading.Lock()
         self.rate_limiter = RateLimiter(
             RateLimit(
@@ -119,8 +120,11 @@ class DataPlane:
         active = deployment_ids()
         with self._pools_lock:
             for stale_id in self._pools.keys() - active:
-                del self._pools[stale_id]
-                self.metrics.retire_deployment(str(stale_id))
+                pool = self._pools.pop(stale_id)
+                if sum(pool.health.in_flight().values()) > 0:
+                    self._retired_pools[stale_id] = pool
+                else:
+                    self.metrics.retire_deployment(str(stale_id))
 
     def pool_for(self, deployment: Deployment) -> BackendPool:
         """Return the backend pool for a deployment, built once and reused.
@@ -133,14 +137,14 @@ class DataPlane:
         with self._pools_lock:
             pool = self._pools.get(deployment.deployment_id)
             current_backends = tuple(
-                (backend.backend_id, backend.url, backend.weight)
+                (backend.backend_id, backend.url, backend.weight, backend.workload)
                 for backend in deployment.backends
             )
             current_identity = (deployment.strategy, current_backends)
             pool_identity = None
             if pool is not None:
                 previous_backends = tuple(
-                    (backend.backend_id, backend.url, backend.weight)
+                    (backend.backend_id, backend.url, backend.weight, backend.workload)
                     for backend in pool.backends
                 )
                 pool_identity = (pool.strategy_name, previous_backends)
@@ -155,11 +159,12 @@ class DataPlane:
                         backend=stale_backend,
                     )
 
-                # A strategy or address/weight update over the same pod identities must
-                # not erase active requests or an ejection cooldown. Requests already in
-                # flight release this shared health object when they finish.
-                preserve_health = pool is not None and previous_ids == current_ids
-                if preserve_health:
+                # Preserve overlapping backend health and active attempts while adding a
+                # rollout candidate. This is essential for drain acknowledgement: streams
+                # started on the old pool must remain visible after the cutover document
+                # adds candidate backend ids.
+                if pool is not None:
+                    pool.health.reconcile(list(deployment.backends))
                     pool = BackendPool(
                         list(deployment.backends),
                         health=pool.health,
@@ -181,6 +186,69 @@ class DataPlane:
                     available=bool(state["available"]),
                 )
             return pool
+
+    def router_state(self) -> dict[str, Any]:
+        """Loaded route revision and active attempts for acknowledged rollout drain."""
+        # A removal-to-empty document has no deployments to pass through pool_for, so
+        # reconcile first to move any active old pool into retired drain tracking.
+        self.reconcile_pools()
+        deployments = getattr(self.registry, "deployments", lambda: [])()
+        revision = getattr(self.registry, "config_revision", lambda: "")()
+        entries: list[dict[str, Any]] = []
+        for deployment in deployments:
+            pool = self.pool_for(deployment)
+            counts = pool.health.in_flight()
+            workloads = pool.health.workloads()
+            current_ids = set()
+            for backend in pool.backends:
+                current_ids.add(backend.backend_id)
+                entries.append(
+                    {
+                        "deployment_id": str(deployment.deployment_id),
+                        "backend_id": backend.backend_id,
+                        "route_revision": deployment.route_revision,
+                        "workload": backend.workload,
+                        "in_flight": counts.get(backend.backend_id, 0),
+                    }
+                )
+            # BackendHealth retains a removed identity while an old ordinary/streamed
+            # attempt still uses it. Expose it even though it is no longer selectable;
+            # omission must never be interpreted as zero by rollout drain.
+            for backend_id, in_flight in counts.items():
+                if backend_id not in current_ids and in_flight > 0:
+                    entries.append(
+                        {
+                            "deployment_id": str(deployment.deployment_id),
+                            "backend_id": backend_id,
+                            "route_revision": deployment.route_revision,
+                            "workload": workloads.get(backend_id, ""),
+                            "in_flight": in_flight,
+                            "retired": True,
+                        }
+                    )
+        with self._pools_lock:
+            for deployment_id, pool in list(self._retired_pools.items()):
+                counts = pool.health.in_flight()
+                total = sum(counts.values())
+                if total == 0:
+                    del self._retired_pools[deployment_id]
+                    self.metrics.retire_deployment(str(deployment_id))
+                    continue
+                workloads = pool.health.workloads()
+                for backend_id, in_flight in counts.items():
+                    if in_flight <= 0:
+                        continue
+                    entries.append(
+                        {
+                            "deployment_id": str(deployment_id),
+                            "backend_id": backend_id,
+                            "route_revision": "",
+                            "workload": workloads.get(backend_id, ""),
+                            "in_flight": in_flight,
+                            "retired": True,
+                        }
+                    )
+        return {"revision": revision, "backends": entries}
 
     def record_usage(
         self, principal: InferencePrincipal, deployment: Deployment, payload: Any, streamed: bool
@@ -766,6 +834,19 @@ def create_inference_app(plane: DataPlane | None = None) -> FastAPI:
     app.add_exception_handler(ApiError, api_error_handler)
     app.include_router(build_inference_router(resolved))
     app.include_router(_probe_router(resolved))
+    return app
+
+
+def create_router_status_app(plane: DataPlane | None = None) -> FastAPI:
+    """Private non-destructive listener used only for rollout acknowledgement."""
+    resolved = plane or build_plane()
+    app = FastAPI(title="Fabric Router Status", version="0.1.0")
+    app.state.plane = resolved
+
+    @app.get("/router-state")
+    async def router_state() -> dict[str, Any]:
+        return resolved.router_state()
+
     return app
 
 

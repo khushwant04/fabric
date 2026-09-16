@@ -28,9 +28,9 @@ reconstructable from deterministic workload names, labels, and the rendered rout
    readiness requires every requested replica plus concrete ready EndpointSlice addresses;
    the Service DNS fallback is not promotion evidence.
 3. **Draining.** Once ready, the operator publishes one weighted pool with candidate total
-   weight `1` and active total weight `0`. It records the exact route revision and old backend
-   ids. Relative release weight is divided by ready endpoint count, so replica count does not
-   multiply a release's share.
+   weight `1` and active total weight `0`. It records the exact per-deployment route revision
+   and old backend ids. Relative release weight is divided by ready endpoint count, so replica
+   count does not multiply a release's share.
 4. **Promotion.** The data plane exposes only non-secret router state on a dedicated internal
    listener: loaded revision and per-backend in-flight counts. The operator waits until the
    revision matches and every old backend is zero. It then publishes the candidate alone under

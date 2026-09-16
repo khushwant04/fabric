@@ -167,11 +167,11 @@ Both modes are verified on a real cluster. Without the operator the agent writes
 file itself, which is a working stamp with one fewer moving part and no Kubernetes
 permissions.
 
-Release changes are serialized one deployment at a time and automatically roll back to the
-last release observed ready when the new one misses its readiness deadline. Traffic splitting
-is not implemented: the model-host Deployment still uses `Recreate`, so a release change has
-a downtime window. The model-host image itself is supplied by the operator configuration; it
-is not built by Fabric.
+Release changes are serialized one deployment at a time. A deterministic candidate starts
+beside the active workload; the active release keeps traffic until the candidate is fully
+ready, then weighted routing cuts over and acknowledged drain gates cleanup (ADR 0012). A
+candidate missing its deadline is removed without disturbing the active release. The model-host
+image itself is supplied by operator configuration; it is not built by Fabric.
 
 A deployment can ask for more than one replica, and the operator honours it (ADR 0010):
 the model-host Deployment is sized from `spec.replicas` (default one, range 1-32,

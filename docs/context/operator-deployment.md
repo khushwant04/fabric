@@ -2,7 +2,10 @@
 
 **Status:** Implemented for the narrow case — the cluster agent and usage collector in [`agent/`](../../agent/), the `FabricModelDeployment` CRD and operator, the packaging in [`deploy/`](../../deploy/), and the A10 research-host scripts in [`scripts/`](../../scripts/). A stamp installs on Kubernetes and was verified on a real cluster both with and without the operator.
 
-The operator reconciles declared deployments into the data plane's configuration and reports what it observed. It does not create a model-host workload, because no vLLM host exists in this project yet; that is the next thing to add here rather than a gap in the design. See [Packaging and Deployment](packaging-deployment.md) and [Cluster Agent](cluster-agent-service.md).
+The operator reconciles declared deployments into model-host workloads, release-specific
+headless Services, and the data plane's routing configuration. Release changes prepare a
+candidate beside the active workload and use acknowledged drain before cleanup (ADR 0012).
+See [Packaging and Deployment](packaging-deployment.md) and [Cluster Agent](cluster-agent-service.md).
 
 ## Inference stamp definition
 

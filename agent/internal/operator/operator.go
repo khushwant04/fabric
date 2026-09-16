@@ -17,9 +17,12 @@ package operator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"time"
 
@@ -94,11 +97,12 @@ type Condition struct {
 
 // Status is what the operator observed, not what was asked for.
 type Status struct {
-	Phase               string      `json:"phase,omitempty"`
-	ObservedGeneration  int64       `json:"observedGeneration,omitempty"`
-	ReadyReplicas       *int        `json:"readyReplicas,omitempty"`
-	UnavailableReplicas *int        `json:"unavailableReplicas,omitempty"`
-	Conditions          []Condition `json:"conditions,omitempty"`
+	Phase               string         `json:"phase,omitempty"`
+	ObservedGeneration  int64          `json:"observedGeneration,omitempty"`
+	ReadyReplicas       *int           `json:"readyReplicas,omitempty"`
+	UnavailableReplicas *int           `json:"unavailableReplicas,omitempty"`
+	Rollout             *RolloutStatus `json:"rollout,omitempty"`
+	Conditions          []Condition    `json:"conditions,omitempty"`
 }
 
 // Metadata is the subset of object metadata the operator uses.
@@ -145,7 +149,8 @@ type dataPlaneEntry struct {
 	Backends      []dataPlaneBackend `json:"backends,omitempty"`
 	// Strategy is how the data plane balances across Backends. Omitted when the
 	// deployment does not name one, so the data plane applies its own default.
-	Strategy string `json:"strategy,omitempty"`
+	Strategy      string `json:"strategy,omitempty"`
+	RouteRevision string `json:"route_revision,omitempty"`
 }
 
 // dataPlaneBackend is one model-host endpoint in a deployment's pool.
@@ -155,9 +160,10 @@ type dataPlaneEntry struct {
 // release's share, so the data plane sends each release traffic in proportion. Omitted
 // when it is the default so a non-rollout pool renders unchanged.
 type dataPlaneBackend struct {
-	URL    string  `json:"url"`
-	ID     string  `json:"id,omitempty"`
-	Weight float64 `json:"weight,omitempty"`
+	URL      string   `json:"url"`
+	ID       string   `json:"id,omitempty"`
+	Weight   *float64 `json:"weight,omitempty"`
+	Workload string   `json:"workload,omitempty"`
 }
 
 // Options configures a reconciler.
@@ -168,6 +174,10 @@ type Options struct {
 	// the path the data plane already expects.
 	ConfigKey string
 	Log       *slog.Logger
+	// RouterStatusURL is the private data-plane listener used to acknowledge that a
+	// cutover revision is loaded and old backend requests have drained.
+	RouterStatusURL string
+	RouterHTTP      *http.Client
 	// ModelHost, when it carries an image, makes the operator run the inference
 	// server for each declared deployment rather than pointing the data plane at one
 	// somebody else operates.
@@ -184,11 +194,6 @@ type Reconciler struct {
 	// while a node runs, so listing nodes every pass would spend a cluster read per
 	// interval on an answer that does not move.
 	profiled bool
-	// allocatableGPUs is the total number of GPUs the profiled nodes advertise, retained
-	// from profiling so a rollout can ask whether the stamp has room to run a new release
-	// beside an old one (ADR 0011). Zero when the hardware could not be profiled, which is
-	// read conservatively as "assume there is room" so an unprofilable stamp still rolls.
-	allocatableGPUs int
 }
 
 // New builds a reconciler.
@@ -201,6 +206,9 @@ func New(client *kube.Client, options Options) *Reconciler {
 	}
 	if options.Log == nil {
 		options.Log = slog.Default()
+	}
+	if options.RouterHTTP == nil {
+		options.RouterHTTP = &http.Client{Timeout: 5 * time.Second}
 	}
 	if options.Rollout.ReadyTimeout == 0 {
 		options.Rollout = DefaultRollout()
@@ -267,115 +275,222 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 	}
 	result.Serving = len(serving)
 
-	// Hosts first, because the address the data plane is given depends on where the
-	// host ended up. A configuration naming a Service that does not exist yet would
-	// make the data plane fail requests it could otherwise queue behind readiness.
 	ready := map[string]modelHostReadiness{}
 	decisions := map[string]RolloutDecision{}
-	// Concrete pool per deployment, discovered from the headless Service's endpoints.
-	// Only populated when the operator runs the host; otherwise the single upstream_url
-	// the agent rendered is published unchanged.
+	rolloutStatuses := map[string]*RolloutStatus{}
+	persistedStatuses := map[string]*RolloutStatus{}
+	for _, item := range serving {
+		if item.Status != nil {
+			persistedStatuses[item.Spec.DeploymentID] = item.Status.Rollout
+		}
+	}
 	backends := map[string][]dataPlaneBackend{}
+	type cleanupAction struct {
+		DeploymentID string
+		Name         string
+	}
+	cleanupAfterPublish := make([]cleanupAction, 0)
 	if r.options.ModelHost.Enabled() {
-		// Settings that depend on the hardware are derived before any host is created,
-		// once per pass. A value that cannot work on this GPU is corrected here rather
-		// than discovered when the container exits.
 		r.applyHardwareProfile(ctx)
 		result.HostsTotal = len(serving)
-		// Whether the stamp has GPU room to run a new release beside an old one during a
-		// rollout, computed once per pass from the hardware profile (ADR 0011). A stamp
-		// that cannot fit both falls back to Recreate rather than deadlocking.
-		canCoexist := r.canCoexist(serving)
-		// The strategy the data plane must use when two releases are being split by
-		// weight overrides whatever the deployment declared, but only for the pass while
-		// the rollout is in flight.
-		rolloutStrategy := map[string]string{}
-		// Counted across the pass so the stamp's budget for simultaneous changes is
-		// respected: without this every deployment would change release at once and a
-		// bad release would take the whole stamp down together.
 		inFlight := 0
-		for index := range serving {
-			state, observeErr := r.observeRollout(ctx, serving[index], canCoexist)
-			if observeErr != nil {
-				r.options.Log.Warn("could not read rollout state",
-					"resource", serving[index].Metadata.Name, "error", observeErr)
-				continue
-			}
-
-			decision := decideRollout(
-				r.options.Rollout, serving[index], state, inFlight, time.Now(),
-			)
-			decisions[serving[index].Spec.DeploymentID] = decision
-			if decision.Release != state.Current || decision.RolledBack || decision.Coexist {
+		for _, item := range serving {
+			if item.Status != nil && item.Status.Rollout.inProgress() {
 				inFlight++
 			}
-			if decision.RolledBack {
-				r.options.Log.Warn("rolling back model host",
-					"resource", serving[index].Metadata.Name,
-					"from", state.Current, "to", decision.Release)
-				result.RolledBack++
+		}
+
+		for index := range serving {
+			item := serving[index]
+			state := rolloutState{}
+			if item.Status != nil {
+				state.Status = item.Status.Rollout
+			}
+
+			if state.Status == nil {
+				exists, release, observed, observeErr := r.observeReleaseWorkload(
+					ctx, item, hostName(item),
+				)
+				if observeErr != nil {
+					return result, observeErr
+				}
+				if release == "" {
+					release = releaseOf(item)
+				}
+				state.ActiveExists = exists
+				state.ActiveReadiness = observed
+				if exists {
+					state.Status = &RolloutStatus{
+						Phase: rolloutPhaseServing, TargetGeneration: item.Metadata.Generation,
+						ActiveRelease: release, ActiveWorkload: hostName(item),
+					}
+				}
+			} else {
+				var observeErr error
+				state.ActiveExists, _, state.ActiveReadiness, observeErr =
+					r.observeReleaseWorkload(ctx, item, state.Status.ActiveWorkload)
+				if observeErr != nil {
+					return result, observeErr
+				}
+				if state.Status.CandidateWorkload != "" {
+					state.CandidateExists, _, state.CandidateReadiness, observeErr =
+						r.observeReleaseWorkload(ctx, item, state.Status.CandidateWorkload)
+					if observeErr != nil {
+						return result, observeErr
+					}
+					_, state.CandidateConcrete = r.discoverConcreteBackendsNamed(
+						ctx, item, state.Status.CandidateWorkload,
+					)
+				}
+				if state.Status.Phase == rolloutPhaseDraining {
+					drained, drainErr := r.routerDrained(
+						ctx, item.Spec.DeploymentID, state.Status.CutoverRevision,
+						state.Status.DrainingWorkload,
+					)
+					if drainErr != nil {
+						r.options.Log.Warn("could not acknowledge rollout drain",
+							"deployment", item.Spec.DeploymentID, "error", drainErr)
+					}
+					state.DrainAcknowledged = drained
+				}
+			}
+
+			decision := decideRollout(r.options.Rollout, item, state, inFlight, time.Now())
+			decisions[item.Spec.DeploymentID] = decision
+			if decision.Phase == rolloutPhasePreparing || decision.Phase == rolloutPhaseDraining {
+				wasInProgress := state.Status != nil && state.Status.inProgress()
+				if !wasInProgress {
+					inFlight++
+				}
 			}
 			if decision.Deferred {
 				result.Deferred++
 			}
+			if decision.RolledBack {
+				result.RolledBack++
+			}
 
-			hostReadiness, hostErr := r.applyHostWithRollout(ctx, serving[index], decision, state)
-			if hostErr != nil {
-				// One host failing must not stop the others or discard configuration
-				// already applied for them.
-				r.options.Log.Warn("could not reconcile model host",
-					"resource", serving[index].Metadata.Name, "error", hostErr)
-				continue
+			activeReadiness := state.ActiveReadiness
+			activeExists := state.ActiveExists
+			if state.Status != nil && decision.ActiveWorkload != "" &&
+				decision.ActiveWorkload == state.Status.CandidateWorkload {
+				activeReadiness = state.CandidateReadiness
+				activeExists = state.CandidateExists
 			}
-			ready[serving[index].Spec.DeploymentID] = hostReadiness
-			if hostReadiness.Ready > 0 {
-				result.HostsReady++
+			if decision.EnsureActive && decision.ActiveWorkload != "" && !activeExists {
+				observed, hostErr := r.ensureNamedWorkload(
+					ctx, item, decision.ActiveRelease, decision.ActiveWorkload,
+				)
+				if hostErr != nil {
+					return result, hostErr
+				}
+				activeReadiness = observed
 			}
-			// The operator owns the host, so it decides the upstream, overriding
-			// whatever the agent guessed at declaration time.
-			serving[index].Spec.UpstreamURL = r.hostUpstream(serving[index])
-			// The concrete pool the data plane balances across. During a coexisting
-			// rollout this is the union of both releases' endpoints, each weighted by the
-			// rollout decision so the data plane's weighted strategy splits traffic; the
-			// rest of the time it is the single release's ready endpoints (ADR 0010/0011).
-			pool, strategy := r.rolloutBackends(ctx, serving[index], decision)
-			backends[serving[index].Spec.DeploymentID] = pool
+			candidateReadiness := state.CandidateReadiness
+			if decision.EnsureCandidate && decision.CandidateWorkload != "" {
+				observed, hostErr := r.ensureNamedWorkload(
+					ctx, item, decision.CandidateRelease, decision.CandidateWorkload,
+				)
+				if hostErr != nil {
+					return result, hostErr
+				}
+				candidateReadiness = observed
+			}
+
+			if decision.DeleteCandidate && state.Status != nil &&
+				state.Status.CandidateWorkload != "" {
+				cleanupAfterPublish = append(cleanupAfterPublish, cleanupAction{
+					DeploymentID: item.Spec.DeploymentID,
+					Name:         state.Status.CandidateWorkload,
+				})
+			}
+			if decision.DeleteActive && state.Status != nil &&
+				state.Status.ActiveWorkload != "" {
+				cleanupAfterPublish = append(cleanupAfterPublish, cleanupAction{
+					DeploymentID: item.Spec.DeploymentID,
+					Name:         state.Status.ActiveWorkload,
+				})
+			}
+
+			pool, strategy := r.rolloutBackends(ctx, item, decision)
+			if len(pool) == 0 {
+				return result, fmt.Errorf("deployment %s has no routable backend", item.Spec.DeploymentID)
+			}
+			backends[item.Spec.DeploymentID] = pool
 			if strategy != "" {
-				rolloutStrategy[serving[index].Spec.DeploymentID] = strategy
-			}
-		}
-
-		// A rollout in flight forces the weighted strategy for the deployments it touches,
-		// so the split by weight is honoured regardless of what the deployment declared.
-		for index := range serving {
-			if strategy, ok := rolloutStrategy[serving[index].Spec.DeploymentID]; ok {
 				serving[index].Spec.Strategy = strategy
 			}
-		}
+			serving[index].Spec.UpstreamURL = pool[0].URL
 
-		if err := r.pruneHosts(ctx, serving, decisions); err != nil {
-			r.options.Log.Warn("could not prune model hosts", "error", err)
+			if decision.Phase == rolloutPhasePreparing || decision.Phase == rolloutPhaseFailed ||
+				decision.RollbackDrain {
+				ready[item.Spec.DeploymentID] = activeReadiness
+			} else {
+				ready[item.Spec.DeploymentID] = candidateReadiness
+				if decision.Phase == rolloutPhaseServing {
+					ready[item.Spec.DeploymentID] = activeReadiness
+				}
+			}
+			if ready[item.Spec.DeploymentID].Ready > 0 {
+				result.HostsReady++
+			}
 		}
 	}
 
-	changed, err := r.applyConfigMap(ctx, serving, backends)
+	changed, revisions, err := r.applyConfigMap(ctx, serving, backends)
 	if err != nil {
 		return result, err
 	}
 	result.ConfigChanged = changed
 
 	for _, item := range serving {
+		decision := decisions[item.Spec.DeploymentID]
+		drainingIDs := make([]string, 0)
+		if decision.Phase == rolloutPhaseDraining && decision.CutoverRevision == "" {
+			for _, backend := range backends[item.Spec.DeploymentID] {
+				if backend.Weight != nil && *backend.Weight == 0 {
+					drainingIDs = append(drainingIDs, backend.ID)
+				}
+			}
+		}
+		rolloutStatuses[item.Spec.DeploymentID] = rolloutStatusFromDecision(
+			item, decision, revisions[item.Spec.DeploymentID], drainingIDs,
+		)
+	}
+
+	statusWritten := map[string]bool{}
+	for _, item := range serving {
 		if !r.statusIsCurrent(item) || r.options.ModelHost.Enabled() {
 			if err := r.reportApplied(
 				ctx, item, ready[item.Spec.DeploymentID], decisions[item.Spec.DeploymentID],
+				rolloutStatuses[item.Spec.DeploymentID],
 			); err != nil {
-				// One resource failing to accept status does not invalidate the
-				// configuration already written, nor the other resources.
 				r.options.Log.Warn("could not write status",
 					"resource", item.Metadata.Name, "error", err)
 				continue
 			}
 			result.StatusWrites++
+			statusWritten[item.Spec.DeploymentID] = true
+			persistedStatuses[item.Spec.DeploymentID] = rolloutStatuses[item.Spec.DeploymentID]
+		}
+	}
+
+	// Destructive cleanup requires both route publication and a durable checkpoint. If
+	// status fails, the old workload remains so the next pass can safely reconstruct.
+	for _, action := range cleanupAfterPublish {
+		if !statusWritten[action.DeploymentID] {
+			continue
+		}
+		if err := r.deleteWorkload(ctx, action.Name); err != nil {
+			return result, err
+		}
+	}
+
+	if r.options.ModelHost.Enabled() {
+		if err := r.pruneRolloutHosts(
+			ctx, serving, persistedStatuses, revisions[""],
+		); err != nil {
+			r.options.Log.Warn("could not prune model hosts", "error", err)
 		}
 	}
 
@@ -410,13 +525,27 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 			// predates the pool still reaches a live host rather than nothing.
 			entry.UpstreamURL = pool[0].URL
 		}
+		canonicalRoute, err := json.Marshal(entry)
+		if err != nil {
+			return "", fmt.Errorf("render route revision: %w", err)
+		}
+		routeDigest := sha256.Sum256(canonicalRoute)
+		entry.RouteRevision = hex.EncodeToString(routeDigest[:])
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].DeploymentID < entries[j].DeploymentID
 	})
 
-	document, err := json.MarshalIndent(map[string]any{"deployments": entries}, "", "  ")
+	canonical, err := json.Marshal(map[string]any{"deployments": entries})
+	if err != nil {
+		return "", fmt.Errorf("render canonical configuration: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	revision := hex.EncodeToString(digest[:])
+	document, err := json.MarshalIndent(
+		map[string]any{"revision": revision, "deployments": entries}, "", "  ",
+	)
 	if err != nil {
 		return "", fmt.Errorf("render configuration: %w", err)
 	}
@@ -430,13 +559,39 @@ type configMap struct {
 	Data       map[string]string `json:"data,omitempty"`
 }
 
+func configRevision(document string) string {
+	var payload struct {
+		Revision string `json:"revision"`
+	}
+	if json.Unmarshal([]byte(document), &payload) != nil {
+		return ""
+	}
+	return payload.Revision
+}
+
+func routeRevisions(document string) map[string]string {
+	var payload struct {
+		Deployments []dataPlaneEntry `json:"deployments"`
+	}
+	if json.Unmarshal([]byte(document), &payload) != nil {
+		return nil
+	}
+	revisions := make(map[string]string, len(payload.Deployments)+1)
+	revisions[""] = configRevision(document)
+	for _, entry := range payload.Deployments {
+		revisions[entry.DeploymentID] = entry.RouteRevision
+	}
+	return revisions
+}
+
 func (r *Reconciler) applyConfigMap(
 	ctx context.Context, items []ModelDeployment, backends map[string][]dataPlaneBackend,
-) (bool, error) {
+) (bool, map[string]string, error) {
 	document, err := renderConfig(items, backends)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
+	revisions := routeRevisions(document)
 
 	desired := configMap{
 		APIVersion: "v1",
@@ -457,20 +612,20 @@ func (r *Reconciler) applyConfigMap(
 	if kube.IsNotFound(err) {
 		path := fmt.Sprintf("/api/v1/namespaces/%s/configmaps", r.options.Namespace)
 		if err := r.client.Create(ctx, path, desired, nil); err != nil {
-			return false, fmt.Errorf("create configmap: %w", err)
+			return false, nil, fmt.Errorf("create configmap: %w", err)
 		}
 		r.options.Log.Info("configuration created",
 			"configmap", r.options.ConfigMapName, "deployments", len(items))
-		return true, nil
+		return true, revisions, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read configmap: %w", err)
+		return false, nil, fmt.Errorf("read configmap: %w", err)
 	}
 
 	if existing.Data[r.options.ConfigKey] == document {
 		// Writing an identical document would bump the resourceVersion and make every
 		// mounted copy churn for no reason.
-		return false, nil
+		return false, revisions, nil
 	}
 
 	// Carry the resourceVersion so a concurrent writer is detected instead of being
@@ -479,11 +634,11 @@ func (r *Reconciler) applyConfigMap(
 	if err := r.client.Update(
 		ctx, r.configMapPath(r.options.ConfigMapName), desired, nil,
 	); err != nil {
-		return false, fmt.Errorf("update configmap: %w", err)
+		return false, nil, fmt.Errorf("update configmap: %w", err)
 	}
 	r.options.Log.Info("configuration updated",
 		"configmap", r.options.ConfigMapName, "deployments", len(items))
-	return true, nil
+	return true, revisions, nil
 }
 
 // statusIsCurrent reports whether the resource already carries the operator's verdict
@@ -501,82 +656,62 @@ func (r *Reconciler) statusIsCurrent(item ModelDeployment) bool {
 }
 
 func (r *Reconciler) reportApplied(
-	ctx context.Context, item ModelDeployment, readiness modelHostReadiness, decision RolloutDecision,
+	ctx context.Context, item ModelDeployment, readiness modelHostReadiness,
+	decision RolloutDecision, rollout *RolloutStatus,
 ) error {
-	hostReady := readiness.fullyReady()
 	now := time.Now().UTC().Format(time.RFC3339)
+	available := !r.options.ModelHost.Enabled() || readiness.Ready > 0
+	applied := !r.options.ModelHost.Enabled() ||
+		(rollout != nil && rollout.Phase == rolloutPhaseServing &&
+			rollout.ActiveRelease == releaseOf(item))
+	boolStatus := func(value bool) string {
+		if value {
+			return "True"
+		}
+		return "False"
+	}
+	appliedReason := "DesiredReleaseProgressing"
+	if applied {
+		appliedReason = r.appliedReason()
+	} else if decision.RolledBack {
+		appliedReason = "DesiredReleaseRolledBack"
+	}
 	conditions := []Condition{
 		{
-			Type:   ConditionApplied,
-			Status: "True",
-			// Names what was actually done, which depends on whether this operator
-			// runs the host or only configures the path to one.
-			Reason:             r.appliedReason(),
-			Message:            "The stamp's data plane is configured to serve this deployment",
-			ObservedGeneration: item.Metadata.Generation,
-			LastTransitionTime: now,
+			Type: ConditionApplied, Status: boolStatus(applied), Reason: appliedReason,
+			Message:            "Whether the declared release is the active routed release",
+			ObservedGeneration: item.Metadata.Generation, LastTransitionTime: now,
+		},
+		{
+			Type: ConditionAvailable, Status: boolStatus(available),
+			Reason:             map[bool]string{true: "ActiveReleaseServing", false: "NoReadyModelHost"}[available],
+			Message:            "Whether at least one positively routed model-host replica can answer",
+			ObservedGeneration: item.Metadata.Generation, LastTransitionTime: now,
 		},
 	}
+	progressing := rollout != nil && rollout.inProgress()
+	conditions = append(conditions, Condition{
+		Type: ConditionProgressing, Status: boolStatus(progressing), Reason: decision.Reason,
+		Message:            "Release preparation, cutover, and acknowledged drain state",
+		ObservedGeneration: item.Metadata.Generation, LastTransitionTime: now,
+	})
 
-	phase := "ready"
-	if r.options.ModelHost.Enabled() {
-		// Reported separately from Applied: configuration can be correct while the
-		// server is still loading weights, which takes minutes.
-		status, reason := "False", "ModelHostStarting"
-		if hostReady {
-			status, reason = "True", "ModelHostServing"
-		} else {
-			phase = "pending"
-		}
-		conditions = append(conditions, Condition{
-			Type:               ConditionHostReady,
-			Status:             status,
-			Reason:             reason,
-			Message:            "Readiness reported by the model host workload",
-			ObservedGeneration: item.Metadata.Generation,
-			LastTransitionTime: now,
-		})
-
-		// Progress is its own condition, so a host that is starting is distinguishable
-		// from one that was abandoned and rolled back.
-		progressing := "False"
-		if !hostReady {
-			progressing = "True"
-		}
-		progressReason := decision.Reason
-		if progressReason == "" {
-			progressReason = "Progressing"
-		}
-		message := "Rollout state observed by the operator"
-		if decision.RolledBack {
-			message = "The declared release did not become ready and was rolled back"
-		}
-		conditions = append(conditions, Condition{
-			Type:               ConditionProgressing,
-			Status:             progressing,
-			Reason:             progressReason,
-			Message:            message,
-			ObservedGeneration: item.Metadata.Generation,
-			LastTransitionTime: now,
-		})
+	phase := "pending"
+	if applied {
+		phase = "ready"
 	}
-
+	if decision.RolledBack && available {
+		phase = "degraded"
+	}
+	readyReplicas := readiness.Ready
+	unavailableReplicas := max(0, readiness.Desired-readiness.Ready)
 	status := Status{
-		Phase:              phase,
-		ObservedGeneration: item.Metadata.Generation,
-		Conditions:         conditions,
+		Phase: phase, ObservedGeneration: item.Metadata.Generation,
+		ReadyReplicas: &readyReplicas, UnavailableReplicas: &unavailableReplicas,
+		Rollout: rollout, Conditions: conditions,
 	}
-	if r.options.ModelHost.Enabled() {
-		readyReplicas := readiness.Ready
-		unavailableReplicas := max(0, readiness.Desired-readiness.Ready)
-		status.ReadyReplicas = &readyReplicas
-		status.UnavailableReplicas = &unavailableReplicas
-	}
-
-	patch := map[string]any{"status": status}
-
 	path := fmt.Sprintf("%s/%s/status", r.resourcePath(), item.Metadata.Name)
-	if err := r.client.MergePatch(ctx, path, patch, nil); err != nil {
+	if err := r.client.MergePatch(ctx, path, map[string]any{"status": status}, nil); err != nil {
 		return fmt.Errorf("patch status: %w", err)
 	}
 	return nil
@@ -591,33 +726,29 @@ func (r *Reconciler) appliedReason() string {
 	return "DataPlaneConfigurationRendered"
 }
 
-// pruneHosts removes workloads whose deployment is no longer declared, and whose sidecar
-// is not part of a rollout still in flight.
-//
-// Labelled lookup rather than remembered state: an operator that restarted would
-// otherwise leak a GPU-holding workload it had forgotten about. A coexisting rollout's
-// sidecar workload (hostNameForRelease) is a legitimately live host for its deployment
-// while the shift is in progress, so it is kept until the decision says to remove it;
-// pruning it here would tear down the very release that is carrying traffic.
-func (r *Reconciler) pruneHosts(
-	ctx context.Context, serving []ModelDeployment, decisions map[string]RolloutDecision,
+// pruneRolloutHosts removes only workloads not named by the route/state produced this
+// pass. It runs after ConfigMap publication, never before.
+func (r *Reconciler) pruneRolloutHosts(
+	ctx context.Context, serving []ModelDeployment, statuses map[string]*RolloutStatus,
+	globalRevision string,
 ) error {
-	// The workloads that must survive this pass: each deployment's primary host, plus any
-	// sidecar a coexisting rollout is still using.
-	wanted := make(map[string]struct{}, len(serving))
+	wanted := make(map[string]struct{}, len(serving)*2)
 	for _, item := range serving {
-		wanted[hostName(item)] = struct{}{}
-		decision := decisions[item.Spec.DeploymentID]
-		if decision.Coexist && !decision.RemoveSidecar &&
-			decision.SidecarRelease != "" && decision.SidecarRelease != decision.Release {
-			wanted[hostNameForRelease(item, decision.SidecarRelease)] = struct{}{}
+		status := statuses[item.Spec.DeploymentID]
+		if status == nil {
+			wanted[hostName(item)] = struct{}{}
+			continue
+		}
+		if status.ActiveWorkload != "" {
+			wanted[status.ActiveWorkload] = struct{}{}
+		}
+		if status.CandidateWorkload != "" {
+			wanted[status.CandidateWorkload] = struct{}{}
 		}
 	}
-
 	path := fmt.Sprintf(
 		"/apis/apps/v1/namespaces/%s/deployments?labelSelector=%s",
-		r.options.Namespace,
-		"app.kubernetes.io/managed-by%3Dfabric-operator,app.kubernetes.io/name%3Dfabric-model-host",
+		r.options.Namespace, "app.kubernetes.io/managed-by%3Dfabric-operator",
 	)
 	var list struct {
 		Items []deployment `json:"items"`
@@ -625,20 +756,23 @@ func (r *Reconciler) pruneHosts(
 	if err := r.client.Get(ctx, path, &list); err != nil {
 		return fmt.Errorf("list model hosts: %w", err)
 	}
-
 	for _, existing := range list.Items {
 		if _, keep := wanted[existing.Metadata.Name]; keep {
 			continue
 		}
-		id := existing.Metadata.Labels["fabric.khushwant.dev/deployment-id"]
-		if id == "" {
-			// Without the label there is nothing to correlate, so it is left alone
-			// rather than deleted on a guess.
+		deploymentID := existing.Metadata.Labels["fabric.khushwant.dev/deployment-id"]
+		if deploymentID == "" {
 			continue
 		}
-		// Delete by workload name rather than deriving it from the id, so a sidecar
-		// (which shares the id but has a release-suffixed name) is removed correctly once
-		// it is no longer wanted.
+		drained, err := r.routerRemoved(ctx, globalRevision, deploymentID)
+		if err != nil {
+			r.options.Log.Warn("could not acknowledge withdrawn deployment drain",
+				"deployment", deploymentID, "error", err)
+			continue
+		}
+		if !drained {
+			continue
+		}
 		if err := r.deleteWorkload(ctx, existing.Metadata.Name); err != nil {
 			return err
 		}
@@ -673,45 +807,6 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) error {
 	}
 }
 
-// canCoexist reports whether the stamp has GPU capacity to run a new release beside the
-// currently-serving ones during a rollout (ADR 0011).
-//
-// A GPU is not shared: each replica of each deployment holds one device, so the committed
-// count is the sum of every serving deployment's replicas times the GPUs per host. A
-// weighted rollout needs one deployment's worth of spare devices on top of that to bring
-// the new release up beside the old. Where the stamp does not have them, the rollout must
-// fall back to Recreate rather than deadlock waiting for a device that will not free, and
-// this is the honest signal that says so.
-//
-// When the hardware could not be profiled (allocatableGPUs is zero) the answer is
-// conservatively "yes": refusing to roll out on a stamp the operator merely failed to
-// measure would be worse than attempting the coexisting path, which the scheduler will
-// still gate on real capacity. The gpu request per host being zero (an upstream-only
-// stamp, no managed host) likewise means there is nothing to contend for, so coexistence
-// is free.
-func (r *Reconciler) canCoexist(serving []ModelDeployment) bool {
-	if r.allocatableGPUs <= 0 {
-		return true
-	}
-	perHost := r.options.ModelHost.GPUs
-	if perHost <= 0 {
-		return true
-	}
-
-	committed := 0
-	largest := 0
-	for _, item := range serving {
-		need := item.Spec.DesiredReplicas() * perHost
-		committed += need
-		if need > largest {
-			largest = need
-		}
-	}
-	// Room for the largest deployment's worth of extra devices is enough to coexist a
-	// single rollout at a time, which is all MaxParallel permits by default.
-	return r.allocatableGPUs-committed >= largest
-}
-
 // applyHardwareProfile adjusts host settings to the GPUs this stamp actually has.
 //
 // Profiled once and remembered, because nodes do not change capability while running and
@@ -741,16 +836,13 @@ func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
 		return
 	}
 
-	total := 0
 	for _, profile := range profiles {
-		total += profile.Count
 		r.options.Log.Info("gpu profiled",
 			"node", profile.Node, "model", profile.Model,
 			"compute_capability", profile.Capability.String(),
 			"memory_mib", profile.MemoryMiB, "gpus", profile.Count,
 			"source", profile.Source)
 	}
-	r.allocatableGPUs = total
 
 	adjusted, changes := applyProfile(r.options.ModelHost, profiles)
 	for _, change := range changes {

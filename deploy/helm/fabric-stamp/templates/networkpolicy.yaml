@@ -25,6 +25,18 @@ spec:
               kubernetes.io/metadata.name: {{ . }}
         {{- end }}
       {{- end }}
+    {{- if and .Values.operator.enabled .Values.operator.managedModelHost.image }}
+    # Rollout acknowledgement exposes only loaded route revision and active backend
+    # counts. It is reachable solely from the operator pod, never through public ingress.
+    - ports:
+        - port: router-status
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "fabric-stamp.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: operator
+    {{- end }}
   # Egress is unrestricted: the agent and collector call the control plane
   # outbound, and the data plane calls the model host. Restricting it needs the
   # customer's own CIDRs and belongs in their policy, not this chart's default.

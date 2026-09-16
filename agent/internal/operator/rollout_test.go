@@ -1,6 +1,9 @@
 package operator
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -11,365 +14,255 @@ func declared(release string) ModelDeployment {
 	return item
 }
 
-func TestAFirstRolloutJustProceeds(t *testing.T) {
-	decision := decideRollout(DefaultRollout(), declared("r1"), rolloutState{}, 0, time.Now())
-
-	if decision.Release != "r1" || decision.RolledBack || decision.Deferred {
-		t.Fatalf("unexpected decision: %+v", decision)
-	}
-	if decision.Reason != "InitialRollout" {
-		t.Fatalf("reason = %q", decision.Reason)
+func servingStatus(release, workload string, generation int64) *RolloutStatus {
+	return &RolloutStatus{
+		Phase: rolloutPhaseServing, TargetGeneration: generation,
+		ActiveRelease: release, ActiveWorkload: workload,
 	}
 }
 
-func TestAServingReleaseIsLeftAlone(t *testing.T) {
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-
-	decision := decideRollout(DefaultRollout(), declared("r1"), state, 0, time.Now())
-
-	if decision.Reason != "Serving" {
-		t.Fatalf("a healthy host was disturbed: %+v", decision)
+func TestInitialReleaseUsesStableWorkload(t *testing.T) {
+	item := declared("r1")
+	decision := decideRollout(DefaultRollout(), item, rolloutState{}, 0, time.Now())
+	if decision.Phase != rolloutPhasePreparing || decision.ActiveWorkload != hostName(item) ||
+		!decision.EnsureActive || decision.EnsureCandidate {
+		t.Fatalf("initial decision = %+v", decision)
 	}
 }
 
-func TestAStartingReleaseIsGivenTime(t *testing.T) {
-	// Weight loading takes minutes, so a host that is not ready yet is not failing.
-	now := time.Now()
+func TestServingReleaseIsLeftAlone(t *testing.T) {
+	item := declared("r1")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhaseServing || decision.ActiveRelease != "r1" {
+		t.Fatalf("serving decision = %+v", decision)
+	}
+}
+
+func TestReleaseChangePreparesCandidateWithoutMutatingActive(t *testing.T) {
+	item := declared("r2")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhasePreparing || decision.ActiveRelease != "r1" ||
+		decision.ActiveWorkload != hostName(item) || decision.CandidateRelease != "r2" ||
+		decision.CandidateWorkload == hostName(item) || !decision.EnsureCandidate {
+		t.Fatalf("candidate decision = %+v", decision)
+	}
+	if len(decision.Weighted) != 1 || decision.Weighted[0].Release != "r1" ||
+		decision.Weighted[0].Weight != 1 {
+		t.Fatalf("active route changed during preparation: %+v", decision.Weighted)
+	}
+}
+
+func TestPartialCandidateReadinessKeepsAllTrafficOnActive(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	state := rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false,
-		StartedAt: now.Add(-2 * time.Minute),
+		Status: status, CandidateExists: true,
+		CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 2},
+		CandidateConcrete:  true,
 	}
-
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 0, now)
-
-	if decision.RolledBack {
-		t.Fatal("rolled back a release that was still within its deadline")
-	}
-	if decision.Reason != "Progressing" {
-		t.Fatalf("reason = %q", decision.Reason)
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhasePreparing || len(decision.Weighted) != 1 ||
+		decision.Weighted[0].Release != "r1" {
+		t.Fatalf("partial candidate received traffic: %+v", decision)
 	}
 }
 
-func TestAStalledReleaseIsRolledBack(t *testing.T) {
-	now := time.Now()
-	policy := DefaultRollout()
+func TestFullyReadyConcreteCandidateCutsOverWithExplicitZero(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	state := rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Minute),
+		Status: status, CandidateExists: true,
+		CandidateReadiness: modelHostReadiness{Ready: 2, Desired: 2},
+		CandidateConcrete:  true,
 	}
-
-	decision := decideRollout(policy, declared("r2"), state, 0, now)
-
-	if !decision.RolledBack || decision.Release != "r1" {
-		t.Fatalf("expected a rollback to r1: %+v", decision)
-	}
-	// Named for what happened: the release may be fine and the cluster short of
-	// capacity, and readiness alone cannot tell those apart.
-	if decision.Reason != "RolledBackAfterReadyTimeout" {
-		t.Fatalf("reason = %q", decision.Reason)
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhaseDraining || !decision.ForceWeighted ||
+		len(decision.Weighted) != 2 || decision.Weighted[0].Weight != 0 ||
+		decision.Weighted[1].Weight != 1 {
+		t.Fatalf("cutover decision = %+v", decision)
 	}
 }
 
-func TestWithNoGoodReleaseThereIsNothingToRollBackTo(t *testing.T) {
-	// A first release that never becomes ready must keep trying: rolling back to
-	// nothing would delete the only deployment the stamp has.
-	now := time.Now()
-	policy := DefaultRollout()
+func TestServiceFallbackDoesNotPromoteCandidate(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	state := rolloutState{
-		Exists: true, Current: "r1", LastGood: "", Ready: false,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Hour),
+		Status:             status,
+		CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 1},
+		CandidateConcrete:  false,
 	}
-
-	decision := decideRollout(policy, declared("r1"), state, 0, now)
-
-	if decision.RolledBack {
-		t.Fatal("rolled back to a release that was never known good")
+	if got := decideRollout(DefaultRollout(), item, state, 0, time.Now()); got.Phase != rolloutPhasePreparing {
+		t.Fatalf("DNS fallback promoted candidate: %+v", got)
 	}
 }
 
-func TestRollbackCanBeDisabled(t *testing.T) {
-	now := time.Now()
+func TestDrainAcknowledgementPromotesAndDeletesOldActive(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "rev", DrainingBackendIDs: []string{"old"},
+	}
+	decision := decideRollout(DefaultRollout(), item,
+		rolloutState{
+			Status: status, DrainAcknowledged: true,
+			CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 1},
+		}, 0, time.Now())
+	if decision.Phase != rolloutPhaseServing || !decision.DeleteActive ||
+		decision.ActiveRelease != "r2" || decision.ActiveWorkload != status.CandidateWorkload {
+		t.Fatalf("promotion decision = %+v", decision)
+	}
+}
+
+func TestCandidateTimeoutKeepsActiveAndMarksGenerationFailed(t *testing.T) {
+	item := declared("r2")
 	policy := DefaultRollout()
-	policy.AutoRollback = false
-	state := rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Minute),
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().Add(-policy.ReadyTimeout - time.Minute).UTC().Format(time.RFC3339),
 	}
-
-	if decideRollout(policy, declared("r2"), state, 0, now).RolledBack {
-		t.Fatal("rolled back with automatic rollback disabled")
-	}
-}
-
-func TestOnlyOneReleaseChangesAtATime(t *testing.T) {
-	// A bad release should cost one deployment, not every deployment on the stamp.
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 1, time.Now())
-
-	if !decision.Deferred {
-		t.Fatalf("a second simultaneous rollout was allowed: %+v", decision)
-	}
-	// The running release stays configured while the change waits.
-	if decision.Release != "r1" {
-		t.Fatalf("deferring changed the release anyway: %+v", decision)
+	decision := decideRollout(policy, item, rolloutState{Status: status}, 0, time.Now())
+	if decision.Phase != rolloutPhaseFailed || !decision.DeleteCandidate ||
+		decision.ActiveRelease != "r1" || decision.FailedGeneration != item.Metadata.Generation {
+		t.Fatalf("timeout decision = %+v", decision)
 	}
 }
 
-func TestParallelismIsConfigurable(t *testing.T) {
-	policy := DefaultRollout()
-	policy.MaxParallel = 2
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-
-	if decideRollout(policy, declared("r2"), state, 1, time.Now()).Deferred {
-		t.Fatal("deferred below the configured parallelism")
+func TestPersistedRolloutConsumesParallelBudgetAfterRestart(t *testing.T) {
+	item := declared("r2")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 1, time.Now())
+	if !decision.Deferred || decision.ActiveRelease != "r1" {
+		t.Fatalf("parallel rollout was not deferred: %+v", decision)
 	}
 }
 
-func TestOnlyAReadyReleaseBecomesTheFallback(t *testing.T) {
-	// Recording the declared release optimistically would let a broken one become the
-	// thing rolled back to, which is worse than having no fallback.
-	reconciler := New(nil, Options{Namespace: namespace, Log: discardLogger()})
-	now := time.Now()
+func TestRouterDrainRequiresMatchingRevisionAndZeroOldInflight(t *testing.T) {
+	state := `{"revision":"global","backends":[{"deployment_id":"dep-a","backend_id":"old","route_revision":"cutover","workload":"active","in_flight":1}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(state))
+	}))
+	defer server.Close()
+	reconciler := New(nil, Options{RouterStatusURL: server.URL, RouterHTTP: server.Client()})
 
-	unready := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2"},
-		rolloutState{Exists: true, Current: "r2", LastGood: "r1", Ready: false},
-		now,
-	)
-	if unready[annotationLastGood] != "r1" {
-		t.Fatalf("an unready release became the fallback: %v", unready)
+	drained, err := reconciler.routerDrained(context.Background(), "dep-a", "cutover", "active")
+	if err != nil || drained {
+		t.Fatalf("active old request reported drained: drained=%v err=%v", drained, err)
 	}
-
-	ready := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2"},
-		rolloutState{Exists: true, Current: "r2", LastGood: "r1", Ready: true},
-		now,
-	)
-	if ready[annotationLastGood] != "r2" {
-		t.Fatalf("a ready release did not become the fallback: %v", ready)
+	state = `{"revision":"global","backends":[{"deployment_id":"dep-a","backend_id":"old","route_revision":"other","workload":"active","in_flight":0}]}`
+	drained, err = reconciler.routerDrained(context.Background(), "dep-a", "cutover", "active")
+	if err != nil || drained {
+		t.Fatalf("stale revision reported drained: drained=%v err=%v", drained, err)
+	}
+	state = `{"revision":"global","backends":[{"deployment_id":"dep-a","backend_id":"old","route_revision":"cutover","workload":"active","in_flight":0}]}`
+	drained, err = reconciler.routerDrained(context.Background(), "dep-a", "cutover", "active")
+	if err != nil || !drained {
+		t.Fatalf("matching zero-inflight route did not drain: drained=%v err=%v", drained, err)
 	}
 }
 
-func TestTheRolloutClockResetsOnlyWhenTheReleaseChanges(t *testing.T) {
-	// Otherwise a release would get a fresh deadline on every pass and never time out.
-	reconciler := New(nil, Options{Namespace: namespace, Log: discardLogger()})
-	started := time.Now().Add(-5 * time.Minute)
-
-	unchanged := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2"},
-		rolloutState{Exists: true, Current: "r2", StartedAt: started},
-		time.Now(),
-	)
-	if parseTime(unchanged[annotationRolloutTime]).Unix() != started.UTC().Unix() {
-		t.Fatalf("the deadline was reset for an unchanged release: %v", unchanged)
+func TestCandidateFailureAfterCutoverReversesWeightsBeforeDeletion(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "new-positive", DrainingBackendIDs: []string{"old"},
 	}
-
-	changed := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r3"},
-		rolloutState{Exists: true, Current: "r2", StartedAt: started},
-		time.Now(),
-	)
-	if parseTime(changed[annotationRolloutTime]).Unix() == started.UTC().Unix() {
-		t.Fatal("the deadline was not reset for a new release")
+	decision := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: status, DrainAcknowledged: true,
+		CandidateReadiness: modelHostReadiness{Ready: 0, Desired: 1},
+	}, 0, time.Now())
+	if !decision.RollbackDrain || decision.DeleteCandidate || decision.CutoverRevision != "" ||
+		len(decision.Weighted) != 2 || decision.Weighted[0].Weight != 1 ||
+		decision.Weighted[1].Weight != 0 {
+		t.Fatalf("rollback did not reverse route before cleanup: %+v", decision)
 	}
 }
 
-// weightOf returns the weight a decision assigns a release, and whether it appears at all.
-func weightOf(decision RolloutDecision, release string) (float64, bool) {
-	for _, rw := range decision.Weighted {
-		if rw.Release == release {
-			return rw.Weight, true
-		}
+func TestAcknowledgedReverseDrainMarksGenerationFailedAndDoesNotRetry(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "rollback-route", DrainingBackendIDs: []string{"new"},
+		Rollback: true,
 	}
-	return 0, false
-}
-
-// coexisting is a stamp with room for two releases at once.
-func coexisting(state rolloutState) rolloutState {
-	state.CanCoexist = true
-	if state.DesiredReplicas == 0 {
-		state.DesiredReplicas = 1
+	decision := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: status, DrainAcknowledged: true,
+	}, 0, time.Now())
+	if decision.Phase != rolloutPhaseFailed || decision.FailedGeneration != item.Metadata.Generation ||
+		!decision.DeleteCandidate || decision.ActiveRelease != "r1" {
+		t.Fatalf("acknowledged rollback = %+v", decision)
 	}
-	return state
-}
-
-func TestAServingReleaseCarriesAllItsWeight(t *testing.T) {
-	// The steady state is one release taking all of the traffic; the weighted set exists
-	// so the data plane always has a weight to read, even when there is only one.
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-	decision := decideRollout(DefaultRollout(), declared("r1"), coexisting(state), 0, time.Now())
-
-	if len(decision.Weighted) != 1 {
-		t.Fatalf("a single release should carry one weight: %+v", decision.Weighted)
-	}
-	if w, _ := weightOf(decision, "r1"); w != 1.0 {
-		t.Fatalf("the serving release does not carry all the weight: %+v", decision.Weighted)
-	}
-	if decision.Coexist {
-		t.Fatal("a steady deployment must not run a sidecar")
+	persisted := rolloutStatusFromDecision(item, decision, "active-only", nil)
+	next := decideRollout(DefaultRollout(), item, rolloutState{Status: persisted}, 0, time.Now())
+	if next.EnsureCandidate || next.CandidateRelease != "" || next.Phase != rolloutPhaseFailed {
+		t.Fatalf("failed generation retried immediately: %+v", next)
 	}
 }
 
-func TestAReleaseChangeStartsASidecarAndKeepsAllTrafficOnTheOld(t *testing.T) {
-	// The instant a change is declared the new release has no ready pod, so every request
-	// must still go to the old release, which keeps serving from its sidecar.
-	state := coexisting(rolloutState{
-		Exists: true, Current: "r1", LastGood: "r1", Ready: true, ReadyReplicas: 1,
-		DesiredReplicas: 1,
-	})
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 0, time.Now())
-
-	if !decision.Coexist || decision.SidecarRelease != "r1" {
-		t.Fatalf("the old release was not kept beside the new one: %+v", decision)
+func TestRevertingDesiredReleaseCancelsCandidateInsteadOfDuplicatingActive(t *testing.T) {
+	item := declared("r1")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation - 1,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
 	}
-	if w, _ := weightOf(decision, "r1"); w != 1.0 {
-		t.Fatalf("traffic left the old release before the new one was ready: %+v", decision.Weighted)
-	}
-	if _, present := weightOf(decision, "r2"); present {
-		if w, _ := weightOf(decision, "r2"); w != 0 {
-			t.Fatalf("the not-yet-ready release was given traffic: %+v", decision.Weighted)
-		}
+	decision := decideRollout(DefaultRollout(), item, rolloutState{Status: status}, 0, time.Now())
+	if decision.Phase != rolloutPhaseServing || !decision.DeleteCandidate ||
+		decision.EnsureCandidate || decision.ActiveWorkload != hostName(item) {
+		t.Fatalf("revert created a redundant active-release candidate: %+v", decision)
 	}
 }
 
-func TestWeightShiftsToTheNewReleaseAsItsPodsBecomeReady(t *testing.T) {
-	// The heart of a downtime-free rollout: as the new release's replicas come ready the
-	// weight moves to it in proportion, so the old release drains rather than being cut.
-	policy := DefaultRollout()
-	now := time.Now()
-	// Four desired replicas, two of the new release ready: an even split.
-	state := coexisting(rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false, ReadyReplicas: 2,
-		DesiredReplicas: 4, PrevRelease: "r1", SidecarExists: true, SidecarReady: true,
-		StartedAt: now.Add(-time.Minute),
-	})
-	decision := decideRollout(policy, declared("r2"), state, 0, now)
-
-	if !decision.Coexist {
-		t.Fatalf("the shift is not coexisting: %+v", decision)
+func TestNewGenerationDuringDrainRollsBackOldCandidateThenPreparesNewRelease(t *testing.T) {
+	item := declared("r3")
+	item.Metadata.Generation = 3
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: 2,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "r2-positive", DrainingBackendIDs: []string{"old"},
 	}
-	newWeight, ok := weightOf(decision, "r2")
-	if !ok || newWeight != 0.5 {
-		t.Fatalf("new release weight = %v, want 0.5: %+v", newWeight, decision.Weighted)
+	first := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: status, DrainAcknowledged: true,
+		CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 1},
+	}, 0, time.Now())
+	if !first.RollbackDrain || first.DeleteCandidate || first.CutoverRevision != "" {
+		t.Fatalf("new generation reused forward ack instead of reversing route: %+v", first)
 	}
-	oldWeight, _ := weightOf(decision, "r1")
-	if oldWeight != 0.5 {
-		t.Fatalf("old release weight = %v, want 0.5: %+v", oldWeight, decision.Weighted)
+	reverse := rolloutStatusFromDecision(item, first, "r1-positive", []string{"r2-pod"})
+	second := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: reverse, DrainAcknowledged: true,
+	}, 0, time.Now())
+	if second.Phase != rolloutPhaseFailed || second.FailedGeneration != 2 {
+		t.Fatalf("rollback failed the unattempted generation: %+v", second)
 	}
-	// The two weights cover all the traffic, so nothing is dropped mid-shift.
-	if newWeight+oldWeight != 1.0 {
-		t.Fatalf("weights do not sum to 1, traffic is dropped: %+v", decision.Weighted)
-	}
-}
-
-func TestTheOldReleaseIsRemovedWhenTheNewIsFullyReady(t *testing.T) {
-	// Once the new release can carry everything the sidecar is drained and removed, and
-	// the config returns to a single release taking all the traffic.
-	state := coexisting(rolloutState{
-		Exists: true, Current: "r2", LastGood: "r2", Ready: true, ReadyReplicas: 2,
-		DesiredReplicas: 2, PrevRelease: "r1", SidecarExists: true, SidecarReady: true,
-	})
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 0, time.Now())
-
-	if !decision.RemoveSidecar || decision.SidecarRelease != "r1" {
-		t.Fatalf("the old release was not removed once the new was ready: %+v", decision)
-	}
-	if len(decision.Weighted) != 1 {
-		t.Fatalf("the config did not return to a single release: %+v", decision.Weighted)
-	}
-	if w, _ := weightOf(decision, "r2"); w != 1.0 {
-		t.Fatalf("the new release does not carry all the traffic: %+v", decision.Weighted)
-	}
-	if _, present := weightOf(decision, "r1"); present {
-		t.Fatalf("the drained release still receives traffic: %+v", decision.Weighted)
-	}
-}
-
-func TestAStalledNewReleaseRollsBackKeepingTrafficOnTheLastGood(t *testing.T) {
-	// The safety property: a new release that never becomes ready must not drop a single
-	// request. The old release has been serving from its sidecar throughout, so rollback
-	// returns all the weight to it and the failed new release is abandoned.
-	policy := DefaultRollout()
-	now := time.Now()
-	state := coexisting(rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false, ReadyReplicas: 0,
-		DesiredReplicas: 1, PrevRelease: "r1", SidecarExists: true, SidecarReady: true,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Minute),
-	})
-	decision := decideRollout(policy, declared("r2"), state, 0, now)
-
-	if !decision.RolledBack {
-		t.Fatalf("a stalled new release was not rolled back: %+v", decision)
-	}
-	if decision.Release != "r1" {
-		t.Fatalf("rollback did not return to the last-good release: %+v", decision)
-	}
-	// Every unit of weight is on a release that is actually serving: the pool is never
-	// empty, so no request is dropped.
-	total := 0.0
-	for _, rw := range decision.Weighted {
-		total += rw.Weight
-		if rw.Release == "r2" && rw.Weight > 0 {
-			t.Fatalf("the failed release still receives traffic: %+v", decision.Weighted)
-		}
-	}
-	if total <= 0 {
-		t.Fatalf("rollback left the pool empty, dropping requests: %+v", decision.Weighted)
-	}
-	if w, _ := weightOf(decision, "r1"); w != 1.0 {
-		t.Fatalf("the last-good release does not carry all the traffic: %+v", decision.Weighted)
-	}
-}
-
-func TestARolloutDefersToRecreateWhenTheStampCannotFitBoth(t *testing.T) {
-	// Honesty about the hardware: a GPU is not shared, so where the stamp has no spare
-	// device the two releases cannot coexist and the operator falls back to Recreate
-	// rather than deadlocking on a device that will never free.
-	state := rolloutState{
-		Exists: true, Current: "r1", LastGood: "r1", Ready: true, ReadyReplicas: 1,
-		DesiredReplicas: 1, CanCoexist: false,
-	}
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 0, time.Now())
-
-	if decision.Coexist {
-		t.Fatalf("a stamp with no spare GPU pretended to coexist: %+v", decision)
-	}
-	if decision.Reason != "RollingOutRecreate" {
-		t.Fatalf("reason = %q, want RollingOutRecreate", decision.Reason)
-	}
-	if decision.Release != "r2" {
-		t.Fatalf("the Recreate path did not move to the declared release: %+v", decision)
-	}
-	// A single release, since one device serves one server at a time.
-	if len(decision.Weighted) != 1 {
-		t.Fatalf("the Recreate path split traffic it cannot split: %+v", decision.Weighted)
-	}
-}
-
-func TestAWeightedRolloutRecordsTheSidecarReleaseInAnnotations(t *testing.T) {
-	// The next reconcile, in this process or another, must know which release the sidecar
-	// carries, so it is recorded on the primary workload rather than in operator memory.
-	reconciler := New(nil, Options{Namespace: namespace, Log: discardLogger()})
-	decision := RolloutDecision{
-		Release: "r2", Coexist: true, SidecarRelease: "r1",
-		Weighted: []ReleaseWeight{{Release: "r1", Weight: 1.0}},
-	}
-	annotations := reconciler.rolloutAnnotations(
-		decision, rolloutState{Exists: true, Current: "r1"}, time.Now(),
-	)
-	if annotations[annotationRollingFrom] != "r1" {
-		t.Fatalf("the sidecar release was not recorded: %v", annotations)
-	}
-
-	// Once the sidecar is removed the marker is cleared, so a settled deployment carries
-	// no stale rollout state.
-	done := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2", Coexist: true, SidecarRelease: "r1", RemoveSidecar: true},
-		rolloutState{Exists: true, Current: "r2", Ready: true},
-		time.Now(),
-	)
-	if _, present := done[annotationRollingFrom]; present {
-		t.Fatalf("a completed rollout left a stale sidecar marker: %v", done)
+	failed := rolloutStatusFromDecision(item, second, "r1-only", nil)
+	third := decideRollout(DefaultRollout(), item, rolloutState{Status: failed}, 0, time.Now())
+	if third.Phase != rolloutPhasePreparing || third.CandidateRelease != "r3" {
+		t.Fatalf("new declaration was suppressed after rollback: %+v", third)
 	}
 }

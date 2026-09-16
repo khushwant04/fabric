@@ -1,0 +1,19 @@
+{{- if and .Values.operator.enabled .Values.operator.managedModelHost.image }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-router-status
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router-status
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fabric-stamp.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: stamp
+  ports:
+    - name: router-status
+      port: 8082
+      targetPort: router-status
+      protocol: TCP
+{{- end }}

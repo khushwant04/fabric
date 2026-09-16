@@ -4,10 +4,9 @@
 // the agent. Neither component can both talk to the control plane and mutate the
 // cluster, so compromising either one is bounded.
 //
-// It renders the data plane's configuration into a ConfigMap and records what it
-// observed on each resource. It does not start a model host: none exists in this
-// project yet, and shipping a workload for one would assert a component that has
-// never run.
+// It renders data-plane routing, creates model-host workloads when configured, and records
+// observed rollout state. Release changes use a separate candidate workload so the active
+// model is never patched in place.
 package main
 
 import (
@@ -94,6 +93,10 @@ func main() {
 		hostSpread = flag.Bool("model-host-spread-across-nodes", false,
 			"prefer placing model hosts on different nodes")
 
+		routerStatusURL = flag.String("router-status-url",
+			envOr("FABRIC_OPERATOR_ROUTER_STATUS_URL", ""),
+			"private data-plane router status base URL used for acknowledged drain")
+
 		readyTimeout = flag.Duration("rollout-ready-timeout", 15*time.Minute,
 			"how long a new release has to become ready before it is abandoned")
 		maxParallel = flag.Int("rollout-max-parallel", 1,
@@ -176,16 +179,21 @@ func main() {
 			log.Error("--model-host-image needs --model-host-model and --model-host-served-name")
 			os.Exit(1)
 		}
+		if *routerStatusURL == "" {
+			log.Error("--model-host-image needs --router-status-url for acknowledged drain")
+			os.Exit(1)
+		}
 		log.Info("managing the model host",
 			"image", host.Image, "served_name", host.ServedName, "gpus", host.GPUs)
 	}
 
 	reconciler := operator.New(client, operator.Options{
-		Namespace:     *namespace,
-		ConfigMapName: *configMap,
-		ConfigKey:     *configKey,
-		Log:           log,
-		ModelHost:     host,
+		Namespace:       *namespace,
+		ConfigMapName:   *configMap,
+		ConfigKey:       *configKey,
+		Log:             log,
+		ModelHost:       host,
+		RouterStatusURL: *routerStatusURL,
 		Rollout: operator.Rollout{
 			ReadyTimeout: *readyTimeout,
 			MaxParallel:  *maxParallel,

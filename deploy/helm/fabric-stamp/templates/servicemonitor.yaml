@@ -14,7 +14,7 @@ spec:
       - {{ .Release.Namespace }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: fabric-model-host
+      app.kubernetes.io/managed-by: fabric-operator
   endpoints:
     # The model server publishes its own engine metrics here: queue depth, cache use,
     # time to first token, tokens produced.

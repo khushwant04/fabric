@@ -56,6 +56,7 @@ class Deployment:
     #: also what an entry that predates the field gets (M2, ADR 0011). The vocabulary is
     #: validated by the control plane; an unknown value here defaults rather than raising.
     strategy: str = DEFAULT_STRATEGY
+    route_revision: str = ""
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGIES:
@@ -90,7 +91,8 @@ class Deployment:
 class DeploymentRegistry:
     """Immutable view of the deployments assigned to this stamp."""
 
-    def __init__(self, deployments: list[Deployment]) -> None:
+    def __init__(self, deployments: list[Deployment], *, revision: str = "") -> None:
+        self.revision = revision
         self._by_id: dict[uuid.UUID, Deployment] = {}
         self._by_alias: dict[str, Deployment] = {}
         for deployment in deployments:
@@ -112,7 +114,7 @@ class DeploymentRegistry:
         deployments = [
             cls._deployment_from_entry(entry) for entry in payload.get("deployments", [])
         ]
-        return cls(deployments)
+        return cls(deployments, revision=str(payload.get("revision") or ""))
 
     @staticmethod
     def _deployment_from_entry(entry: dict[str, Any]) -> Deployment:
@@ -137,6 +139,7 @@ class DeploymentRegistry:
                         url=url,
                         backend_id=str(item.get("id") or url),
                         weight=weight,
+                        workload=str(item.get("workload") or ""),
                     )
                 )
             backends = tuple(parsed)
@@ -152,6 +155,7 @@ class DeploymentRegistry:
             upstream_model=entry.get("upstream_model"),
             backends=backends,
             strategy=strategy,
+            route_revision=str(entry.get("route_revision") or ""),
         )
 
     @classmethod
@@ -187,6 +191,13 @@ class DeploymentRegistry:
     def deployment_ids(self) -> frozenset[uuid.UUID]:
         """Stable identities currently present, used to retire per-deployment state."""
         return frozenset(self._by_id)
+
+    def deployments(self) -> list[Deployment]:
+        """All local deployments, used by the private router-state listener."""
+        return list(self._by_id.values())
+
+    def config_revision(self) -> str:
+        return self.revision
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         """Deployments this account may list."""
@@ -288,6 +299,12 @@ class ReloadingRegistry:
     def deployment_ids(self) -> frozenset[uuid.UUID]:
         return self._current().deployment_ids()
 
+    def deployments(self) -> list[Deployment]:
+        return self._current().deployments()
+
+    def config_revision(self) -> str:
+        return self._current().revision
+
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         return self._current().for_account(account_id)
 
@@ -298,6 +315,7 @@ class ReloadingRegistry:
         self._current()
         with self._lock:
             return {
+                "revision": self._registry.revision,
                 "path": str(self._path),
                 "deployments": len(self._registry),
                 "reloads": self._reloads,

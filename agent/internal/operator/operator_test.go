@@ -431,3 +431,54 @@ func TestConfigurationUpdateCarriesTheResourceVersion(t *testing.T) {
 }
 
 func ptr(item ModelDeployment) *ModelDeployment { return &item }
+
+func TestConfigurationRevisionIsDeterministicAndContentAddressed(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	backends := map[string][]dataPlaneBackend{
+		"dep-a": {{URL: "http://10.0.0.1:8000", ID: "pod-a"}},
+	}
+	first, err := renderConfig([]ModelDeployment{item}, backends)
+	if err != nil {
+		t.Fatalf("render first: %v", err)
+	}
+	second, err := renderConfig([]ModelDeployment{item}, backends)
+	if err != nil {
+		t.Fatalf("render second: %v", err)
+	}
+	if configRevision(first) == "" || configRevision(first) != configRevision(second) {
+		t.Fatalf("revision is missing or unstable: %q %q", configRevision(first), configRevision(second))
+	}
+	item.Spec.Strategy = "round_robin"
+	changed, err := renderConfig([]ModelDeployment{item}, backends)
+	if err != nil {
+		t.Fatalf("render changed: %v", err)
+	}
+	if configRevision(changed) == configRevision(first) {
+		t.Fatal("a routing change kept the same revision")
+	}
+}
+
+func TestPerDeploymentRouteRevisionIgnoresUnrelatedRouteChurn(t *testing.T) {
+	a := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	b := resource("beta", "dep-b", "acct-a", "beta-model", 1)
+	backends := map[string][]dataPlaneBackend{
+		"dep-a": {{URL: "http://10.0.0.1:8000", ID: "pod-a"}},
+		"dep-b": {{URL: "http://10.0.0.2:8000", ID: "pod-b"}},
+	}
+	before, err := renderConfig([]ModelDeployment{a, b}, backends)
+	if err != nil {
+		t.Fatalf("render before: %v", err)
+	}
+	b.Spec.Strategy = "round_robin"
+	after, err := renderConfig([]ModelDeployment{a, b}, backends)
+	if err != nil {
+		t.Fatalf("render after: %v", err)
+	}
+	beforeRoutes, afterRoutes := routeRevisions(before), routeRevisions(after)
+	if beforeRoutes["dep-a"] != afterRoutes["dep-a"] {
+		t.Fatal("unrelated deployment changed dep-a drain revision")
+	}
+	if beforeRoutes["dep-b"] == afterRoutes["dep-b"] || configRevision(before) == configRevision(after) {
+		t.Fatal("changed route did not alter its route/global revision")
+	}
+}

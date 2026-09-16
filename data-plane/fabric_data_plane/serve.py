@@ -16,7 +16,12 @@ import logging
 
 import uvicorn
 
-from fabric_data_plane.app import build_plane, create_admin_app, create_inference_app
+from fabric_data_plane.app import (
+    build_plane,
+    create_admin_app,
+    create_inference_app,
+    create_router_status_app,
+)
 from fabric_data_plane.config import Settings
 
 logger = logging.getLogger("fabric_data_plane.serve")
@@ -52,17 +57,28 @@ async def serve(settings: Settings | None = None) -> None:
         )
     )
 
+    router_status = uvicorn.Server(
+        uvicorn.Config(
+            create_router_status_app(plane),
+            host=resolved.router_status_host,
+            port=resolved.router_status_port,
+            log_level=resolved.log_level.lower(),
+        )
+    )
+
     # Warm the verification keys before readiness is polled, and keep retrying: a
     # readiness check that requires keys can never pass if keys are only fetched
     # while serving a request, because no request arrives until the pod is ready.
     warmer = asyncio.create_task(_warm_keys(plane, resolved))
 
     logger.info(
-        "serving inference on %s:%s and administration on %s:%s",
+        "serving inference on %s:%s, administration on %s:%s, and router status on %s:%s",
         resolved.host,
         resolved.port,
         resolved.admin_host,
         resolved.admin_port,
+        resolved.router_status_host,
+        resolved.router_status_port,
     )
 
     # If either listener stops, the other is torn down: a data plane serving
@@ -71,9 +87,11 @@ async def serve(settings: Settings | None = None) -> None:
     async with asyncio.TaskGroup() as group:
         inference_task = group.create_task(inference.serve())
         admin_task = group.create_task(admin.serve())
+        router_status_task = group.create_task(router_status.serve())
 
         done, _pending = await asyncio.wait(
-            {inference_task, admin_task}, return_when=asyncio.FIRST_COMPLETED
+            {inference_task, admin_task, router_status_task},
+            return_when=asyncio.FIRST_COMPLETED,
         )
         for task in done:
             if task.exception() is not None:
@@ -81,6 +99,7 @@ async def serve(settings: Settings | None = None) -> None:
 
         inference.should_exit = True
         admin.should_exit = True
+        router_status.should_exit = True
         warmer.cancel()
 
 

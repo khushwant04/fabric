@@ -31,6 +31,7 @@ class Backend:
     url: str
     backend_id: str
     weight: float = 1.0
+    workload: str = ""
 
 
 class BackendHealth:
@@ -53,6 +54,9 @@ class BackendHealth:
             backend.backend_id: None for backend in backends
         }
         self._in_flight: dict[str, int] = {backend.backend_id: 0 for backend in backends}
+        self._workloads: dict[str, str] = {
+            backend.backend_id: backend.workload for backend in backends
+        }
 
     def is_available(self, backend: Backend) -> bool:
         with self._lock:
@@ -95,6 +99,28 @@ class BackendHealth:
             current = self._in_flight.get(backend_id, 0)
             if current > 0:
                 self._in_flight[backend_id] = current - 1
+
+    def reconcile(self, backends: list[Backend]) -> None:
+        """Preserve overlapping health/load state while pool membership changes."""
+        wanted = {backend.backend_id for backend in backends}
+        with self._lock:
+            for backend in backends:
+                backend_id = backend.backend_id
+                self._failures.setdefault(backend_id, 0)
+                self._ejected_at.setdefault(backend_id, None)
+                self._in_flight.setdefault(backend_id, 0)
+                if backend.workload:
+                    self._workloads[backend_id] = backend.workload
+            for backend_id in set(self._failures) - wanted:
+                if self._in_flight.get(backend_id, 0) == 0:
+                    self._failures.pop(backend_id, None)
+                    self._ejected_at.pop(backend_id, None)
+                    self._in_flight.pop(backend_id, None)
+                    self._workloads.pop(backend_id, None)
+
+    def workloads(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._workloads)
 
     def in_flight(self) -> dict[str, int]:
         with self._lock:
