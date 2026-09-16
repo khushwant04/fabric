@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -381,5 +382,98 @@ func TestAnUnrecognisedMachineIsStillReportedAsUnknown(t *testing.T) {
 	}
 	if !strings.Contains(capacity.Profiles[0].Source, "unrecognised") {
 		t.Fatalf("provenance does not say it failed: %q", capacity.Profiles[0].Source)
+	}
+}
+
+func TestFabricClaimsAreReportedPerDeployment(t *testing.T) {
+	// The control plane compares each deployment's running pods against what it committed for
+	// that deployment. A stamp-wide total cannot support that: one deployment running ahead of
+	// its rows and another lagging behind them are indistinguishable in a sum, and the two
+	// errors cancel into an overcommitment.
+	cluster := &clusterStub{nodes: twoT4Nodes, pods: `{"items":[
+		{"metadata":{"name":"a-1","labels":{
+			"app.kubernetes.io/managed-by":"fabric-operator",
+			"fabric.khushwant.dev/deployment-id":"dep-a"}},
+		 "spec":{"nodeName":"gpu-0","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
+		{"metadata":{"name":"a-2","labels":{
+			"app.kubernetes.io/managed-by":"fabric-operator",
+			"fabric.khushwant.dev/deployment-id":"dep-a"}},
+		 "spec":{"nodeName":"gpu-0","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
+		{"metadata":{"name":"b-1","labels":{
+			"app.kubernetes.io/managed-by":"fabric-operator",
+			"fabric.khushwant.dev/deployment-id":"dep-b"}},
+		 "spec":{"nodeName":"gpu-1","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
+		{"metadata":{"name":"theirs"},
+		 "spec":{"nodeName":"gpu-1","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}]}`}
+
+	capacity, err := Measure(context.Background(), cluster, nil)
+	if err != nil {
+		t.Fatalf("measure: %v", err)
+	}
+
+	if capacity.RequestedGPUs != 4 || capacity.FabricRequestedGPUs != 3 {
+		t.Fatalf("totals wrong: %+v", capacity)
+	}
+	// Ordered largest first, so a truncated report keeps the claims that matter most.
+	want := []DeploymentClaim{{DeploymentID: "dep-a", GPUs: 2}, {DeploymentID: "dep-b", GPUs: 1}}
+	if len(capacity.FabricClaims) != len(want) {
+		t.Fatalf("claims = %+v, want %+v", capacity.FabricClaims, want)
+	}
+	for index, claim := range capacity.FabricClaims {
+		if claim != want[index] {
+			t.Fatalf("claim %d = %+v, want %+v", index, claim, want[index])
+		}
+	}
+}
+
+func TestAFabricPodWithNoDeploymentLabelStillCounts(t *testing.T) {
+	// It is holding a device either way. Counting it only in the total makes the control plane
+	// charge it as untracked, which is conservative; dropping it would offer the device twice.
+	cluster := &clusterStub{nodes: twoT4Nodes, pods: `{"items":[
+		{"metadata":{"name":"orphan","labels":{
+			"app.kubernetes.io/managed-by":"fabric-operator"}},
+		 "spec":{"nodeName":"gpu-0","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"2"}}}]}}]}`}
+
+	capacity, _ := Measure(context.Background(), cluster, nil)
+
+	if capacity.FabricRequestedGPUs != 2 {
+		t.Fatalf("fabric total = %d, want 2", capacity.FabricRequestedGPUs)
+	}
+	if len(capacity.FabricClaims) != 0 {
+		t.Fatalf("an unlabelled pod was attributed to a deployment: %+v", capacity.FabricClaims)
+	}
+}
+
+func TestTheClaimListIsBounded(t *testing.T) {
+	// The capability report is a bounded document, and the control plane rejects one that
+	// exceeds its schema. Truncating keeps the largest claims and leaves the rest in the total.
+	items := make([]string, 0, MaxReportedClaims+10)
+	for index := 0; index < MaxReportedClaims+10; index++ {
+		items = append(items, fmt.Sprintf(`{"metadata":{"name":"p%d","labels":{
+			"app.kubernetes.io/managed-by":"fabric-operator",
+			"fabric.khushwant.dev/deployment-id":"dep-%03d"}},
+			"spec":{"nodeName":"gpu-0","containers":[
+				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}`, index, index))
+	}
+	cluster := &clusterStub{
+		nodes: twoT4Nodes,
+		pods:  `{"items":[` + strings.Join(items, ",") + `]}`,
+	}
+
+	capacity, _ := Measure(context.Background(), cluster, nil)
+
+	if len(capacity.FabricClaims) != MaxReportedClaims {
+		t.Fatalf("claims = %d, want the cap of %d",
+			len(capacity.FabricClaims), MaxReportedClaims)
+	}
+	// The total still accounts for every device, so nothing goes missing.
+	if capacity.FabricRequestedGPUs != MaxReportedClaims+10 {
+		t.Fatalf("fabric total = %d, want %d",
+			capacity.FabricRequestedGPUs, MaxReportedClaims+10)
 	}
 }

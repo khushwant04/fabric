@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy import select
@@ -236,11 +237,19 @@ class StampCapacity:
     #: own report of Fabric-owned claims from its total, so hosts this platform created are
     #: not counted here *and* in ``committed_gpus``.
     foreign_requested_gpus: int
-    #: GPUs the stamp says Fabric's own model hosts are holding right now. Compared against
-    #: what the control plane has committed rather than added to it — see ``used_gpus``.
+    #: GPUs the stamp says Fabric's own model hosts are holding right now, in total.
     fabric_requested_gpus: int
-    #: Whether the stamp measured claims at all. False makes the two claim numbers zero,
-    #: which is indistinguishable from an idle cluster without this flag.
+    #: The same, per deployment. Compared against what was committed *for that deployment*,
+    #: because a stamp-wide total cannot support the comparison: one deployment running
+    #: ahead of its rows and another lagging behind them look identical in a sum, and the
+    #: two errors cancel into an overcommitment.
+    fabric_claims: dict[str, int]
+    #: Fabric GPUs the report accounts for but attributes to no deployment — a truncated
+    #: claim list, or a host whose deployment label is missing. Charged in full, because
+    #: something is holding them.
+    untracked_fabric_gpus: int
+    #: Whether the stamp measured claims at all. False makes the claim numbers zero, which
+    #: is indistinguishable from an idle cluster without this flag.
     claims_measured: bool
     #: Largest device count on one node, which bounds what a single replica can ask for.
     #: Zero means the stamp did not say.
@@ -252,33 +261,38 @@ class StampCapacity:
     region: str | None
     last_heartbeat_at: dt.datetime | None
 
-    def used_gpus(self, committed_gpus: int) -> int:
-        """Devices this stamp cannot offer, whichever of the two views is larger.
+    def used_gpus(self, committed: Mapping[str, int]) -> int:
+        """Devices this stamp cannot offer, taking each deployment at its larger view.
 
-        Fabric's own consumption is taken as ``max(committed, reported)`` rather than as
-        either one alone, because each is authoritative in a different direction and both
-        directions really happen:
+        Two views of what Fabric is using exist and each is authoritative in a different
+        direction, so neither one alone is safe:
 
         *Rows ahead of pods.* A placement is committed the instant it is written and the
         stamp reports the consequence a heartbeat later. Trusting the report would let every
         placement in a burst see the same free capacity.
 
-        *Pods ahead of rows.* A release change under ADR 0012 runs the candidate and the
-        active workload side by side, so a deployment really holds twice its replicas for the
-        duration; and a deleted deployment's placements go ``terminating`` before its pods
-        finish. Trusting the rows would hand out capacity that is physically occupied.
+        *Pods ahead of rows.* A release change under ADR 0012 runs the candidate beside the
+        active workload, so a deployment really holds twice its replicas for the duration;
+        and a deleted deployment's placements go ``terminating`` before its pods finish.
+        Trusting the rows would hand out capacity that is physically occupied.
 
-        The maximum is correct in both, and it is not a sum: adding them would double-count
-        the ordinary case where the rows and the pods describe the same hosts.
+        The maximum is taken **per deployment**, not over the stamp's totals. Over totals the
+        two divergences cancel: a stamp where one deployment's pods lead its rows and
+        another's rows lead its pods sums to exactly what a stamp with no divergence sums to,
+        and admitting against that overcommits by the size of the surge.
 
         Foreign claims are added separately because they are disjoint from Fabric's by
-        construction — the stamp reports its own subset so this can subtract each exactly
-        once.
+        construction — the stamp reports its own subset so each is subtracted exactly once.
         """
-        return max(committed_gpus, self.fabric_requested_gpus) + self.foreign_requested_gpus
+        deployments = set(committed) | set(self.fabric_claims)
+        fabric = sum(
+            max(committed.get(deployment, 0), self.fabric_claims.get(deployment, 0))
+            for deployment in deployments
+        )
+        return fabric + self.untracked_fabric_gpus + self.foreign_requested_gpus
 
-    def free_gpus(self, committed_gpus: int) -> int:
-        return self.allocatable_gpus - self.used_gpus(committed_gpus)
+    def free_gpus(self, committed: Mapping[str, int]) -> int:
+        return self.allocatable_gpus - self.used_gpus(committed)
 
     @property
     def describes_its_hardware(self) -> bool:
@@ -292,6 +306,20 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
     allocatable = _positive_int(capabilities.get("allocatable_gpus"))
     requested = _positive_int(capabilities.get("requested_gpus"))
     fabric_requested = _positive_int(capabilities.get("fabric_requested_gpus"))
+
+    claims: dict[str, int] = {}
+    reported_claims = capabilities.get("fabric_gpu_claims")
+    if isinstance(reported_claims, list):
+        for entry in reported_claims:
+            if not isinstance(entry, dict):
+                continue
+            deployment = str(entry.get("deployment_id") or "").strip().lower()
+            gpus = _positive_int(entry.get("gpus"))
+            if deployment and gpus:
+                claims[deployment] = claims.get(deployment, 0) + gpus
+    # Whatever the total accounts for but the breakdown does not: a truncated list, or a host
+    # whose deployment label is missing. Something is holding them, so they are charged.
+    untracked = max(0, fabric_requested - sum(claims.values()))
 
     entries = capabilities.get("gpus")
     if not isinstance(entries, list):
@@ -335,6 +363,8 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
         # report whose Fabric subset exceeds its total cannot inflate free capacity.
         foreign_requested_gpus=max(0, requested - fabric_requested),
         fabric_requested_gpus=fabric_requested,
+        fabric_claims=claims,
+        untracked_fabric_gpus=untracked,
         claims_measured=bool(capabilities.get("gpu_claims_measured")),
         max_gpus_per_node=_positive_int(capabilities.get("max_gpus_per_node")),
         weakest_memory_bytes=weakest_memory,
@@ -365,7 +395,7 @@ def check_fit(
     demand: Demand,
     capacity: StampCapacity,
     *,
-    committed_gpus: int,
+    committed_gpus: Mapping[str, int],
     require_live: bool,
     now: dt.datetime | None = None,
 ) -> Unfit | None:
@@ -440,7 +470,7 @@ def check_fit(
                 "free_gpus": free,
                 "allocatable_gpus": capacity.allocatable_gpus,
                 "used_gpus": capacity.used_gpus(committed_gpus),
-                "committed_gpus": committed_gpus,
+                "committed_gpus": sum(committed_gpus.values()),
                 "fabric_requested_gpus": capacity.fabric_requested_gpus,
                 "foreign_requested_gpus": capacity.foreign_requested_gpus,
             },
@@ -466,26 +496,34 @@ def class_was_verified(demand: Demand, capacity: StampCapacity) -> bool:
 # --- commitment -----------------------------------------------------------
 
 
-async def lock_stamp(session: AsyncSession, *, stamp_id: uuid.UUID) -> None:
-    """Serialize capacity decisions about one stamp against other placements.
+async def lock_stamp(session: AsyncSession, *, stamp_id: uuid.UUID) -> InferenceStamp | None:
+    """Serialize capacity decisions about one stamp, and return it as it is under the lock.
 
     ``committed_gpus`` reads placements and the caller writes one afterwards. Under READ
     COMMITTED two requests naming the same stamp cannot see each other's uncommitted row, so
     both would pass a check only one of them should, and both would commit. Taking the
     stamp's own row first makes the second request wait for the first to finish.
 
-    The stamp row is the lock because it is the thing capacity belongs to; nothing else is
-    written here, so this cannot block a heartbeat's own read. Elevated because managed
-    capacity is owned by the system account and the lock has to be takeable by whichever
-    account is placing onto it. SQLite has no row locks and its dialect emits nothing, which
-    is correct there: the suite runs one connection at a time.
+    The row is re-read rather than merely locked, and ``populate_existing`` overrides the
+    identity map, because the capability report is on that row: locking while deciding from a
+    copy loaded beforehand would serialize half the arithmetic and leave the other half stale.
+
+    The stamp row is the lock because capacity belongs to it. A heartbeat writes the same row,
+    so one arriving mid-admission waits for the placement to commit — brief, and the
+    alternative is a decision made on capacity that changes underneath it. Elevated because
+    managed capacity is owned by the system account and the lock has to be takeable by
+    whichever account is placing onto it. SQLite has no row locks and its dialect emits
+    nothing, which is correct there: the suite runs one connection at a time.
     """
     async with elevated(session):
-        await session.execute(
-            select(InferenceStamp.id)
-            .where(InferenceStamp.id == stamp_id)
-            .with_for_update()
-        )
+        return (
+            await session.execute(
+                select(InferenceStamp)
+                .where(InferenceStamp.id == stamp_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
 
 
 async def committed_gpus(
@@ -493,29 +531,33 @@ async def committed_gpus(
     *,
     stamp_id: uuid.UUID,
     exclude_deployment_id: uuid.UUID | None = None,
-) -> int:
-    """GPUs this stamp has already been told to run, from the control plane's own records.
+) -> dict[str, int]:
+    """GPUs this stamp has been told to run, per deployment, from our own records.
 
-    Elevated, because a managed stamp serves several accounts and its true commitment is the
-    sum across all of them. Scoped to the caller it would report only that customer's share
-    and admit a stamp another customer has already filled. Read-only, and the elevation ends
-    before anything is written.
+    Per deployment rather than as a total because the caller compares each entry against what
+    that deployment is reported to be *running*; a sum cannot support that comparison.
+
+    Elevated, because a managed stamp serves several accounts and its true commitment spans
+    all of them. Scoped to the caller it would report only that customer's share and admit a
+    stamp another customer has already filled. Read-only, and the elevation ends before
+    anything is written.
     """
     conditions = [
         DeploymentPlacement.stamp_id == stamp_id,
         Deployment.deleted_at.is_(None),
-        # A terminating placement is on its way out; counting it would refuse the
-        # replacement of a deployment that is being replaced.
+        # A terminating placement is on its way out. Its GPUs are not forgotten: the stamp
+        # still reports the pods as running until they go, and used_gpus charges them.
         DeploymentPlacement.status != "terminating",
     ]
     if exclude_deployment_id is not None:
-        # The deployment being placed or resized is measured by its new demand, not by
-        # itself.
+        # The deployment being placed or resized is measured by its new demand, not by its
+        # current one — and not by its own running pods either, which is why its reported
+        # claim is dropped alongside its row.
         conditions.append(DeploymentPlacement.deployment_id != exclude_deployment_id)
 
     async with elevated(session):
         rows = await session.execute(
-            select(Deployment.desired_spec)
+            select(DeploymentPlacement.deployment_id, Deployment.desired_spec)
             .join(
                 DeploymentPlacement,
                 (DeploymentPlacement.deployment_id == Deployment.id)
@@ -523,13 +565,36 @@ async def committed_gpus(
             )
             .where(*conditions)
         )
-        specs = list(rows.scalars().all())
+        placed = rows.all()
 
-    total = 0
-    for spec in specs:
-        placed = demand_of(spec if isinstance(spec, dict) else {})
-        total += placed.total_gpus
-    return total
+    committed: dict[str, int] = {}
+    for deployment_id, spec in placed:
+        demand = demand_of(spec if isinstance(spec, dict) else {})
+        key = str(deployment_id).lower()
+        committed[key] = committed.get(key, 0) + demand.total_gpus
+    return committed
+
+
+def without_deployment(
+    capacity: StampCapacity, deployment_id: uuid.UUID
+) -> StampCapacity:
+    """Drop one deployment's reported claim, so it is not charged for its own pods.
+
+    ``committed_gpus`` already excludes the deployment being decided about, because its new
+    demand replaces its old one. Its *reported* claim has to be dropped for the same reason:
+    left in, a two-replica deployment holding two devices on a four-device stamp could not be
+    grown to four, because its own running pods would be charged and then its new demand
+    charged again on top.
+    """
+    key = str(deployment_id).lower()
+    if key not in capacity.fabric_claims:
+        return capacity
+    remaining = {
+        deployment: gpus
+        for deployment, gpus in capacity.fabric_claims.items()
+        if deployment != key
+    }
+    return replace(capacity, fabric_claims=remaining)
 
 
 async def candidate_stamps(

@@ -328,3 +328,57 @@ func TestAMeasuredClaimCountSaysSo(t *testing.T) {
 		t.Fatal("a measured claim count was reported as unmeasured")
 	}
 }
+
+func TestPerDeploymentClaimsReachTheControlPlane(t *testing.T) {
+	// The comparison the control plane makes is per deployment, so the breakdown has to survive
+	// the trip rather than being collapsed into the total on the way.
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	instance, _ := newAgent(t, server.URL)
+	capacity := measuredT4Stamp()
+	capacity.FabricRequestedGPUs = 3
+	capacity.RequestedGPUs = 3
+	capacity.FabricClaims = []hardware.DeploymentClaim{
+		{DeploymentID: deployA, GPUs: 2},
+		{DeploymentID: deployB, GPUs: 1},
+	}
+	instance.config.Capacity = &countingSource{capacity: capacity}
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	claims := stub.lastCapabilities.FabricGPUClaims
+	if len(claims) != 2 {
+		t.Fatalf("claims = %+v, want two entries", claims)
+	}
+	if claims[0].DeploymentID != deployA || claims[0].GPUs != 2 {
+		t.Fatalf("first claim = %+v", claims[0])
+	}
+	if claims[1].DeploymentID != deployB || claims[1].GPUs != 1 {
+		t.Fatalf("second claim = %+v", claims[1])
+	}
+}
+
+func TestClaimsAreNeverReportedAsNull(t *testing.T) {
+	// The control plane declares the field a list. A stamp that measured nothing reports an
+	// empty one rather than a null, which would be a contract violation rather than an idle
+	// cluster.
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	instance, _ := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if stub.lastCapabilities.FabricGPUClaims == nil {
+		t.Fatal("claims were reported as null")
+	}
+}

@@ -293,6 +293,9 @@ func (a *Agent) refreshCapacity(ctx context.Context) {
 // its cluster still reports what it was told.
 func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 	capabilities := a.config.Capabilities
+	if capabilities.FabricGPUClaims == nil {
+		capabilities.FabricGPUClaims = []controlplane.GPUClaim{}
+	}
 	if !a.measured.Measured {
 		if capabilities.GPUs == nil {
 			capabilities.GPUs = []controlplane.GPU{}
@@ -315,6 +318,14 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 	capabilities.RequestedGPUs = a.measured.RequestedGPUs
 	capabilities.FabricRequestedGPUs = a.measured.FabricRequestedGPUs
 	capabilities.GPUClaimsMeasured = a.measured.PodsMeasured
+
+	claims := make([]controlplane.GPUClaim, 0, len(a.measured.FabricClaims))
+	for _, claim := range a.measured.FabricClaims {
+		claims = append(claims, controlplane.GPUClaim{
+			DeploymentID: claim.DeploymentID, GPUs: claim.GPUs,
+		})
+	}
+	capabilities.FabricGPUClaims = claims
 	return capabilities
 }
 

@@ -420,6 +420,15 @@ class GpuCapability(BaseModel):
     compute_capability: str | None = Field(default=None, max_length=16)
 
 
+class FabricGpuClaim(BaseModel):
+    """Devices one deployment's model hosts are holding on a stamp."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deployment_id: str = Field(max_length=64)
+    gpus: int = Field(default=0, ge=0, le=1024)
+
+
 class StampCapabilities(BaseModel):
     """Bounded capability report.
 
@@ -439,6 +448,12 @@ class StampCapabilities(BaseModel):
     #: separately so placement can subtract foreign workloads without also subtracting its
     #: own placements, which it accounts for from its own records (ADR 0013).
     fabric_requested_gpus: int = Field(default=0, ge=0)
+    #: ``fabric_requested_gpus`` broken down by deployment. Placement compares each
+    #: deployment's running pods against what was committed *for that deployment*: a
+    #: stamp-wide total cannot support that comparison, because one deployment running ahead
+    #: of its rows and another lagging behind them are indistinguishable in a sum, and the two
+    #: errors cancel into an overcommitment.
+    fabric_gpu_claims: list[FabricGpuClaim] = Field(default_factory=list, max_length=256)
     #: Whether the stamp read pod claims at all. Zero claimed GPUs is otherwise
     #: indistinguishable from an idle cluster, and placement decides on the difference, so an
     #: admission made without claim data is recorded rather than assumed. Defaults false,

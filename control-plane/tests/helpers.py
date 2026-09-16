@@ -237,3 +237,43 @@ async def enable_managed_capacity(db_session: Any, account_id: str) -> None:
             .values(managed_capacity_enabled=True)
         )
         await db_session.commit()
+
+
+
+async def report_capabilities(
+    client: AsyncClient,
+    stamp_id: str,
+    agent_credential: str,
+    capabilities: dict[str, Any],
+) -> Response:
+    """Heartbeat a refreshed capability report, as a running agent does every poll."""
+    return await client.post(
+        f"/v1/stamps/{stamp_id}/heartbeat",
+        json={"capabilities": capabilities},
+        headers=bearer(agent_credential),
+    )
+
+
+def with_claims(
+    capabilities: dict[str, Any],
+    claims: dict[str, int],
+    *,
+    foreign_gpus: int = 0,
+    untracked_gpus: int = 0,
+) -> dict[str, Any]:
+    """A capability report where named deployments are holding devices.
+
+    This is what a stamp looks like once the operator has actually started hosts: claims are
+    reported per deployment so the control plane can compare each against what it committed
+    for that deployment (ADR 0013).
+    """
+    fabric = sum(claims.values()) + untracked_gpus
+    return {
+        **capabilities,
+        "fabric_gpu_claims": [
+            {"deployment_id": deployment, "gpus": gpus} for deployment, gpus in claims.items()
+        ],
+        "fabric_requested_gpus": fabric,
+        "requested_gpus": fabric + foreign_gpus,
+        "gpu_claims_measured": True,
+    }

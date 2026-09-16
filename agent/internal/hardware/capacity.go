@@ -18,6 +18,27 @@ const mibToBytes int64 = 1 << 20
 // records and would otherwise subtract them twice (ADR 0013).
 const FabricManagedByLabel = "fabric-operator"
 
+// DeploymentIDLabel names which deployment a model-host pod belongs to.
+//
+// Claims are reported per deployment rather than as one stamp-wide number because the
+// control plane compares what it has committed against what is running, and that comparison
+// is only meaningful per deployment: on a stamp where one deployment's pods lead its
+// placement rows and another's rows lead its pods, a single total looks identical to a stamp
+// where neither diverges, and the two errors cancel into an overcommitment.
+const DeploymentIDLabel = "fabric.khushwant.dev/deployment-id"
+
+// MaxReportedClaims bounds the per-deployment list, because the capability report is a
+// bounded document by design. A stamp with more deployments than this reports the largest
+// claims individually and the remainder in the total, which the control plane charges as
+// untracked — conservative rather than lost.
+const MaxReportedClaims = 256
+
+// DeploymentClaim is the devices one deployment's model hosts are holding.
+type DeploymentClaim struct {
+	DeploymentID string
+	GPUs         int
+}
+
 // GPUGroup is one class of device on a stamp, aggregated across the nodes carrying it.
 //
 // Aggregated rather than per node because the control plane decides placement, not
@@ -46,6 +67,10 @@ type Capacity struct {
 	RequestedGPUs int
 	// FabricRequestedGPUs is the subset claimed by model hosts this platform created.
 	FabricRequestedGPUs int
+	// FabricClaims breaks that subset down by deployment, largest first, so the control
+	// plane can compare each deployment's running pods against what it committed for that
+	// deployment rather than against a stamp-wide total.
+	FabricClaims []DeploymentClaim
 	// Measured reports that the nodes were read. False means nothing here is trustworthy
 	// and the caller should keep whatever it was configured with. It is always true when
 	// Measure returned no error.
@@ -142,14 +167,15 @@ type podList struct {
 // its capacity.
 func MeasurePodGPURequests(
 	ctx context.Context, client Getter, onNodes map[string]bool,
-) (total int, fabric int, err error) {
+) (PodClaims, error) {
 	path := "/api/v1/pods?fieldSelector=" +
 		"status.phase%21%3DSucceeded,status.phase%21%3DFailed"
 	var pods podList
 	if err := client.Get(ctx, path, &pods); err != nil {
-		return 0, 0, fmt.Errorf("list gpu pods: %w", err)
+		return PodClaims{}, fmt.Errorf("list gpu pods: %w", err)
 	}
 
+	claims := PodClaims{ByDeployment: map[string]int{}}
 	for _, item := range pods.Items {
 		if item.Spec.NodeName == "" || !onNodes[item.Spec.NodeName] {
 			continue
@@ -158,12 +184,44 @@ func MeasurePodGPURequests(
 		if count == 0 {
 			continue
 		}
-		total += count
-		if item.Metadata.Labels["app.kubernetes.io/managed-by"] == FabricManagedByLabel {
-			fabric += count
+		claims.Total += count
+		if item.Metadata.Labels["app.kubernetes.io/managed-by"] != FabricManagedByLabel {
+			continue
 		}
+		claims.Fabric += count
+		if deployment := item.Metadata.Labels[DeploymentIDLabel]; deployment != "" {
+			claims.ByDeployment[deployment] += count
+		}
+		// A Fabric pod with no deployment label still counts in Fabric's total, so it is
+		// charged as untracked rather than disappearing.
 	}
-	return total, fabric, nil
+	return claims, nil
+}
+
+// PodClaims is what scheduled pods have taken, and who took it.
+type PodClaims struct {
+	Total        int
+	Fabric       int
+	ByDeployment map[string]int
+}
+
+// largest returns the per-deployment claims ordered by size, capped so the report stays
+// bounded. Ordered by size then id, so the same cluster produces the same document.
+func (c PodClaims) largest(limit int) []DeploymentClaim {
+	claims := make([]DeploymentClaim, 0, len(c.ByDeployment))
+	for deployment, gpus := range c.ByDeployment {
+		claims = append(claims, DeploymentClaim{DeploymentID: deployment, GPUs: gpus})
+	}
+	sort.Slice(claims, func(i, j int) bool {
+		if claims[i].GPUs != claims[j].GPUs {
+			return claims[i].GPUs > claims[j].GPUs
+		}
+		return claims[i].DeploymentID < claims[j].DeploymentID
+	})
+	if len(claims) > limit {
+		claims = claims[:limit]
+	}
+	return claims
 }
 
 // Measure reads what this cluster can offer.
@@ -194,14 +252,15 @@ func Measure(ctx context.Context, client Getter, selector map[string]string) (Ca
 		onNodes[profile.Node] = true
 	}
 
-	total, fabric, podErr := MeasurePodGPURequests(ctx, client, onNodes)
+	claims, podErr := MeasurePodGPURequests(ctx, client, onNodes)
 	if podErr != nil {
 		capacity.PodClaimsError = podErr.Error()
 		return capacity, nil
 	}
 	capacity.PodsMeasured = true
-	capacity.RequestedGPUs = total
-	capacity.FabricRequestedGPUs = fabric
+	capacity.RequestedGPUs = claims.Total
+	capacity.FabricRequestedGPUs = claims.Fabric
+	capacity.FabricClaims = claims.largest(MaxReportedClaims)
 	return capacity, nil
 }
 

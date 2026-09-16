@@ -30,6 +30,8 @@ from tests.helpers import (
     enroll_stamp,
     onboard,
     place,
+    report_capabilities,
+    with_claims,
 )
 
 A100_MEMORY_BYTES = 40960 * 1024 * 1024
@@ -173,17 +175,15 @@ async def test_a_foreign_gpu_workload_reduces_free_capacity(client: AsyncClient)
 
 
 async def test_fabrics_own_hosts_are_not_counted_twice(client: AsyncClient) -> None:
-    """A running Fabric host is already in ``committed_gpus``.
+    """A running Fabric host is already in that deployment's committed row.
 
-    The stamp reports one GPU in use and says Fabric placed it. Subtracting the report *and*
-    the placement would make a two-GPU stamp look full with one GPU used.
+    The stamp reports one GPU held by a deployment the control plane also holds a placement
+    for. Subtracting the report *and* the row would make a two-GPU stamp look full at one
+    GPU used.
     """
     account_id, token = await onboard(client, "fit-double", "fit-double-account")
     enrolled = await enroll_stamp(
-        client,
-        account_id,
-        token,
-        capabilities=default_capabilities(gpus=2, requested_gpus=1, fabric_requested_gpus=1),
+        client, account_id, token, capabilities=default_capabilities(gpus=2)
     )
     stamp_id = enrolled["stamp"]["id"]
 
@@ -191,6 +191,14 @@ async def test_fabrics_own_hosts_are_not_counted_twice(client: AsyncClient) -> N
     assert (
         await place(client, account_id, token, running["id"], stamp_id=stamp_id)
     ).status_code == 201
+    # The operator has started it, so the stamp now reports the device as held.
+    beat = await report_capabilities(
+        client,
+        stamp_id,
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=2), {running["id"]: 1}),
+    )
+    assert beat.status_code == 200, beat.text
 
     second = await create_deployment(client, account_id, token, name="second", replicas=1)
     placed = await place(client, account_id, token, second["id"], stamp_id=stamp_id)
@@ -578,9 +586,11 @@ async def test_selection_skips_managed_capacity_without_the_entitlement(
     assert refused.status_code == 409
     error = _error(refused)
     assert error["code"] == "no_stamp_fits_deployment"
-    # No stamp id: managed capacity this account is not entitled to is not its business,
-    # and the reason is the part it can act on.
-    assert error["details"]["candidates"] == [{"reason": "managed_capacity_not_enabled"}]
+    # No id, no per-stamp entry and no count: a caller must not be able to size Fabric's fleet
+    # or watch each member's state from a refusal. The reason is the part it can act on.
+    assert error["details"]["candidates"] == []
+    assert error["details"]["candidates_considered"] == 0
+    assert error["details"]["managed_capacity_reasons"] == ["managed_capacity_not_enabled"]
     assert managed["stamp"]["id"] not in refused.text
 
 
@@ -600,7 +610,9 @@ async def test_selection_skips_managed_capacity_on_an_unsupported_orchestrator(
     refused = await place(client, account_id, token, deployment["id"])
 
     assert refused.status_code == 409
-    assert _error(refused)["details"]["candidates"] == [{"reason": "unsupported_orchestrator"}]
+    details = _error(refused)["details"]
+    assert details["candidates"] == []
+    assert details["managed_capacity_reasons"] == ["unsupported_orchestrator"]
     assert managed["stamp"]["id"] not in refused.text
 
 
@@ -765,12 +777,13 @@ async def test_the_capability_schema_accepts_the_fields_the_agent_now_measures(
 ) -> None:
     """The agent reports these on every heartbeat, and unknown fields are rejected."""
     account_id, token = await onboard(client, "caps", "caps-account")
+    rolling = "11111111-1111-4111-8111-111111111111"
     enrolled = await enroll_stamp(
         client,
         account_id,
         token,
-        capabilities=default_capabilities(
-            gpus=4, requested_gpus=3, fabric_requested_gpus=2, max_gpus_per_node=2
+        capabilities=with_claims(
+            default_capabilities(gpus=4, max_gpus_per_node=2), {rolling: 2}, foreign_gpus=1
         ),
     )
 
@@ -787,13 +800,18 @@ async def test_the_capability_schema_accepts_the_fields_the_agent_now_measures(
     # Three claimed, two of them ours: one belongs to somebody else.
     assert capacity.foreign_requested_gpus == 1
     assert capacity.fabric_requested_gpus == 2
+    assert capacity.fabric_claims == {rolling: 2}
+    assert capacity.untracked_fabric_gpus == 0
     assert capacity.claims_measured is True
     assert capacity.max_gpus_per_node == 2
-    # Two Fabric GPUs are running while one placement's worth is committed, which is what a
-    # rollout looks like. Use is the larger of the two views, not their sum: 2 + 1 foreign.
-    assert capacity.used_gpus(committed_gpus=1) == 3
-    assert capacity.free_gpus(committed_gpus=1) == 1
 
+    # One replica committed while two devices run, which is what a rollout looks like. Use is
+    # the larger of the two views for that deployment, plus the foreign claim.
+    assert capacity.used_gpus({rolling: 1}) == 3
+    assert capacity.free_gpus({rolling: 1}) == 1
+    # A deployment the stamp reports but the control plane has no row for — a teardown in
+    # progress — is charged at what is running.
+    assert capacity.used_gpus({}) == 3
 
 
 # --- what the stamp reports it is using ----------------------------------
@@ -810,22 +828,24 @@ async def test_gpus_running_beyond_what_is_committed_are_not_offered(
     the other side.
     """
     account_id, token = await onboard(client, "surge", "surge-account")
-    # Four devices, two of them held by Fabric hosts, and one placement's worth committed:
-    # a one-replica deployment mid-rollout.
     enrolled = await enroll_stamp(
-        client,
-        account_id,
-        token,
-        capabilities=default_capabilities(gpus=4, requested_gpus=2, fabric_requested_gpus=2),
+        client, account_id, token, capabilities=default_capabilities(gpus=4)
     )
     stamp_id = enrolled["stamp"]["id"]
 
     rolling = await create_deployment(client, account_id, token, name="rolling", replicas=1)
     placed = await place(client, account_id, token, rolling["id"], stamp_id=stamp_id)
     assert placed.status_code == 201, placed.text
+    # Mid-rollout: the candidate is up beside the active host, so one replica holds two.
+    await report_capabilities(
+        client,
+        stamp_id,
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=4), {rolling["id"]: 2}),
+    )
 
-    # Committed says 1, the stamp says 2 are running. Three more replicas would fit against
-    # the rows and do not fit against the hardware.
+    # Committed says 1, the stamp says 2 are running. Three more replicas fit against the rows
+    # and do not fit against the hardware.
     incoming = await create_deployment(client, account_id, token, name="incoming", replicas=3)
     refused = await place(client, account_id, token, incoming["id"], stamp_id=stamp_id)
 
@@ -834,21 +854,121 @@ async def test_gpus_running_beyond_what_is_committed_are_not_offered(
     assert details["reason"] == "insufficient_free_gpus"
     assert details["committed_gpus"] == 1
     assert details["fabric_requested_gpus"] == 2
-    # The larger of the two views, plus foreign use, and not their sum.
+    # The larger of the two views, and not their sum.
     assert details["used_gpus"] == 2
     assert details["free_gpus"] == 2
+
+
+async def test_divergences_in_opposite_directions_do_not_cancel(
+    client: AsyncClient,
+) -> None:
+    """Why the maximum is taken per deployment rather than over the stamp's totals.
+
+    With one deployment's pods ahead of its rows and another's rows ahead of its pods, the two
+    stamp-wide sums are equal to a stamp where neither diverges, and the surge disappears into
+    the comparison.
+    """
+    account_id, token = await onboard(client, "cancel", "cancel-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=8)
+    )
+    stamp_id = enrolled["stamp"]["id"]
+
+    rolling = await create_deployment(client, account_id, token, name="rolling", replicas=2)
+    assert (
+        await place(client, account_id, token, rolling["id"], stamp_id=stamp_id)
+    ).status_code == 201
+    # Mid-rollout: two replicas committed, four devices held.
+    await report_capabilities(
+        client,
+        stamp_id,
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=8), {rolling["id"]: 4}),
+    )
+
+    # Four remain: 8 - max(2 committed, 4 running).
+    second = await create_deployment(client, account_id, token, name="second", replicas=2)
+    assert (
+        await place(client, account_id, token, second["id"], stamp_id=stamp_id)
+    ).status_code == 201
+
+    # Now two remain. Over stamp-wide totals this would still read as four free, because the
+    # second deployment's committed row raises the committed sum to match the reported one.
+    third = await create_deployment(client, account_id, token, name="third", replicas=4)
+    refused = await place(client, account_id, token, third["id"], stamp_id=stamp_id)
+
+    assert refused.status_code == 409, refused.text
+    details = _error(refused)["details"]
+    assert details["used_gpus"] == 6
+    assert details["free_gpus"] == 2
+
+
+async def test_a_deployment_is_not_charged_for_its_own_running_pods(
+    client: AsyncClient,
+) -> None:
+    """Growing a deployment on the stamp already running it must not fail on itself.
+
+    Its committed row is excluded because its new demand replaces it; its reported claim has to
+    be excluded for the same reason. Left in, a two-replica deployment holding two of four
+    devices could never be grown to four, and re-placing it would start returning 409.
+    """
+    account_id, token = await onboard(client, "self-charge", "self-charge-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=4)
+    )
+    stamp_id = enrolled["stamp"]["id"]
+    deployment = await create_deployment(client, account_id, token, replicas=2)
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+    ).status_code == 201
+    await report_capabilities(
+        client,
+        stamp_id,
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=4), {deployment["id"]: 2}),
+    )
+
+    grown = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 4}},
+        headers=bearer(token),
+    )
+    assert grown.status_code == 200, grown.text
+
+    again = await place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+    assert again.status_code == 201, again.text
+
+
+async def test_fabric_gpus_attributed_to_no_deployment_are_still_charged(
+    client: AsyncClient,
+) -> None:
+    """A truncated claim list, or a host missing its deployment label, still holds devices."""
+    account_id, token = await onboard(client, "untracked", "untracked-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=4)
+    )
+    stamp_id = enrolled["stamp"]["id"]
+    await report_capabilities(
+        client,
+        stamp_id,
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=4), {}, untracked_gpus=3),
+    )
+
+    deployment = await create_deployment(client, account_id, token, replicas=2)
+    refused = await place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+
+    assert refused.status_code == 409, refused.text
+    assert _error(refused)["details"]["free_gpus"] == 1
 
 
 async def test_running_and_committed_gpus_are_not_added_together(
     client: AsyncClient,
 ) -> None:
-    """In the ordinary case the rows and the pods describe the same hosts."""
+    """In the ordinary case a deployment's row and its pods describe the same hosts."""
     account_id, token = await onboard(client, "no-double", "no-double-account")
     enrolled = await enroll_stamp(
-        client,
-        account_id,
-        token,
-        capabilities=default_capabilities(gpus=4, requested_gpus=2, fabric_requested_gpus=2),
+        client, account_id, token, capabilities=default_capabilities(gpus=4)
     )
     stamp_id = enrolled["stamp"]["id"]
 
@@ -856,6 +976,12 @@ async def test_running_and_committed_gpus_are_not_added_together(
     assert (
         await place(client, account_id, token, settled["id"], stamp_id=stamp_id)
     ).status_code == 201
+    await report_capabilities(
+        client,
+        stamp_id,
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=4), {settled["id"]: 2}),
+    )
 
     # Two committed and the same two running, so two devices remain. Summing would leave none.
     incoming = await create_deployment(client, account_id, token, name="incoming", replicas=2)
@@ -1128,3 +1254,65 @@ async def test_two_placements_racing_for_the_last_gpus_do_not_both_win(
         headers=bearer(token),
     )
     assert placements.status_code == 200
+
+
+
+async def test_an_unchecked_edit_does_not_claim_a_verification(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """"Not checked" and "checked and unverifiable" are different facts.
+
+    An edit asking for no more than before consults no stamp, so recording it as class-verified
+    would put a claim on the audit trail that nothing established.
+    """
+    account_id, token = await onboard(client, "unchecked", "unchecked-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=4)
+    )
+    deployment = await create_deployment(client, account_id, token, replicas=2)
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"])
+    ).status_code == 201
+
+    rolled = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-2"}, "replicas": 2}},
+        headers=bearer(token),
+    )
+    assert rolled.status_code == 200, rolled.text
+
+    event = (
+        await db_session.execute(
+            select(AuditEvent).where(
+                AuditEvent.account_id == uuid.UUID(account_id),
+                AuditEvent.action == "deployment.updated",
+            )
+        )
+    ).scalar_one()
+    assert event.event_metadata["capacity_checked"] is False
+    assert "gpu_class_verified" not in event.event_metadata
+
+
+async def test_an_admission_records_whether_claims_were_measured(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A refusal is the case that already failed closed; the admission is the one that needs it."""
+    account_id, token = await onboard(client, "audit-claims", "audit-claims-account")
+    blind = default_capabilities(gpus=4)
+    blind["gpu_claims_measured"] = False
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=blind)
+    deployment = await create_deployment(client, account_id, token, replicas=1)
+
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"])
+    ).status_code == 201
+
+    event = (
+        await db_session.execute(
+            select(AuditEvent).where(
+                AuditEvent.account_id == uuid.UUID(account_id),
+                AuditEvent.action == "placement.created",
+            )
+        )
+    ).scalar_one()
+    assert event.event_metadata["gpu_claims_measured"] is False

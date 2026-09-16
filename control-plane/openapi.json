@@ -636,6 +636,29 @@
         "title": "EntitlementResponse",
         "type": "object"
       },
+      "FabricGpuClaim": {
+        "additionalProperties": false,
+        "description": "Devices one deployment's model hosts are holding on a stamp.",
+        "properties": {
+          "deployment_id": {
+            "maxLength": 64,
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "gpus": {
+            "default": 0,
+            "maximum": 1024.0,
+            "minimum": 0.0,
+            "title": "Gpus",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deployment_id"
+        ],
+        "title": "FabricGpuClaim",
+        "type": "object"
+      },
       "GPUSampleRequest": {
         "additionalProperties": false,
         "description": "One reading of one device on a stamp.",
@@ -1431,6 +1454,14 @@
               }
             ],
             "title": "Driver Version"
+          },
+          "fabric_gpu_claims": {
+            "items": {
+              "$ref": "#/components/schemas/FabricGpuClaim"
+            },
+            "maxItems": 256,
+            "title": "Fabric Gpu Claims",
+            "type": "array"
           },
           "fabric_requested_gpus": {
             "default": 0,

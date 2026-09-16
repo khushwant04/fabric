@@ -159,12 +159,14 @@ async def _refuse_placements_that_no_longer_fit(
     account: Account,
     deployment: Deployment,
     spec: dict[str, Any],
-) -> bool:
+) -> bool | None:
     """Raise unless every stamp holding this deployment can still hold it under ``spec``.
 
     Checked before the spec is stored, so a refused update leaves the deployment exactly as
-    it was rather than depending on a rollback. Returns whether the GPU class was actually
-    judged, for the audit trail.
+    it was rather than depending on a rollback. Returns whether the GPU class was judged, or
+    ``None`` when no stamp was consulted — an edit asking for no more than before has not been
+    checked against hardware, and reporting it as verified would put a claim on the audit trail
+    that nothing established.
 
     Only an edit that asks for *more* is checked. Judging every edit against the stamp's
     current occupancy would mean that once a stamp is oversubscribed — a foreign workload
@@ -181,21 +183,29 @@ async def _refuse_placements_that_no_longer_fit(
         await _demand_for_spec(spec)
 
     if not demand.exceeds(previous):
-        return demand.gpu_class in placement.GPU_CLASSES
+        return None
 
     existing = (
         (
             await session.execute(
-                select(DeploymentPlacement).where(
+                select(DeploymentPlacement)
+                .where(
                     DeploymentPlacement.account_id == deployment.account_id,
                     DeploymentPlacement.deployment_id == deployment.id,
                     DeploymentPlacement.status != "terminating",
                 )
+                # Ordered so every caller takes these stamp locks in the same sequence. Two
+                # edits of two deployments sharing two stamps would otherwise acquire them in
+                # opposite orders and deadlock.
+                .order_by(DeploymentPlacement.stamp_id)
             )
         )
         .scalars()
         .all()
     )
+    if not existing:
+        return None
+
     verified = True
     for record in existing:
         async with elevated(session):
@@ -256,10 +266,12 @@ async def update_deployment(
         resource_id=str(deployment.id),
         metadata={
             "generation": deployment.generation,
-            # Recorded on this path too: re-admitting a deployment onto a stamp that describes
-            # none of its hardware skips the class requirement, and that has to be as visible
-            # here as it is at placement.
-            "gpu_class_verified": class_verified,
+            # Whether any stamp was consulted, and if so whether its hardware could answer the
+            # class requirement. Separate fields because "not checked" and "checked and
+            # unverifiable" are different facts, and recording an unchecked edit as verified
+            # would put a claim on the audit trail that nothing established.
+            "capacity_checked": class_verified is not None,
+            **({"gpu_class_verified": class_verified} if class_verified is not None else {}),
         },
     )
     await publish_outbox(
@@ -410,8 +422,15 @@ async def _refuse_if_stamp_cannot_fit(
     Takes the stamp's row first, so the capacity this decides on cannot change under it while
     another placement is being admitted.
     """
-    await placement.lock_stamp(session, stamp_id=stamp.id)
-    capacity = placement.read_capacity(stamp)
+    locked = await placement.lock_stamp(session, stamp_id=stamp.id)
+    if locked is None:
+        # Removed between authorization and the lock.
+        raise NotFound("stamp_not_found", "Inference stamp does not exist")
+    # Read from the locked row, not the copy loaded earlier: the capability report lives on it,
+    # so deciding from a pre-lock snapshot would serialize half the arithmetic and leave the
+    # other half stale. This deployment's own claim is dropped for the same reason its committed
+    # row is — its new demand replaces both.
+    capacity = placement.without_deployment(placement.read_capacity(locked), deployment_id)
     committed = await placement.committed_gpus(
         session, stamp_id=stamp.id, exclude_deployment_id=deployment_id
     )
@@ -480,7 +499,9 @@ async def _select_stamp(
             refusals.append(refusal_entry(stamp, placement.Unfit(refusal.code, {})))
             continue
 
-        capacity = placement.read_capacity(stamp)
+        capacity = placement.without_deployment(
+            placement.read_capacity(stamp), deployment.id
+        )
         committed = await placement.committed_gpus(
             session, stamp_id=stamp.id, exclude_deployment_id=deployment.id
         )
@@ -501,12 +522,18 @@ async def _select_stamp(
         )
 
     if not fitting:
+        own = [entry for entry in refusals if "stamp_id" in entry]
+        # Stamps the caller does not own are reported as the *set* of reasons managed capacity
+        # gave, with no ids and no count: a count would let a caller size Fabric's fleet, and a
+        # per-stamp entry would let it watch that fleet's state.
+        shared = sorted({entry["reason"] for entry in refusals if "stamp_id" not in entry})
         raise Conflict(
             "no_stamp_fits_deployment",
             "No stamp available to this account can host this deployment",
             demand=demand.as_details(),
-            candidates=refusals[:_MAX_REPORTED_CANDIDATES],
-            candidates_considered=len(candidates),
+            candidates=own[:_MAX_REPORTED_CANDIDATES],
+            candidates_considered=len(own),
+            managed_capacity_reasons=shared,
         )
 
     fitting.sort(key=lambda entry: entry[:3])
@@ -601,6 +628,10 @@ async def create_placement(
             # admitted rather than refused, and that has to be visible rather than silent.
             "stamp_selected": selected,
             "gpu_class_verified": placement.class_was_verified(demand, capacity),
+            # Whether the stamp had read its own pod claims. Without them free capacity comes
+            # from placement rows alone, so an admission decided that way is not the same fact
+            # as one decided against measured hardware.
+            "gpu_claims_measured": capacity.claims_measured,
             "demand": demand.as_details(),
         },
     )

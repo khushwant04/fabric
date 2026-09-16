@@ -68,6 +68,12 @@ type GPU struct {
 	ComputeCapability string `json:"compute_capability,omitempty"`
 }
 
+// GPUClaim is the devices one deployment's model hosts are holding on this stamp.
+type GPUClaim struct {
+	DeploymentID string `json:"deployment_id"`
+	GPUs         int    `json:"gpus"`
+}
+
 // Capabilities is the bounded capability report. The control plane rejects
 // unknown fields, so this struct must not drift from its schema.
 type Capabilities struct {
@@ -85,6 +91,11 @@ type Capabilities struct {
 	// MaxGPUsPerNode is the largest device count on any one node. A stamp-wide total
 	// cannot say whether a single replica asking for four GPUs can be scheduled at all.
 	MaxGPUsPerNode int `json:"max_gpus_per_node"`
+	// FabricGPUClaims breaks FabricRequestedGPUs down by deployment. The control plane
+	// compares each deployment's running pods against what it committed for that
+	// deployment; a stamp-wide total cannot support that comparison, because one
+	// deployment running ahead of its rows and another lagging behind them look the same.
+	FabricGPUClaims []GPUClaim `json:"fabric_gpu_claims"`
 	// GPUClaimsMeasured says whether RequestedGPUs was read from the cluster. Zero claimed
 	// devices is indistinguishable from an idle cluster otherwise, and the difference
 	// decides whether a placement is admitted, so the control plane is told which it has.
