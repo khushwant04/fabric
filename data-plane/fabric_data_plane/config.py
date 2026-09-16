@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     admin_host: str = "127.0.0.1"
     admin_port: int = 8081
 
+    #: Non-secret rollout acknowledgement listener. It exposes only the loaded route
+    #: revision and per-backend active-request counts, on a dedicated ClusterIP restricted
+    #: to the operator by NetworkPolicy. It never exposes usage drain or key state.
+    router_status_host: str = "0.0.0.0"  # noqa: S104 - isolated container listener
+    router_status_port: int = 8082
+
     #: Issuer claim Fabric-signed tokens must carry.
     jwt_issuer: str = "https://control.fabric.local"
 

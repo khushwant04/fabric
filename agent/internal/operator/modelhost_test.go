@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/kube"
 )
@@ -22,9 +24,11 @@ type hostServer struct {
 	deploys       map[string]*deployment
 	services      map[string]*service
 	deleted       []string
+	patched       []string
 	readyAfter    int
 	readyReplicas int
 	gets          int
+	failStatus    int
 	// endpoints maps a host name to the pod endpoints its headless Service selects,
 	// stood in for the EndpointSlices the operator reads.
 	endpoints map[string][]endpointAddress
@@ -90,6 +94,10 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 			return
 		}
 		if r.Method == http.MethodPatch {
+			if state.failStatus != 0 {
+				writeJSON(w, state.failStatus, map[string]string{"reason": "InternalError"})
+				return
+			}
 			var patch struct {
 				Status Status `json:"status"`
 			}
@@ -149,6 +157,28 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 			if !ok {
 				writeJSON(w, 404, map[string]string{"reason": "NotFound"})
 				return
+			}
+			state.patched = append(state.patched, name)
+			// Apply the merge patch to the stored object so a later observe reads the new
+			// release annotation, as the real API server would. Only the fields the
+			// operator patches (spec, metadata labels/annotations) are merged.
+			var patch struct {
+				Spec     map[string]any `json:"spec"`
+				Metadata struct {
+					Labels      map[string]string `json:"labels"`
+					Annotations map[string]string `json:"annotations"`
+				} `json:"metadata"`
+			}
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &patch)
+			if patch.Spec != nil {
+				existing.Spec = patch.Spec
+			}
+			if patch.Metadata.Labels != nil {
+				existing.Metadata.Labels = patch.Metadata.Labels
+			}
+			if patch.Metadata.Annotations != nil {
+				existing.Metadata.Annotations = patch.Metadata.Annotations
 			}
 			writeJSON(w, 200, existing)
 		case http.MethodDelete:
@@ -284,7 +314,7 @@ func TestADeclaredDeploymentGetsAModelHost(t *testing.T) {
 	encoded, _ := json.Marshal(host.Spec)
 	body := string(encoded)
 	for _, expected := range []string{
-		"--served-model-name=launch-model", "--max-model-len=2048",
+		"--served-model-name=release-1", "--model=release-1", "--max-model-len=2048",
 		"--gpu-memory-utilization=0.80", "--enforce-eager", "--dtype=bfloat16",
 		"nvidia.com/gpu",
 	} {
@@ -292,7 +322,8 @@ func TestADeclaredDeploymentGetsAModelHost(t *testing.T) {
 			t.Fatalf("host spec is missing %q", expected)
 		}
 	}
-	// Two replicas would both want the GPU and the new one would never schedule.
+	// Recreate is scoped to one exact release workload; release changes use a separate
+	// candidate workload and do not patch this serving template.
 	if !strings.Contains(body, `"type":"Recreate"`) {
 		t.Fatal("rolling updates would deadlock on the GPU")
 	}
@@ -333,12 +364,11 @@ func TestHostReadinessIsReportedSeparatelyFromConfiguration(t *testing.T) {
 	for _, c := range status.Conditions {
 		byType[c.Type] = c
 	}
-	if byType[ConditionApplied].Status != "True" {
-		t.Fatal("configuration was applied, so Applied should be true")
+	if byType[ConditionApplied].Status != "False" {
+		t.Fatal("a starting first release must not be reported applied")
 	}
-	if byType[ConditionHostReady].Status != "False" ||
-		byType[ConditionHostReady].Reason != "ModelHostStarting" {
-		t.Fatalf("host readiness is overstated: %+v", byType[ConditionHostReady])
+	if byType[ConditionAvailable].Status != "False" {
+		t.Fatalf("availability is overstated: %+v", byType[ConditionAvailable])
 	}
 	if status.Phase != "pending" {
 		t.Fatalf("phase = %q while the host cannot answer", status.Phase)
@@ -357,13 +387,18 @@ func TestHostBecomingReadyIsReported(t *testing.T) {
 	if result.HostsReady != 1 {
 		t.Fatalf("readiness was not observed: %+v", result)
 	}
+	// Readiness is observed after the first decision; the second pass promotes the
+	// durable rollout phase to Serving.
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
 
 	byType := map[string]Condition{}
 	for _, c := range state.resources["alpha"].Status.Conditions {
 		byType[c.Type] = c
 	}
-	if byType[ConditionHostReady].Reason != "ModelHostServing" {
-		t.Fatalf("unexpected reason: %+v", byType[ConditionHostReady])
+	if byType[ConditionAvailable].Reason != "ActiveReleaseServing" {
+		t.Fatalf("unexpected reason: %+v", byType[ConditionAvailable])
 	}
 	if state.resources["alpha"].Status.Phase != "ready" {
 		t.Fatal("phase should be ready once the host answers")
@@ -396,31 +431,51 @@ func TestAPartiallyReadyFleetStaysPending(t *testing.T) {
 		t.Fatalf("unavailable replicas = %v, want 2", status.UnavailableReplicas)
 	}
 	for _, condition := range status.Conditions {
-		if condition.Type == ConditionHostReady && condition.Status != "False" {
-			t.Fatalf("partial fleet reported ready: %+v", condition)
+		if condition.Type == ConditionApplied && condition.Status != "False" {
+			t.Fatalf("partial fleet reported applied: %+v", condition)
 		}
 	}
 }
 
-func TestAWithdrawnDeploymentsHostIsRemoved(t *testing.T) {
-	// A GPU-holding workload left behind would block the next placement, and an
-	// operator that restarted would have forgotten it existed.
+func TestAWithdrawnDeploymentWaitsForLoadedRouteAndActiveRequestsBeforeHostRemoval(t *testing.T) {
 	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
-	subject := hostReconciler(client, testHost())
+	inFlight := 1
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		revision := ""
+		if state.configMap != nil {
+			revision = configRevision(state.configMap.Data["deployments.json"])
+		}
+		writeJSON(w, 200, map[string]any{
+			"revision": revision,
+			"backends": []map[string]any{{
+				"deployment_id": "dep-a", "backend_id": "old", "in_flight": inFlight,
+			}},
+		})
+	}))
+	defer router.Close()
+	subject := New(client, Options{
+		Namespace: namespace, Log: discardLogger(), ModelHost: testHost(),
+		RouterStatusURL: router.URL, RouterHTTP: router.Client(), Rollout: DefaultRollout(),
+	})
 
 	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 	delete(state.resources, "alpha")
-
 	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
-		t.Fatalf("second pass: %v", err)
+		t.Fatalf("withdraw route: %v", err)
 	}
-	if len(state.deploys) != 0 {
-		t.Fatalf("the host outlived its deployment: %v", state.deploys)
+	if len(state.deploys) == 0 {
+		t.Fatal("host was deleted while a withdrawn request was still in flight")
 	}
-	if len(state.services) != 0 {
-		t.Fatalf("the Service outlived its deployment: %v", state.services)
+
+	inFlight = 0
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("acknowledge withdrawal drain: %v", err)
+	}
+	if len(state.deploys) != 0 || len(state.services) != 0 {
+		t.Fatalf("drained withdrawn resources survived: deploy=%v service=%v",
+			state.deploys, state.services)
 	}
 }
 
@@ -742,6 +797,16 @@ func TestBackendsFallBackToTheServiceAddressWithoutEndpoints(t *testing.T) {
 	}
 }
 
+func TestRolloutNeverFallsBackToDestructiveRecreate(t *testing.T) {
+	item := declared("r2")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if !decision.EnsureCandidate || decision.ActiveRelease != "r1" ||
+		decision.CandidateRelease != "r2" {
+		t.Fatalf("release change did not preserve active while preparing candidate: %+v", decision)
+	}
+}
+
 func TestOnlyAnExplicitRequestSelectsTheFabricKernel(t *testing.T) {
 	// The control plane has accepted a kernel choice per deployment since the beginning
 	// and nothing acted on it, so a deployment could ask for the Fabric kernel and be
@@ -765,5 +830,197 @@ func TestOnlyAnExplicitRequestSelectsTheFabricKernel(t *testing.T) {
 		if got != expected {
 			t.Fatalf("mode %q: substitution enabled = %v, want %v", mode, got, expected)
 		}
+	}
+}
+
+func TestCandidateRolloutPublishesThenAcknowledgesDrainBeforeDeletingActive(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.UpstreamModel = "r1"
+	state, client := newHostServer(t, item)
+	stable := hostName(item)
+	candidate := hostNameForRelease(item, "r2")
+	state.readyAfter = 1
+	state.endpoints[stable] = []endpointAddress{{Address: "10.0.0.1", Ready: true, PodUID: "old"}}
+
+	routerRevision := ""
+	oldInFlight := 1
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, 200, map[string]any{
+			"revision": "global",
+			"backends": []map[string]any{{
+				"deployment_id": "dep-a", "backend_id": "old",
+				"route_revision": routerRevision, "workload": stable, "in_flight": oldInFlight,
+			}},
+		})
+	}))
+	defer router.Close()
+	subject := New(client, Options{
+		Namespace: namespace, Log: discardLogger(), ModelHost: testHost(),
+		RouterStatusURL: router.URL, RouterHTTP: router.Client(), Rollout: DefaultRollout(),
+	})
+
+	// Initial release becomes serving over two observations.
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("initial create: %v", err)
+	}
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("initial promotion: %v", err)
+	}
+
+	// A release change creates a separate candidate and leaves the stable workload and
+	// route untouched while candidate readiness is absent.
+	state.resources["alpha"].Spec.UpstreamModel = "r2"
+	state.resources["alpha"].Spec.KernelMode = "fabric"
+	state.resources["alpha"].Metadata.Generation++
+	state.patched = nil
+	state.readyAfter = 0
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("prepare candidate: %v", err)
+	}
+	if state.deploys[stable] == nil || state.deploys[candidate] == nil {
+		t.Fatalf("active/candidate did not coexist: %v", state.deploys)
+	}
+	for _, patched := range state.patched {
+		if patched == stable {
+			t.Fatal("active workload was patched from new desired template while carrying traffic")
+		}
+	}
+	pre := decodeConfig(t, state.configMap)[0]
+	if len(pre.Backends) != 1 || pre.Backends[0].ID != "old" {
+		t.Fatalf("candidate received traffic before readiness: %+v", pre.Backends)
+	}
+
+	// Full candidate readiness produces an explicit old=0/new=1 cutover revision.
+	state.deploys[candidate].Status = &struct {
+		ReadyReplicas int `json:"readyReplicas,omitempty"`
+		Replicas      int `json:"replicas,omitempty"`
+	}{ReadyReplicas: 1, Replicas: 1}
+	state.endpoints[candidate] = []endpointAddress{{Address: "10.0.0.2", Ready: true, PodUID: "new"}}
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("publish cutover: %v", err)
+	}
+	cutover := decodeConfig(t, state.configMap)[0]
+	weights := map[string]float64{}
+	for _, backend := range cutover.Backends {
+		if backend.Weight != nil {
+			weights[backend.ID] = *backend.Weight
+		}
+	}
+	if weights["old"] != 0 || weights["new"] != 1 || cutover.Strategy != "weighted" {
+		t.Fatalf("cutover = strategy %q weights %v", cutover.Strategy, weights)
+	}
+	rollout := state.resources["alpha"].Status.Rollout
+	if rollout == nil || rollout.Phase != rolloutPhaseDraining || rollout.CutoverRevision == "" {
+		t.Fatalf("drain checkpoint not persisted: %+v", rollout)
+	}
+
+	// A restarted operator reconstructs the rollout from CR status and deterministic
+	// workload names instead of restarting the shift or forgetting the active release.
+	subject = New(client, Options{
+		Namespace: namespace, Log: discardLogger(), ModelHost: testHost(),
+		RouterStatusURL: router.URL, RouterHTTP: router.Client(), Rollout: DefaultRollout(),
+	})
+
+	// Even after the revision is loaded, one active stream keeps the old workload alive.
+	routerRevision = rollout.CutoverRevision
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("wait for stream drain: %v", err)
+	}
+	if state.deploys[stable] == nil {
+		t.Fatal("active workload deleted while an old request was in flight")
+	}
+
+	// Only a matching revision plus zero old in-flight requests allows candidate-only
+	// publication. If the durable status checkpoint fails, the old workload is retained
+	// even though the safe route document was already published.
+	oldInFlight = 0
+	state.failStatus = http.StatusInternalServerError
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("publish candidate-only with status failure: %v", err)
+	}
+	if state.deploys[stable] == nil {
+		t.Fatal("active workload deleted before promotion status was durable")
+	}
+	state.failStatus = 0
+	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("complete rollout: %v", err)
+	}
+	if state.deploys[stable] != nil || state.deploys[candidate] == nil {
+		t.Fatalf("cleanup did not retain only candidate: %v", state.deploys)
+	}
+	final := decodeConfig(t, state.configMap)[0]
+	if len(final.Backends) != 1 || final.Backends[0].ID != "new" || final.Strategy == "weighted" {
+		t.Fatalf("final route = strategy %q backends %+v", final.Strategy, final.Backends)
+	}
+}
+
+func TestReleaseWeightIsNormalizedAcrossDifferentEndpointCounts(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	active := hostName(item)
+	candidate := hostNameForRelease(item, "r2")
+	state, client := newHostServer(t, item)
+	state.endpoints[active] = []endpointAddress{
+		{Address: "10.0.0.1", Ready: true, PodUID: "old-a"},
+		{Address: "10.0.0.2", Ready: true, PodUID: "old-b"},
+	}
+	state.endpoints[candidate] = []endpointAddress{
+		{Address: "10.0.1.1", Ready: true, PodUID: "new-a"},
+	}
+	subject := hostReconciler(client, testHost())
+	pool, strategy := subject.rolloutBackends(context.Background(), item, RolloutDecision{
+		ForceWeighted: true,
+		Weighted: []ReleaseWeight{
+			{Release: "r1", Workload: active, Weight: 0.6},
+			{Release: "r2", Workload: candidate, Weight: 0.4},
+		},
+	})
+	if strategy != "weighted" {
+		t.Fatalf("strategy = %q", strategy)
+	}
+	totals := map[string]float64{"old": 0, "new": 0}
+	for _, backend := range pool {
+		if backend.Weight == nil {
+			t.Fatalf("backend has no explicit rollout weight: %+v", backend)
+		}
+		if strings.HasPrefix(backend.ID, "old-") {
+			totals["old"] += *backend.Weight
+		} else {
+			totals["new"] += *backend.Weight
+		}
+	}
+	if math.Abs(totals["old"]-0.6) > 1e-9 || math.Abs(totals["new"]-0.4) > 1e-9 {
+		t.Fatalf("replica count multiplied release share: %v", totals)
+	}
+}
+
+func TestCandidateSelectorCannotCollideWithLegacyStableWorkload(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	subject := New(nil, Options{Namespace: namespace, ModelHost: testHost(), Log: discardLogger()})
+	stable := subject.desiredHostNamed(itemForRelease(item, "r1"), hostName(item))
+	candidateName := hostNameForRelease(item, "r2")
+	candidate := subject.desiredHostNamed(itemForRelease(item, "r2"), candidateName)
+
+	stableSelector := stable.Spec["selector"].(map[string]any)["matchLabels"].(map[string]string)
+	candidateSelector := candidate.Spec["selector"].(map[string]any)["matchLabels"].(map[string]string)
+	if stableSelector["fabric.khushwant.dev/deployment-id"] != "dep-a" ||
+		stableSelector["app.kubernetes.io/name"] != "fabric-model-host" {
+		t.Fatalf("legacy stable selector changed: %v", stableSelector)
+	}
+	if candidateSelector["fabric.khushwant.dev/host"] != candidateName ||
+		candidateSelector["app.kubernetes.io/name"] != "fabric-model-host-release" {
+		t.Fatalf("candidate selector is not exact and distinct: %v", candidateSelector)
+	}
+	if stableSelector["app.kubernetes.io/name"] == candidateSelector["app.kubernetes.io/name"] {
+		t.Fatal("legacy stable selector can select candidate pods")
+	}
+	stableTemplate := stable.Spec["template"].(map[string]any)
+	candidateTemplate := candidate.Spec["template"].(map[string]any)
+	stableArgs := stableTemplate["spec"].(map[string]any)["containers"].([]map[string]any)[0]["args"]
+	candidateArgs := candidateTemplate["spec"].(map[string]any)["containers"].([]map[string]any)[0]["args"]
+	if fmt.Sprint(stableArgs) == fmt.Sprint(candidateArgs) ||
+		!strings.Contains(fmt.Sprint(candidateArgs), "--model=r2") ||
+		!strings.Contains(fmt.Sprint(candidateArgs), "--served-model-name=r2") {
+		t.Fatalf("candidate does not load/serve its declared release: stable=%v candidate=%v",
+			stableArgs, candidateArgs)
 	}
 }

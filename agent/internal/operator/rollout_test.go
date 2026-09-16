@@ -1,6 +1,9 @@
 package operator
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -11,166 +14,255 @@ func declared(release string) ModelDeployment {
 	return item
 }
 
-func TestAFirstRolloutJustProceeds(t *testing.T) {
-	decision := decideRollout(DefaultRollout(), declared("r1"), rolloutState{}, 0, time.Now())
-
-	if decision.Release != "r1" || decision.RolledBack || decision.Deferred {
-		t.Fatalf("unexpected decision: %+v", decision)
-	}
-	if decision.Reason != "InitialRollout" {
-		t.Fatalf("reason = %q", decision.Reason)
+func servingStatus(release, workload string, generation int64) *RolloutStatus {
+	return &RolloutStatus{
+		Phase: rolloutPhaseServing, TargetGeneration: generation,
+		ActiveRelease: release, ActiveWorkload: workload,
 	}
 }
 
-func TestAServingReleaseIsLeftAlone(t *testing.T) {
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-
-	decision := decideRollout(DefaultRollout(), declared("r1"), state, 0, time.Now())
-
-	if decision.Reason != "Serving" {
-		t.Fatalf("a healthy host was disturbed: %+v", decision)
+func TestInitialReleaseUsesStableWorkload(t *testing.T) {
+	item := declared("r1")
+	decision := decideRollout(DefaultRollout(), item, rolloutState{}, 0, time.Now())
+	if decision.Phase != rolloutPhasePreparing || decision.ActiveWorkload != hostName(item) ||
+		!decision.EnsureActive || decision.EnsureCandidate {
+		t.Fatalf("initial decision = %+v", decision)
 	}
 }
 
-func TestAStartingReleaseIsGivenTime(t *testing.T) {
-	// Weight loading takes minutes, so a host that is not ready yet is not failing.
-	now := time.Now()
+func TestServingReleaseIsLeftAlone(t *testing.T) {
+	item := declared("r1")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhaseServing || decision.ActiveRelease != "r1" {
+		t.Fatalf("serving decision = %+v", decision)
+	}
+}
+
+func TestReleaseChangePreparesCandidateWithoutMutatingActive(t *testing.T) {
+	item := declared("r2")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhasePreparing || decision.ActiveRelease != "r1" ||
+		decision.ActiveWorkload != hostName(item) || decision.CandidateRelease != "r2" ||
+		decision.CandidateWorkload == hostName(item) || !decision.EnsureCandidate {
+		t.Fatalf("candidate decision = %+v", decision)
+	}
+	if len(decision.Weighted) != 1 || decision.Weighted[0].Release != "r1" ||
+		decision.Weighted[0].Weight != 1 {
+		t.Fatalf("active route changed during preparation: %+v", decision.Weighted)
+	}
+}
+
+func TestPartialCandidateReadinessKeepsAllTrafficOnActive(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	state := rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false,
-		StartedAt: now.Add(-2 * time.Minute),
+		Status: status, CandidateExists: true,
+		CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 2},
+		CandidateConcrete:  true,
 	}
-
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 0, now)
-
-	if decision.RolledBack {
-		t.Fatal("rolled back a release that was still within its deadline")
-	}
-	if decision.Reason != "Progressing" {
-		t.Fatalf("reason = %q", decision.Reason)
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhasePreparing || len(decision.Weighted) != 1 ||
+		decision.Weighted[0].Release != "r1" {
+		t.Fatalf("partial candidate received traffic: %+v", decision)
 	}
 }
 
-func TestAStalledReleaseIsRolledBack(t *testing.T) {
-	now := time.Now()
-	policy := DefaultRollout()
+func TestFullyReadyConcreteCandidateCutsOverWithExplicitZero(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	state := rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Minute),
+		Status: status, CandidateExists: true,
+		CandidateReadiness: modelHostReadiness{Ready: 2, Desired: 2},
+		CandidateConcrete:  true,
 	}
-
-	decision := decideRollout(policy, declared("r2"), state, 0, now)
-
-	if !decision.RolledBack || decision.Release != "r1" {
-		t.Fatalf("expected a rollback to r1: %+v", decision)
-	}
-	// Named for what happened: the release may be fine and the cluster short of
-	// capacity, and readiness alone cannot tell those apart.
-	if decision.Reason != "RolledBackAfterReadyTimeout" {
-		t.Fatalf("reason = %q", decision.Reason)
+	decision := decideRollout(DefaultRollout(), item, state, 0, time.Now())
+	if decision.Phase != rolloutPhaseDraining || !decision.ForceWeighted ||
+		len(decision.Weighted) != 2 || decision.Weighted[0].Weight != 0 ||
+		decision.Weighted[1].Weight != 1 {
+		t.Fatalf("cutover decision = %+v", decision)
 	}
 }
 
-func TestWithNoGoodReleaseThereIsNothingToRollBackTo(t *testing.T) {
-	// A first release that never becomes ready must keep trying: rolling back to
-	// nothing would delete the only deployment the stamp has.
-	now := time.Now()
-	policy := DefaultRollout()
+func TestServiceFallbackDoesNotPromoteCandidate(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	state := rolloutState{
-		Exists: true, Current: "r1", LastGood: "", Ready: false,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Hour),
+		Status:             status,
+		CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 1},
+		CandidateConcrete:  false,
 	}
-
-	decision := decideRollout(policy, declared("r1"), state, 0, now)
-
-	if decision.RolledBack {
-		t.Fatal("rolled back to a release that was never known good")
+	if got := decideRollout(DefaultRollout(), item, state, 0, time.Now()); got.Phase != rolloutPhasePreparing {
+		t.Fatalf("DNS fallback promoted candidate: %+v", got)
 	}
 }
 
-func TestRollbackCanBeDisabled(t *testing.T) {
-	now := time.Now()
+func TestDrainAcknowledgementPromotesAndDeletesOldActive(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "rev", DrainingBackendIDs: []string{"old"},
+	}
+	decision := decideRollout(DefaultRollout(), item,
+		rolloutState{
+			Status: status, DrainAcknowledged: true,
+			CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 1},
+		}, 0, time.Now())
+	if decision.Phase != rolloutPhaseServing || !decision.DeleteActive ||
+		decision.ActiveRelease != "r2" || decision.ActiveWorkload != status.CandidateWorkload {
+		t.Fatalf("promotion decision = %+v", decision)
+	}
+}
+
+func TestCandidateTimeoutKeepsActiveAndMarksGenerationFailed(t *testing.T) {
+	item := declared("r2")
 	policy := DefaultRollout()
-	policy.AutoRollback = false
-	state := rolloutState{
-		Exists: true, Current: "r2", LastGood: "r1", Ready: false,
-		StartedAt: now.Add(-policy.ReadyTimeout - time.Minute),
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		StartedAt: time.Now().Add(-policy.ReadyTimeout - time.Minute).UTC().Format(time.RFC3339),
 	}
-
-	if decideRollout(policy, declared("r2"), state, 0, now).RolledBack {
-		t.Fatal("rolled back with automatic rollback disabled")
-	}
-}
-
-func TestOnlyOneReleaseChangesAtATime(t *testing.T) {
-	// A bad release should cost one deployment, not every deployment on the stamp.
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-
-	decision := decideRollout(DefaultRollout(), declared("r2"), state, 1, time.Now())
-
-	if !decision.Deferred {
-		t.Fatalf("a second simultaneous rollout was allowed: %+v", decision)
-	}
-	// The running release stays configured while the change waits.
-	if decision.Release != "r1" {
-		t.Fatalf("deferring changed the release anyway: %+v", decision)
+	decision := decideRollout(policy, item, rolloutState{Status: status}, 0, time.Now())
+	if decision.Phase != rolloutPhaseFailed || !decision.DeleteCandidate ||
+		decision.ActiveRelease != "r1" || decision.FailedGeneration != item.Metadata.Generation {
+		t.Fatalf("timeout decision = %+v", decision)
 	}
 }
 
-func TestParallelismIsConfigurable(t *testing.T) {
-	policy := DefaultRollout()
-	policy.MaxParallel = 2
-	state := rolloutState{Exists: true, Current: "r1", LastGood: "r1", Ready: true}
-
-	if decideRollout(policy, declared("r2"), state, 1, time.Now()).Deferred {
-		t.Fatal("deferred below the configured parallelism")
+func TestPersistedRolloutConsumesParallelBudgetAfterRestart(t *testing.T) {
+	item := declared("r2")
+	state := rolloutState{Status: servingStatus("r1", hostName(item), 1)}
+	decision := decideRollout(DefaultRollout(), item, state, 1, time.Now())
+	if !decision.Deferred || decision.ActiveRelease != "r1" {
+		t.Fatalf("parallel rollout was not deferred: %+v", decision)
 	}
 }
 
-func TestOnlyAReadyReleaseBecomesTheFallback(t *testing.T) {
-	// Recording the declared release optimistically would let a broken one become the
-	// thing rolled back to, which is worse than having no fallback.
-	reconciler := New(nil, Options{Namespace: namespace, Log: discardLogger()})
-	now := time.Now()
+func TestRouterDrainRequiresMatchingRevisionAndZeroOldInflight(t *testing.T) {
+	state := `{"revision":"global","backends":[{"deployment_id":"dep-a","backend_id":"old","route_revision":"cutover","workload":"active","in_flight":1}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(state))
+	}))
+	defer server.Close()
+	reconciler := New(nil, Options{RouterStatusURL: server.URL, RouterHTTP: server.Client()})
 
-	unready := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2"},
-		rolloutState{Exists: true, Current: "r2", LastGood: "r1", Ready: false},
-		now,
-	)
-	if unready[annotationLastGood] != "r1" {
-		t.Fatalf("an unready release became the fallback: %v", unready)
+	drained, err := reconciler.routerDrained(context.Background(), "dep-a", "cutover", "active")
+	if err != nil || drained {
+		t.Fatalf("active old request reported drained: drained=%v err=%v", drained, err)
 	}
-
-	ready := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2"},
-		rolloutState{Exists: true, Current: "r2", LastGood: "r1", Ready: true},
-		now,
-	)
-	if ready[annotationLastGood] != "r2" {
-		t.Fatalf("a ready release did not become the fallback: %v", ready)
+	state = `{"revision":"global","backends":[{"deployment_id":"dep-a","backend_id":"old","route_revision":"other","workload":"active","in_flight":0}]}`
+	drained, err = reconciler.routerDrained(context.Background(), "dep-a", "cutover", "active")
+	if err != nil || drained {
+		t.Fatalf("stale revision reported drained: drained=%v err=%v", drained, err)
+	}
+	state = `{"revision":"global","backends":[{"deployment_id":"dep-a","backend_id":"old","route_revision":"cutover","workload":"active","in_flight":0}]}`
+	drained, err = reconciler.routerDrained(context.Background(), "dep-a", "cutover", "active")
+	if err != nil || !drained {
+		t.Fatalf("matching zero-inflight route did not drain: drained=%v err=%v", drained, err)
 	}
 }
 
-func TestTheRolloutClockResetsOnlyWhenTheReleaseChanges(t *testing.T) {
-	// Otherwise a release would get a fresh deadline on every pass and never time out.
-	reconciler := New(nil, Options{Namespace: namespace, Log: discardLogger()})
-	started := time.Now().Add(-5 * time.Minute)
-
-	unchanged := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r2"},
-		rolloutState{Exists: true, Current: "r2", StartedAt: started},
-		time.Now(),
-	)
-	if parseTime(unchanged[annotationRolloutTime]).Unix() != started.UTC().Unix() {
-		t.Fatalf("the deadline was reset for an unchanged release: %v", unchanged)
+func TestCandidateFailureAfterCutoverReversesWeightsBeforeDeletion(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "new-positive", DrainingBackendIDs: []string{"old"},
 	}
+	decision := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: status, DrainAcknowledged: true,
+		CandidateReadiness: modelHostReadiness{Ready: 0, Desired: 1},
+	}, 0, time.Now())
+	if !decision.RollbackDrain || decision.DeleteCandidate || decision.CutoverRevision != "" ||
+		len(decision.Weighted) != 2 || decision.Weighted[0].Weight != 1 ||
+		decision.Weighted[1].Weight != 0 {
+		t.Fatalf("rollback did not reverse route before cleanup: %+v", decision)
+	}
+}
 
-	changed := reconciler.rolloutAnnotations(
-		RolloutDecision{Release: "r3"},
-		rolloutState{Exists: true, Current: "r2", StartedAt: started},
-		time.Now(),
-	)
-	if parseTime(changed[annotationRolloutTime]).Unix() == started.UTC().Unix() {
-		t.Fatal("the deadline was not reset for a new release")
+func TestAcknowledgedReverseDrainMarksGenerationFailedAndDoesNotRetry(t *testing.T) {
+	item := declared("r2")
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: item.Metadata.Generation,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "rollback-route", DrainingBackendIDs: []string{"new"},
+		Rollback: true,
+	}
+	decision := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: status, DrainAcknowledged: true,
+	}, 0, time.Now())
+	if decision.Phase != rolloutPhaseFailed || decision.FailedGeneration != item.Metadata.Generation ||
+		!decision.DeleteCandidate || decision.ActiveRelease != "r1" {
+		t.Fatalf("acknowledged rollback = %+v", decision)
+	}
+	persisted := rolloutStatusFromDecision(item, decision, "active-only", nil)
+	next := decideRollout(DefaultRollout(), item, rolloutState{Status: persisted}, 0, time.Now())
+	if next.EnsureCandidate || next.CandidateRelease != "" || next.Phase != rolloutPhaseFailed {
+		t.Fatalf("failed generation retried immediately: %+v", next)
+	}
+}
+
+func TestRevertingDesiredReleaseCancelsCandidateInsteadOfDuplicatingActive(t *testing.T) {
+	item := declared("r1")
+	status := &RolloutStatus{
+		Phase: rolloutPhasePreparing, TargetGeneration: item.Metadata.Generation - 1,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+	}
+	decision := decideRollout(DefaultRollout(), item, rolloutState{Status: status}, 0, time.Now())
+	if decision.Phase != rolloutPhaseServing || !decision.DeleteCandidate ||
+		decision.EnsureCandidate || decision.ActiveWorkload != hostName(item) {
+		t.Fatalf("revert created a redundant active-release candidate: %+v", decision)
+	}
+}
+
+func TestNewGenerationDuringDrainRollsBackOldCandidateThenPreparesNewRelease(t *testing.T) {
+	item := declared("r3")
+	item.Metadata.Generation = 3
+	status := &RolloutStatus{
+		Phase: rolloutPhaseDraining, TargetGeneration: 2,
+		ActiveRelease: "r1", ActiveWorkload: hostName(item),
+		CandidateRelease: "r2", CandidateWorkload: hostNameForRelease(item, "r2"),
+		CutoverRevision: "r2-positive", DrainingBackendIDs: []string{"old"},
+	}
+	first := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: status, DrainAcknowledged: true,
+		CandidateReadiness: modelHostReadiness{Ready: 1, Desired: 1},
+	}, 0, time.Now())
+	if !first.RollbackDrain || first.DeleteCandidate || first.CutoverRevision != "" {
+		t.Fatalf("new generation reused forward ack instead of reversing route: %+v", first)
+	}
+	reverse := rolloutStatusFromDecision(item, first, "r1-positive", []string{"r2-pod"})
+	second := decideRollout(DefaultRollout(), item, rolloutState{
+		Status: reverse, DrainAcknowledged: true,
+	}, 0, time.Now())
+	if second.Phase != rolloutPhaseFailed || second.FailedGeneration != 2 {
+		t.Fatalf("rollback failed the unattempted generation: %+v", second)
+	}
+	failed := rolloutStatusFromDecision(item, second, "r1-only", nil)
+	third := decideRollout(DefaultRollout(), item, rolloutState{Status: failed}, 0, time.Now())
+	if third.Phase != rolloutPhasePreparing || third.CandidateRelease != "r3" {
+		t.Fatalf("new declaration was suppressed after rollback: %+v", third)
 	}
 }

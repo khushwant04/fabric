@@ -2,12 +2,13 @@ package operator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/kube"
 )
@@ -201,8 +202,29 @@ const (
 
 // hostName derives the workload name from the deployment, so one host exists per
 // deployment and its identity is stable across reconciles.
+//
+// This is the *primary* (old) workload during a rollout and the only workload the rest
+// of the time. Its name does not carry the release, so the release the deployment settles
+// on keeps the stable name and a coexisting new workload (see hostNameForRelease) is the
+// one that is torn down.
 func hostName(item ModelDeployment) string {
 	return "fabric-host-" + strings.ToLower(item.Spec.DeploymentID)
+}
+
+// releaseSuffix is a short, stable, DNS-safe token derived from a release name, so two
+// releases of one deployment get distinct workload and Service names without exceeding
+// Kubernetes' 63-character limit or depending on the release string being label-safe.
+func releaseSuffix(release string) string {
+	sum := sha256.Sum256([]byte(release))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// hostNameForRelease names the *coexisting* new workload during a weighted rollout. It is
+// distinct from hostName so the old and new releases run as separate Deployments and
+// Services on their own GPUs, and it is derived from the release so the same release
+// always resolves to the same workload across reconciles (idempotent create/patch).
+func hostNameForRelease(item ModelDeployment, release string) string {
+	return hostName(item) + "-" + releaseSuffix(release)
 }
 
 type deployment struct {
@@ -261,15 +283,53 @@ func (m ModelHost) hostArgs() []string {
 	return append(args, m.ExtraArgs...)
 }
 
+// desiredHost builds the primary workload for a deployment, named by hostName.
 func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
+	return r.desiredHostNamed(item, hostName(item))
+}
+
+// desiredHostNamed builds a model-host Deployment under an explicit workload name.
+//
+// During a weighted rollout the new release runs as a *separate* workload beside the old
+// (ADR 0011), so the name is a parameter rather than always hostName. A per-workload
+// label (fabric.khushwant.dev/host) is added to the pod template and the selector so each
+// workload's headless Service selects only its own pods, and the two releases do not end
+// up in one another's backend pool.
+func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deployment {
 	host := r.options.ModelHost
-	name := hostName(item)
+	release := releaseOf(item)
+	if release != "" {
+		// Runtime release is the immutable artifact/address the host loads and the name
+		// it serves. Preserve the configured local model path only for its matching
+		// initial served name; every changed release must alter process content, not just
+		// workload labels.
+		host.ServedName = release
+		if release != r.options.ModelHost.ServedName || host.ModelRef == "" {
+			host.ModelRef = release
+		}
+	}
+	appName := "fabric-model-host"
+	selector := map[string]string{
+		"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
+		"app.kubernetes.io/name":             appName,
+	}
+	if name != hostName(item) {
+		// The legacy stable workload's selector is immutable and selects the deployment
+		// id plus app name. Candidates use a distinct app name and exact host label, so
+		// they never collide with an installed pre-M3 Service or ReplicaSet.
+		appName = "fabric-model-host-release"
+		selector = map[string]string{
+			"fabric.khushwant.dev/host": name,
+			"app.kubernetes.io/name":    appName,
+		}
+	}
 	labels := map[string]string{
-		"app.kubernetes.io/name":             "fabric-model-host",
+		"app.kubernetes.io/name":             appName,
 		"app.kubernetes.io/managed-by":       hostManagedBy,
 		"app.kubernetes.io/part-of":          "fabric",
 		"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
 		"fabric.khushwant.dev/account-id":    item.Spec.AccountID,
+		"fabric.khushwant.dev/host":          name,
 	}
 
 	container := map[string]any{
@@ -393,14 +453,15 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 			// that predates the field is unchanged.
 			"replicas": item.Spec.DesiredReplicas(),
 			"selector": map[string]any{
-				"matchLabels": map[string]string{
-					"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
-					"app.kubernetes.io/name":             "fabric-model-host",
-				},
+				"matchLabels": selector,
 			},
 			"strategy": map[string]any{
-				// Recreate, not RollingUpdate: two replicas would both want the GPU
-				// and the new one would never schedule while the old one holds it.
+				// Recreate within a single workload: its own replicas each want a GPU, so
+				// a rolling update would deadlock waiting for one to free. A release
+				// *change* no longer recreates this workload in place when the stamp has
+				// spare capacity; the new release comes up as a separate workload beside
+				// it and traffic shifts by weight (ADR 0011). Recreate is still correct
+				// per workload, and is the whole story on a stamp that cannot fit both.
 				"type": "Recreate",
 			},
 			"template": map[string]any{
@@ -412,7 +473,25 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 }
 
 func (r *Reconciler) desiredHostService(item ModelDeployment) service {
-	name := hostName(item)
+	return r.desiredHostServiceNamed(item, hostName(item))
+}
+
+// desiredHostServiceNamed builds the headless Service for one workload, selecting only
+// that workload's pods (fabric.khushwant.dev/host) so a coexisting rollout's two Services
+// expose their own release's endpoints rather than the union.
+func (r *Reconciler) desiredHostServiceNamed(item ModelDeployment, name string) service {
+	appName := "fabric-model-host"
+	selector := map[string]string{
+		"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
+		"app.kubernetes.io/name":             appName,
+	}
+	if name != hostName(item) {
+		appName = "fabric-model-host-release"
+		selector = map[string]string{
+			"fabric.khushwant.dev/host": name,
+			"app.kubernetes.io/name":    appName,
+		}
+	}
 	return service{
 		APIVersion: "v1",
 		Kind:       "Service",
@@ -420,9 +499,10 @@ func (r *Reconciler) desiredHostService(item ModelDeployment) service {
 			Name:      name,
 			Namespace: r.options.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":             "fabric-model-host",
+				"app.kubernetes.io/name":             appName,
 				"app.kubernetes.io/managed-by":       hostManagedBy,
 				"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
+				"fabric.khushwant.dev/host":          name,
 			},
 		},
 		Spec: map[string]any{
@@ -432,10 +512,7 @@ func (r *Reconciler) desiredHostService(item ModelDeployment) service {
 			// not rely on kube-proxy spreading a ClusterIP, which would be opaque to it
 			// and could not be ejected when one replica fails.
 			"clusterIP": "None",
-			"selector": map[string]string{
-				"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
-				"app.kubernetes.io/name":             "fabric-model-host",
-			},
+			"selector":  selector,
 			"ports": []map[string]any{
 				{"name": "http", "port": r.options.ModelHost.Port, "targetPort": "http"},
 			},
@@ -448,8 +525,13 @@ func (r *Reconciler) desiredHostService(item ModelDeployment) service {
 // The operator overrides whatever the agent rendered, because when the operator owns
 // the host it is the only component that knows where it ended up.
 func (r *Reconciler) hostUpstream(item ModelDeployment) string {
+	return r.hostUpstreamNamed(hostName(item))
+}
+
+// hostUpstreamNamed is the Service DNS address for one named workload.
+func (r *Reconciler) hostUpstreamNamed(name string) string {
 	return fmt.Sprintf(
-		"http://%s.%s.svc:%d", hostName(item), r.options.Namespace, r.options.ModelHost.Port,
+		"http://%s.%s.svc:%d", name, r.options.Namespace, r.options.ModelHost.Port,
 	)
 }
 
@@ -526,9 +608,20 @@ func endpointBackendID(endpoint endpointSliceEndpoint, address string) string {
 // so a slow or failed lookup degrades to the Service address instead of stalling a
 // request.
 func (r *Reconciler) discoverBackends(ctx context.Context, item ModelDeployment) []dataPlaneBackend {
-	fallback := []dataPlaneBackend{{URL: r.hostUpstream(item)}}
+	return r.discoverBackendsNamed(ctx, item, hostName(item))
+}
 
-	selector := fmt.Sprintf("kubernetes.io/service-name%%3D%s", hostName(item))
+// discoverBackendsNamed resolves the pool for one named workload from the EndpointSlices
+// its headless Service selects. During a weighted rollout it is called once per release's
+// workload so each release's concrete endpoints can be published with that release's
+// weight.
+func (r *Reconciler) discoverBackendsNamed(
+	ctx context.Context, item ModelDeployment, name string,
+) []dataPlaneBackend {
+	fallbackURL := r.hostUpstreamNamed(name)
+	fallback := []dataPlaneBackend{{URL: fallbackURL, ID: fallbackURL}}
+
+	selector := fmt.Sprintf("kubernetes.io/service-name%%3D%s", name)
 	path := fmt.Sprintf(
 		"/apis/discovery.k8s.io/v1/namespaces/%s/endpointslices?labelSelector=%s",
 		r.options.Namespace, selector,
@@ -589,6 +682,16 @@ func (r *Reconciler) discoverBackends(ctx context.Context, item ModelDeployment)
 	return backends
 }
 
+func (r *Reconciler) discoverConcreteBackendsNamed(
+	ctx context.Context, item ModelDeployment, name string,
+) ([]dataPlaneBackend, bool) {
+	backends := r.discoverBackendsNamed(ctx, item, name)
+	if len(backends) == 1 && backends[0].URL == r.hostUpstreamNamed(name) {
+		return backends, false
+	}
+	return backends, len(backends) > 0
+}
+
 type modelHostReadiness struct {
 	Ready   int
 	Desired int
@@ -598,42 +701,148 @@ func (s modelHostReadiness) fullyReady() bool {
 	return s.Desired > 0 && s.Ready >= s.Desired
 }
 
+// rolloutBackends resolves the concrete pool the data plane should serve for a
+// deployment this pass, and the strategy it must use.
+func (r *Reconciler) rolloutBackends(
+	ctx context.Context, item ModelDeployment, decision RolloutDecision,
+) ([]dataPlaneBackend, string) {
+	if len(decision.Weighted) == 0 {
+		return nil, ""
+	}
+	pool := make([]dataPlaneBackend, 0)
+	for _, release := range decision.Weighted {
+		endpoints := r.discoverBackendsNamed(ctx, item, release.Workload)
+		if release.Workload == decision.CandidateWorkload && release.Weight > 0 {
+			var concrete bool
+			endpoints, concrete = r.discoverConcreteBackendsNamed(ctx, item, release.Workload)
+			if !concrete {
+				// The exact pool being serialized lost readiness after policy observation.
+				// Abort publication so the previously loaded active-only route remains.
+				return nil, ""
+			}
+		}
+		if len(endpoints) == 0 {
+			continue
+		}
+		per := release.Weight / float64(len(endpoints))
+		for _, backend := range endpoints {
+			backend.Workload = release.Workload
+			if decision.ForceWeighted || len(decision.Weighted) > 1 {
+				weight := per
+				backend.Weight = &weight
+			}
+			pool = append(pool, backend)
+		}
+	}
+	sort.Slice(pool, func(i, j int) bool { return pool[i].ID < pool[j].ID })
+	if decision.ForceWeighted || len(decision.Weighted) > 1 {
+		return pool, "weighted"
+	}
+	return pool, ""
+}
+
 // applyHost creates or updates the workload for one deployment and reports how many
 // replicas are ready against how many were requested.
 func (r *Reconciler) applyHost(
 	ctx context.Context, item ModelDeployment,
 ) (modelHostReadiness, error) {
-	return r.applyHostWithRollout(ctx, item, RolloutDecision{Release: releaseOf(item)}, rolloutState{})
+	return r.applyHostWithRollout(ctx, item, RolloutDecision{
+		ActiveRelease: releaseOf(item), ActiveWorkload: hostName(item), EnsureActive: true,
+	}, rolloutState{})
 }
 
-// applyHostWithRollout applies the release the rollout policy chose, which is the
-// declared one except while rolling back.
-func (r *Reconciler) applyHostWithRollout(
-	ctx context.Context, item ModelDeployment, decision RolloutDecision, state rolloutState,
+// itemForRelease returns the deployment with its upstream release overridden, so a
+// workload can be built for a release other than the one declared (the sidecar keeps the
+// previous release, the primary during a rollback returns to the last-good one).
+func itemForRelease(item ModelDeployment, release string) ModelDeployment {
+	effective := item
+	if release != "" && release != releaseOf(item) {
+		effective.Spec.UpstreamModel = release
+	}
+	return effective
+}
+
+// ensureNamedWorkload creates or updates one exact release workload and its Service,
+// then returns observed replica readiness. It never mutates another release.
+func (r *Reconciler) ensureNamedWorkload(
+	ctx context.Context, item ModelDeployment, release, name string,
 ) (modelHostReadiness, error) {
 	readiness := modelHostReadiness{Desired: item.Spec.DesiredReplicas()}
-	name := hostName(item)
-
-	// The release actually served may differ from the declaration, so the workload is
-	// built from the decision rather than the spec.
-	effective := item
-	if decision.Release != "" && decision.Release != releaseOf(item) {
-		effective.Spec.UpstreamModel = decision.Release
+	desired := r.desiredHostNamed(itemForRelease(item, release), name)
+	desired.Metadata.Annotations = map[string]string{annotationRelease: release}
+	if err := r.applyWorkload(ctx, name, desired); err != nil {
+		return readiness, err
 	}
-	desired := r.desiredHost(effective)
-	desired.Metadata.Annotations = r.rolloutAnnotations(decision, state, time.Now())
+	if err := r.applyHostServiceNamed(ctx, item, name); err != nil {
+		return readiness, err
+	}
+	return r.observeNamedWorkload(ctx, item, name)
+}
 
+func (r *Reconciler) observeReleaseWorkload(
+	ctx context.Context, item ModelDeployment, name string,
+) (bool, string, modelHostReadiness, error) {
+	readiness := modelHostReadiness{Desired: item.Spec.DesiredReplicas()}
+	var current deployment
+	if err := r.client.Get(ctx, r.deploymentPath(name), &current); err != nil {
+		if kube.IsNotFound(err) {
+			return false, "", readiness, nil
+		}
+		return false, "", readiness, fmt.Errorf("read model host status %s: %w", name, err)
+	}
+	if current.Status != nil {
+		readiness.Ready = current.Status.ReadyReplicas
+	}
+	return true, current.Metadata.Annotations[annotationRelease], readiness, nil
+}
+
+func (r *Reconciler) observeNamedWorkload(
+	ctx context.Context, item ModelDeployment, name string,
+) (modelHostReadiness, error) {
+	readiness := modelHostReadiness{Desired: item.Spec.DesiredReplicas()}
+	var current deployment
+	if err := r.client.Get(ctx, r.deploymentPath(name), &current); err != nil {
+		if kube.IsNotFound(err) {
+			return readiness, nil
+		}
+		return readiness, fmt.Errorf("read model host status %s: %w", name, err)
+	}
+	if current.Status != nil {
+		readiness.Ready = current.Status.ReadyReplicas
+	}
+	return readiness, nil
+}
+
+// applyHostWithRollout remains the single-host compatibility path used by focused tests;
+// ReconcileOnce uses the durable active/candidate state machine directly.
+func (r *Reconciler) applyHostWithRollout(
+	ctx context.Context, item ModelDeployment, decision RolloutDecision, _ rolloutState,
+) (modelHostReadiness, error) {
+	release := decision.ActiveRelease
+	workload := decision.ActiveWorkload
+	if release == "" {
+		release = releaseOf(item)
+	}
+	if workload == "" {
+		workload = hostName(item)
+	}
+	return r.ensureNamedWorkload(ctx, item, release, workload)
+}
+
+// applyWorkload creates or patches one model-host Deployment.
+func (r *Reconciler) applyWorkload(ctx context.Context, name string, desired deployment) error {
 	var existing deployment
 	err := r.client.Get(ctx, r.deploymentPath(name), &existing)
 	switch {
 	case kube.IsNotFound(err):
 		path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", r.options.Namespace)
 		if err := r.client.Create(ctx, path, desired, nil); err != nil {
-			return readiness, fmt.Errorf("create model host %s: %w", name, err)
+			return fmt.Errorf("create model host %s: %w", name, err)
 		}
 		r.options.Log.Info("model host created", "deployment", name)
+		return nil
 	case err != nil:
-		return readiness, fmt.Errorf("read model host %s: %w", name, err)
+		return fmt.Errorf("read model host %s: %w", name, err)
 	default:
 		// Patched rather than replaced, so fields defaulted by the API server and
 		// anything a cluster admission controller added are left alone.
@@ -645,31 +854,19 @@ func (r *Reconciler) applyHostWithRollout(
 			},
 		}
 		if err := r.client.MergePatch(ctx, r.deploymentPath(name), patch, nil); err != nil {
-			return readiness, fmt.Errorf("update model host %s: %w", name, err)
+			return fmt.Errorf("update model host %s: %w", name, err)
 		}
+		return nil
 	}
-
-	if err := r.applyHostService(ctx, item); err != nil {
-		return readiness, err
-	}
-
-	// Readiness comes from the workload's own status rather than being assumed from a
-	// successful write: creating a Deployment says nothing about whether the server
-	// inside it has loaded a model.
-	var current deployment
-	if err := r.client.Get(ctx, r.deploymentPath(name), &current); err != nil {
-		return readiness, fmt.Errorf("read model host status %s: %w", name, err)
-	}
-	if current.Status == nil {
-		return readiness, nil
-	}
-	readiness.Ready = current.Status.ReadyReplicas
-	return readiness, nil
 }
 
 func (r *Reconciler) applyHostService(ctx context.Context, item ModelDeployment) error {
-	name := hostName(item)
-	desired := r.desiredHostService(item)
+	return r.applyHostServiceNamed(ctx, item, hostName(item))
+}
+
+// applyHostServiceNamed creates or patches the headless Service for one named workload.
+func (r *Reconciler) applyHostServiceNamed(ctx context.Context, item ModelDeployment, name string) error {
+	desired := r.desiredHostServiceNamed(item, name)
 
 	var existing service
 	err := r.client.Get(ctx, r.servicePath(name), &existing)
@@ -711,9 +908,8 @@ func (r *Reconciler) applyHostService(ctx context.Context, item ModelDeployment)
 	return nil
 }
 
-// deleteHost removes the workload for a deployment that is no longer declared.
-func (r *Reconciler) deleteHost(ctx context.Context, deploymentID string) error {
-	name := "fabric-host-" + strings.ToLower(deploymentID)
+// deleteWorkload removes one workload and its Service by name, tolerating a missing one.
+func (r *Reconciler) deleteWorkload(ctx context.Context, name string) error {
 	for _, path := range []string{r.deploymentPath(name), r.servicePath(name)} {
 		if err := r.client.Delete(ctx, path); err != nil && !kube.IsNotFound(err) {
 			return fmt.Errorf("delete %s: %w", path, err)

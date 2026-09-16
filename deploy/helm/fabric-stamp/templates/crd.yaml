@@ -128,6 +128,36 @@ spec:
                 unavailableReplicas:
                   type: integer
                   minimum: 0
+                rollout:
+                  type: object
+                  properties:
+                    phase:
+                      type: string
+                      enum: [Serving, Preparing, Draining, Failed]
+                    targetGeneration:
+                      type: integer
+                    activeRelease:
+                      type: string
+                    activeWorkload:
+                      type: string
+                    candidateRelease:
+                      type: string
+                    candidateWorkload:
+                      type: string
+                    startedAt:
+                      type: string
+                    cutoverRevision:
+                      type: string
+                    drainingBackendIds:
+                      type: array
+                      items:
+                        type: string
+                    drainingWorkload:
+                      type: string
+                    failedGeneration:
+                      type: integer
+                    rollback:
+                      type: boolean
                 conditions:
                   type: array
                   items:

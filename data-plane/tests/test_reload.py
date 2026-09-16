@@ -153,3 +153,18 @@ async def test_keys_are_warmed_without_any_request(tmp_path, monkeypatch) -> Non
 
     assert cache.held == 2, "keys were never warmed, so the pod would never be ready"
     assert cache.refreshes >= 2, "a failed first fetch was not retried"
+
+
+
+def test_route_revision_changes_only_after_successful_reload(tmp_path) -> None:
+    path = tmp_path / "deployments.json"
+    path.write_text(json.dumps({"revision": "r1", "deployments": [entry("stable")]}))
+    registry = ReloadingRegistry(path, min_interval=0.0)
+    assert registry.config_revision() == "r1"
+
+    # A broken projection is not acknowledged; last-good route and revision remain.
+    path.write_text('{"revision":"r2","deployments":[')
+    assert registry.config_revision() == "r1"
+
+    path.write_text(json.dumps({"revision": "r2", "deployments": [entry("stable")]}))
+    assert registry.config_revision() == "r2"

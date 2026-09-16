@@ -139,7 +139,7 @@ and while it is starting the phase is `pending`.
 
 | Choice | Reason |
 |---|---|
-| `Recreate` for release changes | Multiple steady-state replicas are supported, but a rollout cannot temporarily exceed its GPU allocation; traffic-splitting rollout is deferred |
+| `Recreate` within each exact release workload | A pod replacement still cannot share its GPU; release changes avoid mutating that workload by preparing a separately named candidate (ADR 0012) |
 | One GPU per replica | A GPU is not shared; `spec.replicas` creates a pool of independent model-host pods that the data plane balances across |
 | GPU as a limit only | Kubernetes requires request and limit to be equal for extended resources |
 | Generous readiness threshold | Weight loading is slow, and a tight probe restarts the pod before it finishes |
