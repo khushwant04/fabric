@@ -235,7 +235,7 @@ func TestDeclaredDeploymentBecomesDataPlaneConfiguration(t *testing.T) {
 
 func TestStrategyIsPublishedIntoDataPlaneConfiguration(t *testing.T) {
 	// The balancing strategy is a per-deployment field the data plane reads (M2, ADR
-	// 0010). The operator carries it from the CR spec into the config document.
+	// 0011). The operator carries it from the CR spec into the config document.
 	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
 	item.Spec.Strategy = "weighted"
 	state, client := newAPIServer(t, item)

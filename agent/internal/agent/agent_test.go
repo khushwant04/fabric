@@ -1058,7 +1058,7 @@ func TestReplicasReachTheSinkAsSpecReplicas(t *testing.T) {
 
 func TestStrategyFlowsFromTheDesiredSpecIntoConfiguration(t *testing.T) {
 	// The balancing strategy is a per-deployment field the data plane reads (M2, ADR
-	// 0010). It lives under the runtime sub-spec beside kernel_mode and must survive
+	// 0011). It lives under the runtime sub-spec beside kernel_mode and must survive
 	// into the rendered configuration; an unset one renders empty so the data plane
 	// applies its own default of least-in-flight.
 	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")

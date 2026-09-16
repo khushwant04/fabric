@@ -1,10 +1,12 @@
-"""Router obligations that cut across balancing strategies (M2, ADR 0010).
+"""Router obligations that cut across balancing strategies (M2, ADR 0011).
 
 Retry on connection failure (never on a partially streamed response), health-based
 ejection with recovery, and per-backend metrics, all exercised through the ingress.
 """
 
 from __future__ import annotations
+
+import json
 
 import httpx
 import pytest
@@ -46,24 +48,24 @@ class FleetUpstream:
         self.dead: set[str] = set()
         #: A host that fails only after emitting the first chunk of a stream.
         self.fail_mid_stream: set[str] = set()
+        self.statuses: dict[str, int] = {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
         self.requests.append(host)
         if host in self.dead:
             raise httpx.ConnectError("backend is down", request=request)
-
-        import json
+        status_code = self.statuses.get(host, 200)
 
         payload = json.loads(request.content or b"{}")
         if payload.get("stream"):
             if host in self.fail_mid_stream:
-                return httpx.Response(200, stream=_BrokenStream(request))
+                return httpx.Response(status_code, stream=_BrokenStream(request))
             body = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'
-            return httpx.Response(200, content=body)
+            return httpx.Response(status_code, content=body)
 
         return httpx.Response(
-            200,
+            status_code,
             json={
                 "id": "cmpl-1",
                 "object": "chat.completion",
@@ -269,7 +271,7 @@ async def test_a_backend_is_ejected_after_the_threshold_and_restored_after_the_w
 
     # pod-a crossed the failure threshold and is ejected; an ejection metric was emitted.
     assert pool.health.is_available(Backend(url="http://a.test", backend_id="pod-a")) is False
-    assert 'backend="pod-a"' in plane.metrics.render()
+    assert 'backend_id="pod-a"' in plane.metrics.render()
     assert "fabric_dp_backend_ejections_total" in plane.metrics.render()
 
     # The host comes back; after the recovery window it is probed again.
@@ -295,6 +297,110 @@ async def test_per_backend_metrics_appear_in_the_rendered_output(
     # Requests are labelled by backend in addition to deployment, so a strategy's spread
     # is measurable.
     assert "fabric_dp_backend_requests_total" in rendered
-    assert 'backend="pod-a"' in rendered
-    assert 'backend="pod-b"' in rendered
+    assert 'backend_id="pod-a"' in rendered
+    assert 'backend_id="pod-b"' in rendered
     assert "fabric_dp_backend_in_flight" in rendered
+
+
+
+async def test_retry_attempt_metrics_are_balanced_and_health_is_visible(
+    router_client, router_plane, signing_key: SigningKey, fleet: FleetUpstream
+) -> None:
+    fleet.dead.add("a.test")
+
+    response = await router_client.post(
+        "/v1/chat/completions", json=_chat(), headers=_auth(signing_key)
+    )
+
+    assert response.status_code == 200
+    rendered = router_plane.metrics.render()
+    assert 'backend_id="pod-a",outcome="transport_error"} 1' in rendered
+    assert 'backend_id="pod-b",outcome="ok"} 1' in rendered
+    assert 'fabric_dp_backend_available{deployment_id=' in rendered
+    assert 'backend_id="pod-a"} 0' in rendered
+    assert 'backend_id="pod-b"} 1' in rendered
+    # Every attempt ended: no backend gauge is left positive after the response.
+    in_flight_lines = [
+        line
+        for line in rendered.splitlines()
+        if line.startswith("fabric_dp_backend_in_flight{")
+    ]
+    assert in_flight_lines
+    assert all(line.endswith(" 0") for line in in_flight_lines)
+
+
+
+async def test_disconnect_during_response_start_releases_stream_leases(
+    router_plane, signing_key: SigningKey
+) -> None:
+    """Cleanup must run even when Starlette never enters the body iterator."""
+    from fabric_data_plane.app import create_inference_app
+
+    app = create_inference_app(router_plane)
+    body = json.dumps(_chat(stream=True)).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/chat/completions",
+        "raw_path": b"/v1/chat/completions",
+        "query_string": b"",
+        "headers": [
+            (b"authorization", f"Bearer {signing_key.issue()}".encode()),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "client": ("127.0.0.1", 1234),
+        "server": ("ingress.test", 80),
+    }
+    received = False
+
+    async def receive():
+        nonlocal received
+        if not received:
+            received = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        if message["type"] == "http.response.start":
+            raise RuntimeError("client disconnected during response start")
+
+    with pytest.raises(BaseExceptionGroup):
+        await app(scope, receive, send)
+
+    deployment = router_plane.registry.resolve("launch-model", account_id=ACCOUNT_A)
+    pool = router_plane.pool_for(deployment)
+    assert router_plane.concurrency.snapshot()["in_flight"] == 0
+    assert sum(pool.health.in_flight().values()) == 0
+    rendered = router_plane.metrics.render()
+    request_gauges = [
+        line for line in rendered.splitlines() if line.startswith("fabric_dp_requests_in_flight{")
+    ]
+    assert request_gauges and all(line.endswith(" 0") for line in request_gauges)
+
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_http_4xx_is_healthy_but_recorded_as_an_upstream_error(
+    router_client,
+    router_plane,
+    signing_key: SigningKey,
+    fleet: FleetUpstream,
+    stream: bool,
+) -> None:
+    fleet.statuses["a.test"] = 429
+
+    response = await router_client.post(
+        "/v1/chat/completions",
+        json=_chat(stream=stream),
+        headers=_auth(signing_key),
+    )
+
+    if not stream:
+        assert response.status_code == 429
+    rendered = router_plane.metrics.render()
+    assert 'backend_id="pod-a",outcome="upstream_error"} 1' in rendered
+    assert 'backend_id="pod-a"} 1' in rendered

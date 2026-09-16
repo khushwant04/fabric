@@ -190,7 +190,7 @@ class RuntimeSpec(BaseModel):
     release: str = Field(min_length=1, max_length=200)
     kernel_mode: Literal["auto", "fabric", "standard"] = "auto"
     #: How the data plane balances requests across this deployment's backends (M2,
-    #: ADR 0010). "least_in_flight" (the default) sends each request to the backend
+    #: ADR 0011). "least_in_flight" (the default) sends each request to the backend
     #: carrying the fewest in-flight requests; "round_robin" cycles them;
     #: "session_affinity" pins a session key to a stable backend; "weighted" spreads
     #: proportionally to per-backend weight. It belongs on the deployment rather than the

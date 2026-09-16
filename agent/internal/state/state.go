@@ -55,7 +55,7 @@ type Deployment struct {
 	// plane ignores it. Zero means the field was absent, which the operator reads as one.
 	Replicas int `json:"replicas,omitempty"`
 	// Strategy is how the data plane balances across the deployment's backends (M2,
-	// ADR 0010): least_in_flight (default), round_robin, session_affinity, or weighted.
+	// ADR 0011): least_in_flight (default), round_robin, session_affinity, or weighted.
 	// Unlike the other fields this one the data plane does read, once the operator has
 	// carried it through the CR into the config document. Empty means the data plane's
 	// own default of least-in-flight.

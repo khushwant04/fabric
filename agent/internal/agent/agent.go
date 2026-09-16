@@ -536,7 +536,7 @@ func replicasFromSpec(spec map[string]any) int {
 }
 
 // strategyFromSpec extracts how the data plane should balance across this deployment's
-// backends (M2, ADR 0010).
+// backends (M2, ADR 0011).
 //
 // It lives under the runtime sub-spec beside kernel_mode, because both are properties of
 // how the deployment is served. An unrecognised value is treated as unset rather than

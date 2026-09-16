@@ -1,4 +1,4 @@
-"""Balancing strategies over the backend pool (M2, ADR 0010).
+"""Balancing strategies over the backend pool (M2, ADR 0011).
 
 Each strategy chooses among the backends that are healthy right now; health decides
 which backends are eligible and the strategy decides how load spreads across them. These
@@ -53,10 +53,10 @@ def test_least_in_flight_prefers_the_least_loaded_backend() -> None:
     assert pool.select().backend_id == "b"
 
 
-def test_least_in_flight_breaks_ties_deterministically() -> None:
+def test_least_in_flight_rotates_equal_load_ties() -> None:
     pool = BackendPool(_backends("b", "a", "c"), strategy="least_in_flight")
-    # All zero in flight, so the tie-break by backend id makes the choice stable.
-    assert {pool.select().backend_id for _ in range(5)} == {"a"}
+    picks = [pool.select().backend_id for _ in range(6)]
+    assert picks == ["a", "b", "c", "a", "b", "c"]
 
 
 def test_round_robin_cycles_the_healthy_backends() -> None:
@@ -175,3 +175,46 @@ def test_every_strategy_only_returns_a_healthy_backend() -> None:
         # With both ejected, no strategy invents a backend.
         health.record_failure(backends[1])
         assert pool.select(session_key="k") is None, name
+
+
+
+def test_session_affinity_without_a_key_rotates() -> None:
+    pool = BackendPool(_backends("a", "b"), strategy="session_affinity")
+    assert [pool.select().backend_id for _ in range(4)] == ["a", "b", "a", "b"]
+
+
+def test_rendezvous_affinity_only_remaps_keys_from_a_removed_backend() -> None:
+    backends = _backends("a", "b", "c")
+    full = BackendPool(backends, strategy="session_affinity")
+    assignments = {
+        f"session-{i}": full.select(session_key=f"session-{i}").backend_id
+        for i in range(200)
+    }
+    reduced = BackendPool(backends[:2], strategy="session_affinity")
+
+    for key, original in assignments.items():
+        selected = reduced.select(session_key=key).backend_id
+        if original != "c":
+            assert selected == original
+
+
+def test_weighted_zero_drains_a_backend() -> None:
+    pool = BackendPool(
+        [
+            Backend(url="http://a", backend_id="a", weight=0.0),
+            Backend(url="http://b", backend_id="b", weight=1.0),
+        ],
+        strategy="weighted",
+    )
+    assert {pool.select().backend_id for _ in range(100)} == {"b"}
+
+
+def test_weighted_all_zero_has_no_eligible_backend() -> None:
+    pool = BackendPool(
+        [
+            Backend(url="http://a", backend_id="a", weight=0.0),
+            Backend(url="http://b", backend_id="b", weight=0.0),
+        ],
+        strategy="weighted",
+    )
+    assert pool.select() is None

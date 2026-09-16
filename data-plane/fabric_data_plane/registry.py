@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 import pathlib
 import threading
 import time
@@ -24,6 +25,7 @@ from typing import Any
 from fabric_data_plane.errors import Forbidden, NotFound
 from fabric_data_plane.pool import (
     DEFAULT_STRATEGY,
+    STRATEGIES,
     Backend,
     BackendHealth,
     BackendPool,
@@ -51,11 +53,13 @@ class Deployment:
     upstream_model: str | None = None
     backends: tuple[Backend, ...] = ()
     #: How the pool balances across ``backends``. Defaults to least-in-flight, which is
-    #: also what an entry that predates the field gets (M2, ADR 0010). The vocabulary is
+    #: also what an entry that predates the field gets (M2, ADR 0011). The vocabulary is
     #: validated by the control plane; an unknown value here defaults rather than raising.
     strategy: str = DEFAULT_STRATEGY
 
     def __post_init__(self) -> None:
+        if self.strategy not in STRATEGIES:
+            object.__setattr__(self, "strategy", DEFAULT_STRATEGY)
         if not self.backends:
             if not self.upstream_url:
                 raise ValueError("a deployment needs an upstream_url or a backends list")
@@ -125,17 +129,21 @@ class DeploymentRegistry:
             parsed: list[Backend] = []
             for item in raw_backends:
                 url = str(item["url"]).rstrip("/")
+                weight = float(item.get("weight", 1.0))
+                if not math.isfinite(weight) or weight < 0:
+                    raise ValueError("backend weight must be finite and non-negative")
                 parsed.append(
                     Backend(
                         url=url,
                         backend_id=str(item.get("id") or url),
-                        weight=float(item.get("weight", 1.0)),
+                        weight=weight,
                     )
                 )
             backends = tuple(parsed)
 
         upstream_url = entry.get("upstream_url")
-        strategy = entry.get("strategy")
+        raw_strategy = entry.get("strategy")
+        strategy = str(raw_strategy) if raw_strategy in STRATEGIES else DEFAULT_STRATEGY
         return Deployment(
             deployment_id=uuid.UUID(str(entry["deployment_id"])),
             account_id=uuid.UUID(str(entry["account_id"])),
@@ -143,7 +151,7 @@ class DeploymentRegistry:
             upstream_url=str(upstream_url).rstrip("/") if upstream_url else None,
             upstream_model=entry.get("upstream_model"),
             backends=backends,
-            strategy=str(strategy) if strategy else DEFAULT_STRATEGY,
+            strategy=strategy,
         )
 
     @classmethod

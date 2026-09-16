@@ -1,7 +1,7 @@
 # ADR 0010: The operator publishes backend addresses and the data plane balances
 
 **Decision status:** Accepted  
-**Implementation status:** Implemented (pool and health primitive; a single healthy-pick selection, with pluggable strategies deferred)  
+**Implementation status:** Implemented (pool and health primitive; routing strategies added by ADR 0011)
 **Date:** 2026-08-13
 
 ## Context

@@ -329,24 +329,23 @@ when both the control plane and data plane are importable.
   and skipped, and a non-streamed request reselects a remaining healthy backend, so
   killing one replica does not fail requests. Ejection is a cooldown, not a
   permanent write-off, so a host that restarts is used again.
-- Selection across the pool is a **per-deployment balancing strategy** (M2, ADR 0010),
+- Selection across the pool is a **per-deployment balancing strategy** (M2, ADR 0011),
   carried control-plane → agent → CR → data plane and defaulting to `least_in_flight`
   when unset. `least_in_flight` sends each request to the healthy backend with the
-  fewest requests in flight; `round_robin` cycles the healthy backends;
-  `session_affinity` hashes a session key (a session/user header, else the request's
-  own `user`, else the account) to a stable backend and fails over deterministically
-  when that backend is ejected; `weighted` picks proportionally to each backend's
-  weight. Every strategy chooses only among the backends that are healthy right now, so
-  none can return an ejected host.
-- On a connection failure a **non-streamed** request retries against another healthy
-  backend up to a bounded number of attempts and surfaces `upstream_unavailable` only
-  when none answers, so a fully-ejected pool degrades cleanly rather than looping. A
-  **streamed** request may reselect another backend only before the first byte reaches
-  the client; once any byte has been sent the response is never replayed, and a later
-  failure surfaces as an in-stream error event.
+  fewest active requests and rotates ties; `round_robin` cycles healthy backends;
+  `session_affinity` uses rendezvous hashing over a caller-supplied session header or
+  the OpenAI `user` field, while keyless traffic still rotates; `weighted` picks
+  proportionally to each backend's published weight, with zero meaning drained.
+  Managed homogeneous replicas currently publish equal weights. Every strategy chooses
+  only among healthy backends, so none can return an ejected host.
+- A non-streamed request retries another backend only when connection establishment is
+  known to have failed. Read, write, protocol, and explicit HTTP 5xx failures are not
+  replayed because the first host may already have accepted this non-idempotent request.
+  A streamed request applies the same rule before its first byte; once any byte has been
+  sent, it never changes backend and a later failure becomes an in-stream error event.
 - Metrics are labelled **per backend** as well as per deployment — request counts and
-  outcomes, in-flight gauge, and ejection events — so each strategy's effect on the
-  spread is measurable.
+  outcomes, active-request and availability gauges, and ejection events — so each
+  strategy's effect on the spread and backend health is measurable.
 - Client `Authorization` and `X-Fabric-*` ownership headers are dropped before
   proxying, and the reply reports the customer's alias rather than the internal
   release name.

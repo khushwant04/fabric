@@ -47,7 +47,7 @@ async def test_deployment_lifecycle_advances_generation(client: AsyncClient) -> 
 
 
 async def test_runtime_strategy_defaults_to_least_in_flight(client: AsyncClient) -> None:
-    """A deployment that names no balancing strategy defaults to least-in-flight (ADR 0010).
+    """A deployment that names no balancing strategy defaults to least-in-flight (ADR 0011).
 
     The default is stored on the deployment record so it flows verbatim through desired
     state to the agent and on to the data plane.
