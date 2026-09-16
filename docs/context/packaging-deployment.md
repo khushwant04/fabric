@@ -139,8 +139,8 @@ and while it is starting the phase is `pending`.
 
 | Choice | Reason |
 |---|---|
-| `Recreate` rather than rolling updates | Two replicas would both want the GPU, and the new one would never schedule while the old holds it |
-| One replica per deployment | A GPU is not shared; scaling is the control plane placing on more stamps |
+| `Recreate` for release changes | Multiple steady-state replicas are supported, but a rollout cannot temporarily exceed its GPU allocation; traffic-splitting rollout is deferred |
+| One GPU per replica | A GPU is not shared; `spec.replicas` creates a pool of independent model-host pods that the data plane balances across |
 | GPU as a limit only | Kubernetes requires request and limit to be equal for extended resources |
 | Generous readiness threshold | Weight loading is slow, and a tight probe restarts the pod before it finishes |
 | Hosts pruned by label | An operator that restarted would otherwise leak a workload holding a GPU |

@@ -94,6 +94,23 @@ spec:
                     Fabric substitution, "standard" the server's own, and "auto" leaves
                     the choice to the platform, which currently means the server's own.
                   enum: [auto, fabric, standard]
+                replicas:
+                  type: integer
+                  description: |
+                    How many model-host replicas serve this deployment. Each replica is
+                    one pod holding one GPU and the data plane balances across them; a
+                    fleet is expressed by asking for more than one. Absent means one.
+                  minimum: 1
+                  maximum: 32
+                strategy:
+                  type: string
+                  description: |
+                    How the data plane balances across the deployment's backends.
+                    "least_in_flight" sends each request to the backend carrying the
+                    fewest in-flight requests, "round_robin" cycles them, "session_affinity"
+                    pins a session key to a stable backend, and "weighted" spreads
+                    proportionally to per-backend weight. Absent means least_in_flight.
+                  enum: [least_in_flight, round_robin, session_affinity, weighted]
                 generation:
                   type: integer
                   description: Control-plane generation this declaration came from.
@@ -105,6 +122,12 @@ spec:
                   type: string
                 observedGeneration:
                   type: integer
+                readyReplicas:
+                  type: integer
+                  minimum: 0
+                unavailableReplicas:
+                  type: integer
+                  minimum: 0
                 conditions:
                   type: array
                   items:

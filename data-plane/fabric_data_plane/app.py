@@ -16,8 +16,10 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
+import threading
 import time
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -40,6 +42,7 @@ from fabric_data_plane.errors import (
 )
 from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.metrics import Metrics
+from fabric_data_plane.pool import Backend, BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.usage import UsageBuffer, UsageRecord
 
@@ -48,6 +51,25 @@ logger = logging.getLogger("fabric.data_plane")
 #: Upstream paths this ingress proxies, keyed by the route it exposes.
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 COMPLETIONS_PATH = "/v1/completions"
+
+
+class _CleanupStreamingResponse(StreamingResponse):
+    """Run cleanup even when response-start fails before iteration begins."""
+
+    def __init__(
+        self,
+        content: AsyncIterator[bytes],
+        *,
+        cleanup: Callable[[], Awaitable[None]],
+    ) -> None:
+        super().__init__(content, media_type="text/event-stream")
+        self._cleanup = cleanup
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._cleanup()
 
 
 class DataPlane:
@@ -68,6 +90,12 @@ class DataPlane:
         self.client = client
         self.usage = UsageBuffer(settings.usage_buffer_size)
         self.metrics = Metrics()
+        # One pool per deployment, memoised so per-backend health survives across the
+        # requests that deployment serves rather than resetting each call. Keyed by
+        # deployment id because the registry may hand back an equal-but-new Deployment on
+        # a reload; the health that matters is per stable deployment, not per object.
+        self._pools: dict[uuid.UUID, BackendPool] = {}
+        self._pools_lock = threading.Lock()
         self.rate_limiter = RateLimiter(
             RateLimit(
                 requests_per_minute=settings.rate_limit_requests_per_minute,
@@ -82,6 +110,77 @@ class DataPlane:
     def authenticate(self, authorization: str | None) -> InferencePrincipal:
         token = extract_bearer_token(authorization)
         return verify_inference_token(token, settings=self.settings, keys=self.keys)
+
+    def reconcile_pools(self) -> None:
+        """Retire routing and metric state for placements no longer in the registry."""
+        deployment_ids = getattr(self.registry, "deployment_ids", None)
+        if not callable(deployment_ids):
+            return
+        active = deployment_ids()
+        with self._pools_lock:
+            for stale_id in self._pools.keys() - active:
+                del self._pools[stale_id]
+                self.metrics.retire_deployment(str(stale_id))
+
+    def pool_for(self, deployment: Deployment) -> BackendPool:
+        """Return the backend pool for a deployment, built once and reused.
+
+        Memoised by deployment id so per-backend health accumulates across requests. A
+        reload that changes a deployment's backend set rebuilds the pool, so a departed
+        backend is not carried forward under stale health.
+        """
+        self.reconcile_pools()
+        with self._pools_lock:
+            pool = self._pools.get(deployment.deployment_id)
+            current_backends = tuple(
+                (backend.backend_id, backend.url, backend.weight)
+                for backend in deployment.backends
+            )
+            current_identity = (deployment.strategy, current_backends)
+            pool_identity = None
+            if pool is not None:
+                previous_backends = tuple(
+                    (backend.backend_id, backend.url, backend.weight)
+                    for backend in pool.backends
+                )
+                pool_identity = (pool.strategy_name, previous_backends)
+            if pool is None or pool_identity != current_identity:
+                previous_ids = (
+                    {backend.backend_id for backend in pool.backends} if pool else set()
+                )
+                current_ids = {backend.backend_id for backend in deployment.backends}
+                for stale_backend in previous_ids - current_ids:
+                    self.metrics.retire_backend(
+                        deployment=str(deployment.deployment_id),
+                        backend=stale_backend,
+                    )
+
+                # A strategy or address/weight update over the same pod identities must
+                # not erase active requests or an ejection cooldown. Requests already in
+                # flight release this shared health object when they finish.
+                preserve_health = pool is not None and previous_ids == current_ids
+                if preserve_health:
+                    pool = BackendPool(
+                        list(deployment.backends),
+                        health=pool.health,
+                        strategy=deployment.strategy,
+                    )
+                else:
+                    pool = deployment.build_pool(
+                        failure_threshold=self.settings.backend_failure_threshold,
+                        recovery_seconds=self.settings.backend_recovery_seconds,
+                    )
+                self._pools[deployment.deployment_id] = pool
+
+            snapshot = pool.health.snapshot()
+            for backend in pool.backends:
+                state = snapshot[backend.backend_id]
+                self.metrics.activate_backend(
+                    deployment=str(deployment.deployment_id),
+                    backend=backend.backend_id,
+                    available=bool(state["available"]),
+                )
+            return pool
 
     def record_usage(
         self, principal: InferencePrincipal, deployment: Deployment, payload: Any, streamed: bool
@@ -116,6 +215,84 @@ def _requested_model(payload: dict[str, Any]) -> str:
     return model.strip()
 
 
+def _safe_to_retry_transport_failure(exc: httpx.HTTPError) -> bool:
+    """Whether the request is known not to have reached a model host.
+
+    A completion POST is not idempotent: replaying after a read/write/protocol failure
+    can run and bill it twice because the first host may already be decoding. Only
+    connection establishment failures are transparently retried on another backend.
+    """
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
+
+
+_SESSION_HEADERS = ("x-fabric-session", "x-session-id", "x-conversation-id")
+
+
+def _session_key(request: Request, payload: dict[str, Any]) -> str | None:
+    """Return an explicit affinity key, or None so anonymous traffic still spreads."""
+    for header in _SESSION_HEADERS:
+        value = request.headers.get(header)
+        if value and value.strip():
+            return value.strip()
+    user = payload.get("user")
+    if isinstance(user, str) and user.strip():
+        return user.strip()
+    return None
+
+
+def _sync_backend_health(
+    plane: DataPlane, pool: BackendPool, deployment_label: str
+) -> None:
+    for backend_id, state in pool.health.snapshot().items():
+        plane.metrics.backend_health(
+            deployment=deployment_label,
+            backend=backend_id,
+            available=bool(state["available"]),
+        )
+
+
+def _record_backend_failure(
+    plane: DataPlane,
+    pool: BackendPool,
+    backend: Backend,
+    deployment_label: str,
+) -> None:
+    if pool.health.record_failure(backend):
+        plane.metrics.backend_ejected(
+            deployment=deployment_label, backend=backend.backend_id
+        )
+    _sync_backend_health(plane, pool, deployment_label)
+
+
+def _acquire_backend(
+    plane: DataPlane,
+    pool: BackendPool,
+    backend: Backend,
+    deployment_label: str,
+) -> None:
+    pool.health.acquire(backend)
+    plane.metrics.backend_started(
+        deployment=deployment_label, backend=backend.backend_id
+    )
+    _sync_backend_health(plane, pool, deployment_label)
+
+
+def _release_backend(
+    plane: DataPlane,
+    pool: BackendPool,
+    backend: Backend,
+    deployment_label: str,
+    outcome: str,
+) -> None:
+    pool.health.release(backend)
+    plane.metrics.backend_finished(
+        deployment=deployment_label,
+        backend=backend.backend_id,
+        outcome=outcome,
+    )
+    _sync_backend_health(plane, pool, deployment_label)
+
+
 async def _proxy(
     plane: DataPlane,
     request: Request,
@@ -129,6 +306,9 @@ async def _proxy(
 
     # Ownership comes from the verified token plus local configuration; the model
     # name only selects a candidate.
+    # Retire withdrawn pool/metric state before resolution, including the case where
+    # this request names the removed deployment and resolution itself will fail.
+    plane.reconcile_pools()
     deployment = plane.registry.resolve(model, account_id=principal.account_id)
 
     # Checked after authorization so an unauthenticated or unauthorized caller cannot
@@ -165,29 +345,91 @@ async def _proxy(
 
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
-    url = f"{deployment.upstream_url}{upstream_path}"
     headers = forwardable_headers(dict(request.headers))
+
+    # A deployment is served by a pool of backends (ADR 0010). The pool skips a backend
+    # that is ejected or unhealthy, so a healthy replica is chosen even when one is down.
+    pool = plane.pool_for(deployment)
+    session_key = _session_key(request, payload)
 
     deployment_label = str(deployment.deployment_id)
     account_label = str(principal.account_id)
     plane.metrics.request_started(deployment_label)
 
     if not streaming:
-        # try/finally rather than a context manager: the slot must be returned whether
-        # the upstream answers, fails, or the request is cancelled, and a leaked slot
-        # permanently reduces the account's concurrency until the process restarts.
+        request_recorded = False
         try:
-            try:
-                response = await plane.client.post(
-                    url,
-                    json=upstream_payload,
-                    headers=headers,
-                    timeout=plane.settings.upstream_timeout_seconds,
+            tried: set[str] = set()
+            response: httpx.Response | None = None
+            max_attempts = min(plane.settings.backend_max_attempts, len(pool))
+            for _ in range(max_attempts):
+                backend = pool.select(exclude=tried, session_key=session_key)
+                if backend is None:
+                    break
+
+                _acquire_backend(plane, pool, backend, deployment_label)
+                attempt_outcome = "cancelled"
+                retry = False
+                try:
+                    response = await plane.client.post(
+                        f"{backend.url}{upstream_path}",
+                        json=upstream_payload,
+                        headers=headers,
+                        timeout=plane.settings.upstream_timeout_seconds,
+                    )
+                except httpx.HTTPError as exc:
+                    logger.warning("backend %s failed: %s", backend.backend_id, exc)
+                    _record_backend_failure(plane, pool, backend, deployment_label)
+                    attempt_outcome = "transport_error"
+                    if _safe_to_retry_transport_failure(exc):
+                        tried.add(backend.backend_id)
+                        response = None
+                        retry = True
+                    else:
+                        plane.metrics.request_finished(
+                            deployment=deployment_label,
+                            account=account_label,
+                            outcome="upstream_unavailable",
+                            duration_seconds=time.perf_counter() - started,
+                        )
+                        request_recorded = True
+                        raise UpstreamUnavailable(
+                            "upstream_unavailable",
+                            "The model host connection failed after the request may have started",
+                        ) from exc
+                else:
+                    if response.status_code >= 500:
+                        _record_backend_failure(plane, pool, backend, deployment_label)
+                    else:
+                        # A 4xx proves the host answered, so it is healthy even though
+                        # the inference attempt itself did not succeed.
+                        pool.health.record_success(backend)
+                        _sync_backend_health(plane, pool, deployment_label)
+                    attempt_outcome = "ok" if response.is_success else "upstream_error"
+                finally:
+                    _release_backend(
+                        plane,
+                        pool,
+                        backend,
+                        deployment_label,
+                        attempt_outcome,
+                    )
+
+                if retry:
+                    continue
+                break
+
+            if response is None:
+                plane.metrics.request_finished(
+                    deployment=deployment_label,
+                    account=account_label,
+                    outcome="upstream_unavailable",
+                    duration_seconds=time.perf_counter() - started,
                 )
-            except httpx.HTTPError as exc:
+                request_recorded = True
                 raise UpstreamUnavailable(
-                    "upstream_unavailable", "The model host did not respond"
-                ) from exc
+                    "upstream_unavailable", "No healthy model host is available"
+                )
 
             try:
                 body = response.json()
@@ -199,7 +441,6 @@ async def _proxy(
             usage = body.get("usage") if isinstance(body, dict) else None
             if response.is_success and isinstance(body, dict):
                 plane.record_usage(principal, deployment, body, streamed=False)
-                # Answer with the customer-facing alias, not the upstream's name.
                 body = {**body, "model": deployment.model_alias}
             plane.metrics.request_finished(
                 deployment=deployment_label,
@@ -209,52 +450,118 @@ async def _proxy(
                 input_tokens=int((usage or {}).get("prompt_tokens") or 0),
                 output_tokens=int((usage or {}).get("completion_tokens") or 0),
             )
+            request_recorded = True
             return JSONResponse(status_code=response.status_code, content=body)
-        except UpstreamUnavailable:
-            plane.metrics.request_finished(
-                deployment=deployment_label,
-                account=account_label,
-                outcome="upstream_unavailable",
-                duration_seconds=time.perf_counter() - started,
-            )
-            raise
         finally:
+            if not request_recorded:
+                plane.metrics.request_finished(
+                    deployment=deployment_label,
+                    account=account_label,
+                    outcome="cancelled",
+                    duration_seconds=time.perf_counter() - started,
+                )
             await plane.concurrency.release(principal.account_id)
+
+    if not pool.has_available():
+        await plane.concurrency.release(principal.account_id)
+        plane.metrics.request_finished(
+            deployment=deployment_label,
+            account=account_label,
+            outcome="upstream_unavailable",
+            duration_seconds=time.perf_counter() - started,
+        )
+        raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
+
+    cleanup_done = False
+    request_outcome = "cancelled_streamed"
+
+    async def cleanup_stream() -> None:
+        """Release request/account state once, including pre-iterator disconnects."""
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        plane.metrics.request_finished(
+            deployment=deployment_label,
+            account=account_label,
+            outcome=request_outcome,
+            duration_seconds=time.perf_counter() - started,
+        )
+        await plane.concurrency.release(principal.account_id)
 
     async def stream() -> AsyncIterator[bytes]:
-        # A streamed request holds its slot until the last chunk, which is correct: the
-        # model is still decoding for it. Releasing at return would let an account open
-        # unlimited long-lived streams.
+        nonlocal request_outcome
+        tried: set[str] = set()
+        backend = pool.select(session_key=session_key)
+        max_attempts = min(plane.settings.backend_max_attempts, len(pool))
         try:
-            async with plane.client.stream(
-                "POST",
-                url,
-                json=upstream_payload,
-                headers=headers,
-                timeout=plane.settings.upstream_timeout_seconds,
-            ) as upstream:
-                async for chunk in upstream.aiter_bytes():
-                    yield chunk
-        except httpx.HTTPError as exc:
-            logger.warning("upstream stream failed: %s", exc)
-            # The response has already begun, so the only honest signal left is
-            # an error event in the stream itself.
+            for attempt in range(max_attempts):
+                if backend is None:
+                    break
+                _acquire_backend(plane, pool, backend, deployment_label)
+                sent_any = False
+                retry = False
+                attempt_outcome = "cancelled"
+                try:
+                    async with plane.client.stream(
+                        "POST",
+                        f"{backend.url}{upstream_path}",
+                        json=upstream_payload,
+                        headers=headers,
+                        timeout=plane.settings.upstream_timeout_seconds,
+                    ) as upstream:
+                        health_failed = upstream.status_code >= 500
+                        upstream_error = not upstream.is_success
+                        async for chunk in upstream.aiter_bytes():
+                            sent_any = True
+                            yield chunk
+                    if health_failed:
+                        _record_backend_failure(plane, pool, backend, deployment_label)
+                    else:
+                        pool.health.record_success(backend)
+                        _sync_backend_health(plane, pool, deployment_label)
+                    attempt_outcome = "upstream_error" if upstream_error else "ok"
+                    request_outcome = (
+                        "upstream_error_streamed" if upstream_error else "ok_streamed"
+                    )
+                    return
+                except httpx.HTTPError as exc:
+                    logger.warning("backend %s stream failed: %s", backend.backend_id, exc)
+                    _record_backend_failure(plane, pool, backend, deployment_label)
+                    attempt_outcome = "transport_error"
+                    if (
+                        not sent_any
+                        and _safe_to_retry_transport_failure(exc)
+                        and attempt + 1 < max_attempts
+                    ):
+                        tried.add(backend.backend_id)
+                        retry = True
+                    else:
+                        request_outcome = "upstream_error_streamed"
+                        yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
+                        return
+                finally:
+                    _release_backend(
+                        plane,
+                        pool,
+                        backend,
+                        deployment_label,
+                        attempt_outcome,
+                    )
+
+                if retry:
+                    backend = pool.select(exclude=tried, session_key=session_key)
+                    continue
+
+            request_outcome = "upstream_error_streamed"
             yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
         finally:
-            # Recorded when the stream ends rather than when it starts, because that is
-            # when the model stopped working for this request.
-            plane.metrics.request_finished(
-                deployment=deployment_label,
-                account=account_label,
-                outcome="ok_streamed",
-                duration_seconds=time.perf_counter() - started,
-            )
-            await plane.concurrency.release(principal.account_id)
+            await cleanup_stream()
 
-    # Token counts are not reliably present in a streamed reply, so the record
-    # marks the call without inventing usage numbers.
+    # M6 will parse the terminal usage event; M2 preserves the existing zero-token
+    # streamed record rather than inventing usage.
     plane.record_usage(principal, deployment, {}, streamed=True)
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream)
 
 
 def build_inference_router(plane: DataPlane) -> APIRouter:
@@ -284,6 +591,7 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
         the listener with a Service in front of it; the administrative listener is
         deliberately reachable only from inside the pod.
         """
+        plane.reconcile_pools()
         return Response(content=plane.metrics.render(), media_type="text/plain; version=0.0.4")
 
     @router.post(CHAT_COMPLETIONS_PATH, summary="Chat completion")

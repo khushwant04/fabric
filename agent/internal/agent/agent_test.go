@@ -864,9 +864,9 @@ func (s *observingSink) ObservedConditions(
 }
 
 func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
-	// An operator reconciles after the agent declares intent, so the first pass can
-	// only report what the agent did. When the cluster answers, the control plane must
-	// learn that instead, or it keeps the agent's placeholder forever.
+	// An operator reconciles after the agent declares intent, so the first pass has no
+	// readiness evidence and must fail closed as pending. When the cluster answers, the
+	// control plane must learn the observed phase and counts instead.
 	stub := &controlPlaneStub{
 		desired: []controlplane.DesiredState{{
 			StampID:       stampID,
@@ -900,18 +900,27 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 	if len(stub.statuses) != 1 {
 		t.Fatalf("expected one status, got %d", len(stub.statuses))
 	}
-	first := stub.statuses[0].Conditions[0]["reason"]
-	if first != "AgentAppliedLocalConfiguration" {
-		t.Fatalf("the first report should be the agent's own view, got %v", first)
+	first := stub.statuses[0]
+	if first.Conditions[0]["reason"] != "AwaitingOperatorObservation" {
+		t.Fatalf("the first report should fail closed until the operator observes it, got %+v", first)
+	}
+	if first.Phase != "pending" || first.ReadyReplicas != 0 || first.UnavailableReplicas != 1 {
+		t.Fatalf("pre-observation fleet status = %+v", first)
 	}
 
-	// The operator finishes reconciling.
+	// The operator has one of three replicas ready. Replica counts and phase are part of
+	// the verdict: configuration being applied is not the same as the requested fleet
+	// being fully ready.
+	readyOne, unavailableTwo := 1, 2
 	sink.observed = map[string]agentcontract.ObservedCondition{
 		deployA: {
-			Reason:             "DataPlaneConfigurationRendered",
-			Message:            "rendered",
-			Applied:            true,
-			ObservedGeneration: 1,
+			Phase:               "pending",
+			Reason:              "DataPlaneConfigurationRendered",
+			Message:             "rendered",
+			Applied:             true,
+			ObservedGeneration:  1,
+			ReadyReplicas:       &readyOne,
+			UnavailableReplicas: &unavailableTwo,
 		},
 	}
 
@@ -924,6 +933,10 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 	if got := stub.statuses[1].Conditions[0]["reason"]; got != "DataPlaneConfigurationRendered" {
 		t.Fatalf("forwarded reason = %v", got)
 	}
+	if got := stub.statuses[1]; got.Phase != "pending" || got.ReadyReplicas != 1 ||
+		got.UnavailableReplicas != 2 {
+		t.Fatalf("forwarded fleet status = %+v", got)
+	}
 
 	// A verdict that has not changed is not resent every pass.
 	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
@@ -931,5 +944,227 @@ func TestTheOperatorsVerdictReplacesTheAgentsOwn(t *testing.T) {
 	}
 	if len(stub.statuses) != 2 {
 		t.Fatalf("an unchanged verdict was resent: %d statuses", len(stub.statuses))
+	}
+
+	// Replica progress with the same reason is still a changed verdict and must reach
+	// the control plane; otherwise a partially-ready fleet can stay there forever.
+	readyThree, unavailableNone := 3, 0
+	sink.observed[deployA] = agentcontract.ObservedCondition{
+		Phase:               "ready",
+		Reason:              "DataPlaneConfigurationRendered",
+		Message:             "rendered",
+		Applied:             true,
+		ObservedGeneration:  1,
+		ReadyReplicas:       &readyThree,
+		UnavailableReplicas: &unavailableNone,
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("fourth pass: %v", err)
+	}
+	if len(stub.statuses) != 3 {
+		t.Fatalf("replica progress was not forwarded: %d statuses", len(stub.statuses))
+	}
+	if got := stub.statuses[2]; got.Phase != "ready" || got.ReadyReplicas != 3 ||
+		got.UnavailableReplicas != 0 {
+		t.Fatalf("final fleet status = %+v", got)
+	}
+}
+
+func TestReplicasFlowFromTheDesiredSpecIntoConfiguration(t *testing.T) {
+	// The control plane has carried a replica count since the beginning and the operator
+	// ignored it. spec.replicas must survive into the rendered configuration so a fleet
+	// is expressible (ADR 0010). JSON numbers arrive as float64 through the any-typed
+	// spec, which the extraction must accept.
+	want := map[string]int{deployA: 3, deployB: 1}
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["replicas"] = float64(3)
+	depB := assignment(deployB, customerB, "beta-model", 2, "release-b")
+	// deployB leaves replicas unset, which must render as the single replica it has
+	// always had rather than zero.
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 2,
+			Deployments:   []controlplane.DesiredDeployment{depA, depB},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	file, err := state.ReadDeployments(filepath.Join(dir, "deployments.json"))
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	byID := map[string]state.Deployment{}
+	for _, entry := range file.Deployments {
+		byID[entry.DeploymentID] = entry
+	}
+	if byID[deployA].Replicas != want[deployA] {
+		t.Fatalf("alpha replicas = %d, want %d", byID[deployA].Replicas, want[deployA])
+	}
+	// An unset count renders as zero on disk, which the operator reads as one; the point
+	// is that it is not silently forced to something else here.
+	if byID[deployB].Replicas != 0 {
+		t.Fatalf("beta replicas = %d, want 0 (absent)", byID[deployB].Replicas)
+	}
+}
+
+func TestReplicasReachTheSinkAsSpecReplicas(t *testing.T) {
+	// With an operator present the agent declares intent as a custom resource; the
+	// replica count must travel on that resource's spec so the operator can honour it.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["replicas"] = float64(4)
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments:   []controlplane.DesiredDeployment{depA},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &recordingSink{}
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            sink,
+	}
+	instance := New(config, discardLogger())
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(sink.applies) != 1 || len(sink.applies[0]) != 1 {
+		t.Fatalf("the sink did not receive the assignment: %+v", sink.applies)
+	}
+	if got := sink.applies[0][0].Replicas; got != 4 {
+		t.Fatalf("replicas reaching the sink = %d, want 4", got)
+	}
+}
+
+func TestStrategyFlowsFromTheDesiredSpecIntoConfiguration(t *testing.T) {
+	// The balancing strategy is a per-deployment field the data plane reads (M2, ADR
+	// 0011). It lives under the runtime sub-spec beside kernel_mode and must survive
+	// into the rendered configuration; an unset one renders empty so the data plane
+	// applies its own default of least-in-flight.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["runtime"].(map[string]any)["strategy"] = "weighted"
+	depB := assignment(deployB, customerB, "beta-model", 2, "release-b")
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 2,
+			Deployments:   []controlplane.DesiredDeployment{depA, depB},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	file, err := state.ReadDeployments(filepath.Join(dir, "deployments.json"))
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	byID := map[string]state.Deployment{}
+	for _, entry := range file.Deployments {
+		byID[entry.DeploymentID] = entry
+	}
+	if byID[deployA].Strategy != "weighted" {
+		t.Fatalf("alpha strategy = %q, want weighted", byID[deployA].Strategy)
+	}
+	if byID[deployB].Strategy != "" {
+		t.Fatalf("beta strategy = %q, want empty (data-plane default)", byID[deployB].Strategy)
+	}
+}
+
+func TestUnknownStrategyIsCarriedAsUnset(t *testing.T) {
+	// A value a newer control plane might send must not stop the agent reconciling; it
+	// is treated as unset so the data plane applies its default, mirroring kernel_mode.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["runtime"].(map[string]any)["strategy"] = "not_a_real_strategy"
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments:   []controlplane.DesiredDeployment{depA},
+		}},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	file, err := state.ReadDeployments(filepath.Join(dir, "deployments.json"))
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	if file.Deployments[0].Strategy != "" {
+		t.Fatalf("strategy = %q, want empty for an unknown value", file.Deployments[0].Strategy)
+	}
+}
+
+func TestStrategyReachesTheSinkAsSpecStrategy(t *testing.T) {
+	// With an operator present the agent declares intent as a custom resource; the
+	// strategy must travel on that resource's spec so the operator can publish it into
+	// the data plane's configuration document.
+	depA := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	depA.Spec["runtime"].(map[string]any)["strategy"] = "session_affinity"
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{{
+			StampID:       stampID,
+			MaxGeneration: 1,
+			Deployments:   []controlplane.DesiredDeployment{depA},
+		}},
+	}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &recordingSink{}
+	config := Config{
+		ControlPlaneURL: server.URL,
+		EnrollmentToken: "fab_enroll_token_secret",
+		StampName:       "test-stamp",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL:     "http://model-host:8000",
+		Sink:            sink,
+	}
+	instance := New(config, discardLogger())
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(sink.applies) != 1 || len(sink.applies[0]) != 1 {
+		t.Fatalf("the sink did not receive the assignment: %+v", sink.applies)
+	}
+	if got := sink.applies[0][0].Strategy; got != "session_affinity" {
+		t.Fatalf("strategy reaching the sink = %q, want session_affinity", got)
 	}
 }

@@ -96,6 +96,25 @@ class Settings(BaseSettings):
     #: disables it.
     max_in_flight_per_account: int = Field(default=0, ge=0)
 
+    #: Consecutive connection failures to one backend before it is ejected from the pool.
+    #: A deployment may be served by several model-host replicas (ADR 0010); a backend
+    #: that stops answering is skipped so killing one replica does not fail requests. The
+    #: default tolerates a transient blip while ejecting a genuinely dead host quickly.
+    backend_failure_threshold: int = Field(default=3, ge=1)
+
+    #: How long an ejected backend stays out of the pool before it is tried again. A model
+    #: host that restarted should be used again without the data plane restarting too, so
+    #: ejection is a cooldown rather than a permanent write-off.
+    backend_recovery_seconds: float = Field(default=30.0, ge=0)
+
+    #: How many backends a single non-streamed request may try before giving up. On a
+    #: connection failure the request is retried against another healthy backend; this
+    #: bounds that retry so a pool where every backend is failing degrades to a clear
+    #: UpstreamUnavailable rather than looping. Each attempt is a distinct backend, so the
+    #: effective ceiling is also the pool size; the default is generous enough for a small
+    #: fleet without letting one request stampede a large one.
+    backend_max_attempts: int = Field(default=3, ge=1)
+
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod
     def _strip(cls, value: str) -> str:

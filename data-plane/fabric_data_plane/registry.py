@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 import pathlib
 import threading
 import time
@@ -22,24 +23,68 @@ import uuid
 from typing import Any
 
 from fabric_data_plane.errors import Forbidden, NotFound
+from fabric_data_plane.pool import (
+    DEFAULT_STRATEGY,
+    STRATEGIES,
+    Backend,
+    BackendHealth,
+    BackendPool,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
 class Deployment:
-    """One locally served deployment."""
+    """One locally served deployment.
+
+    A deployment is served by a *pool* of backends (ADR 0010). For backward
+    compatibility a single ``upstream_url`` is still accepted and becomes a one-backend
+    pool: constructing ``Deployment(..., upstream_url=...)`` keeps working, and so does
+    the existing single-``upstream_url`` ``deployments.json`` shape. Supplying
+    ``backends`` (a list of :class:`~fabric_data_plane.pool.Backend`) is the fleet shape;
+    the two are mutually exclusive inputs and ``backends`` wins when both are present.
+    """
 
     deployment_id: uuid.UUID
     account_id: uuid.UUID
     model_alias: str
-    upstream_url: str
+    upstream_url: str | None = None
     upstream_model: str | None = None
+    backends: tuple[Backend, ...] = ()
+    #: How the pool balances across ``backends``. Defaults to least-in-flight, which is
+    #: also what an entry that predates the field gets (M2, ADR 0011). The vocabulary is
+    #: validated by the control plane; an unknown value here defaults rather than raising.
+    strategy: str = DEFAULT_STRATEGY
+
+    def __post_init__(self) -> None:
+        if self.strategy not in STRATEGIES:
+            object.__setattr__(self, "strategy", DEFAULT_STRATEGY)
+        if not self.backends:
+            if not self.upstream_url:
+                raise ValueError("a deployment needs an upstream_url or a backends list")
+            url = self.upstream_url.rstrip("/")
+            object.__setattr__(self, "backends", (Backend(url=url, backend_id=url),))
 
     @property
     def upstream_model_name(self) -> str:
         """Model name the upstream host expects, defaulting to the alias."""
         return self.upstream_model or self.model_alias
+
+    def build_pool(
+        self, *, failure_threshold: int = 3, recovery_seconds: float = 30.0
+    ) -> BackendPool:
+        """Build a fresh pool with per-backend health and this deployment's strategy.
+
+        The caller memoises the result so health survives across requests; the pool is
+        built here so the backend set and its balancing strategy are defined in one place.
+        """
+        health = BackendHealth(
+            list(self.backends),
+            failure_threshold=failure_threshold,
+            recovery_seconds=recovery_seconds,
+        )
+        return BackendPool(list(self.backends), health, strategy=self.strategy)
 
 
 class DeploymentRegistry:
@@ -65,16 +110,49 @@ class DeploymentRegistry:
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> DeploymentRegistry:
         deployments = [
-            Deployment(
-                deployment_id=uuid.UUID(str(entry["deployment_id"])),
-                account_id=uuid.UUID(str(entry["account_id"])),
-                model_alias=str(entry["model_alias"]),
-                upstream_url=str(entry["upstream_url"]).rstrip("/"),
-                upstream_model=entry.get("upstream_model"),
-            )
-            for entry in payload.get("deployments", [])
+            cls._deployment_from_entry(entry) for entry in payload.get("deployments", [])
         ]
         return cls(deployments)
+
+    @staticmethod
+    def _deployment_from_entry(entry: dict[str, Any]) -> Deployment:
+        """Parse one configuration entry into a Deployment.
+
+        Accepts both shapes: a ``backends`` list (each with a ``url`` and an optional
+        ``id`` and ``weight``) is the fleet shape, and a single ``upstream_url`` is the
+        legacy shape that becomes a one-backend pool. ``backends`` wins if both appear,
+        so a configuration mid-migration is unambiguous.
+        """
+        raw_backends = entry.get("backends")
+        backends: tuple[Backend, ...] = ()
+        if raw_backends:
+            parsed: list[Backend] = []
+            for item in raw_backends:
+                url = str(item["url"]).rstrip("/")
+                weight = float(item.get("weight", 1.0))
+                if not math.isfinite(weight) or weight < 0:
+                    raise ValueError("backend weight must be finite and non-negative")
+                parsed.append(
+                    Backend(
+                        url=url,
+                        backend_id=str(item.get("id") or url),
+                        weight=weight,
+                    )
+                )
+            backends = tuple(parsed)
+
+        upstream_url = entry.get("upstream_url")
+        raw_strategy = entry.get("strategy")
+        strategy = str(raw_strategy) if raw_strategy in STRATEGIES else DEFAULT_STRATEGY
+        return Deployment(
+            deployment_id=uuid.UUID(str(entry["deployment_id"])),
+            account_id=uuid.UUID(str(entry["account_id"])),
+            model_alias=str(entry["model_alias"]),
+            upstream_url=str(upstream_url).rstrip("/") if upstream_url else None,
+            upstream_model=entry.get("upstream_model"),
+            backends=backends,
+            strategy=strategy,
+        )
 
     @classmethod
     def load(cls, path: str | pathlib.Path) -> DeploymentRegistry:
@@ -105,6 +183,10 @@ class DeploymentRegistry:
             # account's deployments beyond being refused.
             raise Forbidden("model_not_available", "Model is not available to this account")
         return deployment
+
+    def deployment_ids(self) -> frozenset[uuid.UUID]:
+        """Stable identities currently present, used to retire per-deployment state."""
+        return frozenset(self._by_id)
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         """Deployments this account may list."""
@@ -202,6 +284,9 @@ class ReloadingRegistry:
     # The data plane treats this like a registry, so the read surface matches.
     def resolve(self, model: str, *, account_id: uuid.UUID) -> Deployment:
         return self._current().resolve(model, account_id=account_id)
+
+    def deployment_ids(self) -> frozenset[uuid.UUID]:
+        return self._current().deployment_ids()
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         return self._current().for_account(account_id)

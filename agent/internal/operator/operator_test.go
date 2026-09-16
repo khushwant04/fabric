@@ -233,6 +233,38 @@ func TestDeclaredDeploymentBecomesDataPlaneConfiguration(t *testing.T) {
 	}
 }
 
+func TestStrategyIsPublishedIntoDataPlaneConfiguration(t *testing.T) {
+	// The balancing strategy is a per-deployment field the data plane reads (M2, ADR
+	// 0011). The operator carries it from the CR spec into the config document.
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.Strategy = "weighted"
+	state, client := newAPIServer(t, item)
+
+	if _, err := reconciler(client).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	entries := decodeConfig(t, state.configMap)
+	if len(entries) != 1 || entries[0].Strategy != "weighted" {
+		t.Fatalf("strategy not published: %+v", entries)
+	}
+}
+
+func TestAbsentStrategyIsOmittedFromDataPlaneConfiguration(t *testing.T) {
+	// A deployment that names no strategy renders none, so the data plane applies its
+	// own default of least-in-flight rather than being pinned by the operator.
+	state, client := newAPIServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := reconciler(client).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	entries := decodeConfig(t, state.configMap)
+	if len(entries) != 1 || entries[0].Strategy != "" {
+		t.Fatalf("strategy should be omitted when unset: %+v", entries)
+	}
+}
+
 func TestStatusReportsWhatWasActuallyDone(t *testing.T) {
 	state, client := newAPIServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 3))
 

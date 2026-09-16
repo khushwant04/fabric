@@ -50,6 +50,16 @@ type Deployment struct {
 	// plane reads the keys it knows and ignores the rest, while the operator needs to
 	// know which decode kernel the deployment asked for.
 	KernelMode string `json:"kernel_mode,omitempty"`
+	// Replicas is how many model-host replicas the deployment asks for. Carried for the
+	// operator, which turns it into the Deployment's replica count (ADR 0010); the data
+	// plane ignores it. Zero means the field was absent, which the operator reads as one.
+	Replicas int `json:"replicas,omitempty"`
+	// Strategy is how the data plane balances across the deployment's backends (M2,
+	// ADR 0011): least_in_flight (default), round_robin, session_affinity, or weighted.
+	// Unlike the other fields this one the data plane does read, once the operator has
+	// carried it through the CR into the config document. Empty means the data plane's
+	// own default of least-in-flight.
+	Strategy string `json:"strategy,omitempty"`
 }
 
 // DeploymentsFile is the document the data plane loads.

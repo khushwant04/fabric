@@ -1241,6 +1241,17 @@
             "minLength": 1,
             "title": "Release",
             "type": "string"
+          },
+          "strategy": {
+            "default": "least_in_flight",
+            "enum": [
+              "least_in_flight",
+              "round_robin",
+              "session_affinity",
+              "weighted"
+            ],
+            "title": "Strategy",
+            "type": "string"
           }
         },
         "required": [

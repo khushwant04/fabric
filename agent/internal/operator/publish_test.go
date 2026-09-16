@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/khushwant04/fabric/agent/internal/state"
@@ -131,5 +132,57 @@ func TestObservedStatusComesFromTheCluster(t *testing.T) {
 	// control plane learns what the cluster did, not what the agent asked for.
 	if status.Conditions[0].Reason != "DataPlaneConfigurationRendered" {
 		t.Fatalf("unexpected reason: %+v", status.Conditions[0])
+	}
+}
+
+func TestObservedStatusIgnoresThePreviousGeneration(t *testing.T) {
+	declared := resource("fabric-dep-a", "dep-a", "acct-a", "alpha-model", 3)
+	declared.Metadata.Labels = map[string]string{"fabric.khushwant.dev/stamp-id": stampID}
+	declared.Status = &Status{
+		Phase:              "ready",
+		ObservedGeneration: 2,
+		Conditions: []Condition{{
+			Type: ConditionApplied, Status: "True", Reason: "ModelHostAndConfigurationApplied",
+		}},
+	}
+	_, client := newAPIServer(t, declared)
+
+	observed, err := NewPublisher(client, namespace, stampID).Observed(context.Background())
+	if err != nil {
+		t.Fatalf("observed: %v", err)
+	}
+	if _, present := observed["dep-a"]; present {
+		t.Fatalf("stale generation-2 status was forwarded for generation 3: %v", observed)
+	}
+}
+
+func TestStrategyContractFlowsFromAgentStateThroughCRToDataPlaneDocument(t *testing.T) {
+	publisher := NewPublisher(nil, namespace, stampID)
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID: "dep-a",
+		AccountID:    "acct-a",
+		ModelAlias:   "alpha-model",
+		UpstreamURL:  "http://legacy.test",
+		Strategy:     "session_affinity",
+	})
+	if declared.Spec.Strategy != "session_affinity" {
+		t.Fatalf("publisher dropped strategy: %+v", declared.Spec)
+	}
+
+	document, err := renderConfig(
+		[]ModelDeployment{declared},
+		map[string][]dataPlaneBackend{"dep-a": {{URL: "http://10.0.0.1:8000", ID: "pod-a"}}},
+	)
+	if err != nil {
+		t.Fatalf("render config: %v", err)
+	}
+	var payload struct {
+		Deployments []dataPlaneEntry `json:"deployments"`
+	}
+	if err := json.Unmarshal([]byte(document), &payload); err != nil {
+		t.Fatalf("decode rendered document: %v", err)
+	}
+	if len(payload.Deployments) != 1 || payload.Deployments[0].Strategy != "session_affinity" {
+		t.Fatalf("rendered strategy = %+v", payload.Deployments)
 	}
 }

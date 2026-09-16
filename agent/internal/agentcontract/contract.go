@@ -8,8 +8,11 @@ package agentcontract
 
 // ObservedCondition is what a cluster reported about one deployment.
 type ObservedCondition struct {
-	Reason             string
-	Message            string
-	Applied            bool
-	ObservedGeneration int64
+	Phase               string
+	Reason              string
+	Message             string
+	Applied             bool
+	ObservedGeneration  int64
+	ReadyReplicas       *int
+	UnavailableReplicas *int
 }

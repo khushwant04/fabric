@@ -3,6 +3,8 @@ package operator
 import (
 	"context"
 	"fmt"
+	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -385,10 +387,11 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 			Labels:    labels,
 		},
 		Spec: map[string]any{
-			// One replica per deployment: a GPU is not shared between replicas, and
-			// scaling is a placement decision the control plane makes by placing on
-			// more stamps.
-			"replicas": 1,
+			// One pod per replica, each holding one GPU: a fleet is expressed by asking
+			// for more than one replica (ADR 0010), and the data plane balances across
+			// them. Defaults to one when the deployment does not ask, so a deployment
+			// that predates the field is unchanged.
+			"replicas": item.Spec.DesiredReplicas(),
 			"selector": map[string]any{
 				"matchLabels": map[string]string{
 					"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
@@ -423,6 +426,12 @@ func (r *Reconciler) desiredHostService(item ModelDeployment) service {
 			},
 		},
 		Spec: map[string]any{
+			// Headless (clusterIP: None) so the pod endpoints are individually
+			// discoverable rather than hidden behind one virtual IP (ADR 0010). The data
+			// plane balances across the concrete backends the operator publishes; it does
+			// not rely on kube-proxy spreading a ClusterIP, which would be opaque to it
+			// and could not be ejected when one replica fails.
+			"clusterIP": "None",
 			"selector": map[string]string{
 				"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
 				"app.kubernetes.io/name":             "fabric-model-host",
@@ -444,9 +453,156 @@ func (r *Reconciler) hostUpstream(item ModelDeployment) string {
 	)
 }
 
-// applyHost creates or updates the workload for one deployment and reports whether
-// its server is ready.
-func (r *Reconciler) applyHost(ctx context.Context, item ModelDeployment) (bool, error) {
+// endpointSlice is the subset of a discovery.k8s.io EndpointSlice the operator reads.
+type endpointSlice struct {
+	AddressType string                  `json:"addressType,omitempty"`
+	Endpoints   []endpointSliceEndpoint `json:"endpoints"`
+}
+
+type endpointSliceEndpoint struct {
+	Addresses  []string `json:"addresses"`
+	Conditions struct {
+		// A nil Ready is treated as ready, matching Kubernetes: an unset condition on
+		// a slice means the endpoint's readiness is not being reported, not that it
+		// is unready.
+		Ready *bool `json:"ready,omitempty"`
+	} `json:"conditions"`
+	// TargetRef identifies the pod independently of its current address. The UID is
+	// used as the backend id when Kubernetes supplies it, so metrics and health retain
+	// the same identity while the operator refreshes a changed dial address.
+	TargetRef *struct {
+		Kind      string `json:"kind,omitempty"`
+		Namespace string `json:"namespace,omitempty"`
+		Name      string `json:"name,omitempty"`
+		UID       string `json:"uid,omitempty"`
+	} `json:"targetRef,omitempty"`
+}
+
+type endpointSliceList struct {
+	Items []endpointSlice `json:"items"`
+}
+
+type discoveredBackend struct {
+	backend  dataPlaneBackend
+	priority int
+}
+
+func endpointAddressPriority(addressType string) int {
+	switch addressType {
+	case "IPv4":
+		return 0
+	case "IPv6":
+		return 1
+	case "FQDN":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func endpointBackendID(endpoint endpointSliceEndpoint, address string) string {
+	if endpoint.TargetRef == nil {
+		return address
+	}
+	if endpoint.TargetRef.UID != "" {
+		return endpoint.TargetRef.UID
+	}
+	if endpoint.TargetRef.Name != "" {
+		if endpoint.TargetRef.Namespace != "" {
+			return endpoint.TargetRef.Namespace + "/" + endpoint.TargetRef.Name
+		}
+		return endpoint.TargetRef.Name
+	}
+	return address
+}
+
+// discoverBackends resolves the concrete pool for a deployment (ADR 0010).
+//
+// It lists the EndpointSlices the headless Service selects and turns each ready pod
+// address into a backend. When no ready endpoint is resolvable yet, for example while
+// the pods are still starting, it falls back to the Service's own DNS name as a single
+// backend so the data plane is never handed an empty pool and can queue behind
+// readiness rather than fail. Discovery is on the reconcile path, not the request path,
+// so a slow or failed lookup degrades to the Service address instead of stalling a
+// request.
+func (r *Reconciler) discoverBackends(ctx context.Context, item ModelDeployment) []dataPlaneBackend {
+	fallback := []dataPlaneBackend{{URL: r.hostUpstream(item)}}
+
+	selector := fmt.Sprintf("kubernetes.io/service-name%%3D%s", hostName(item))
+	path := fmt.Sprintf(
+		"/apis/discovery.k8s.io/v1/namespaces/%s/endpointslices?labelSelector=%s",
+		r.options.Namespace, selector,
+	)
+	var list endpointSliceList
+	if err := r.client.Get(ctx, path, &list); err != nil {
+		// Not fatal: the Service DNS name still reaches the ready pods through the
+		// cluster's own resolution, so the deployment is served while discovery recovers.
+		r.options.Log.Warn("could not read endpoints; publishing the service address",
+			"deployment", item.Spec.DeploymentID, "error", err)
+		return fallback
+	}
+
+	// EndpointSlices can contain the same pod in more than one address family. Keep one
+	// deterministic dial address per pod identity, preferring IPv4 then IPv6 then FQDN.
+	// Without a targetRef the address itself is the only truthful identity available.
+	byID := map[string]discoveredBackend{}
+	for _, slice := range list.Items {
+		priority := endpointAddressPriority(slice.AddressType)
+		for _, endpoint := range slice.Endpoints {
+			if endpoint.Conditions.Ready != nil && !*endpoint.Conditions.Ready {
+				continue
+			}
+			for _, address := range endpoint.Addresses {
+				if address == "" {
+					continue
+				}
+				id := endpointBackendID(endpoint, address)
+				candidate := discoveredBackend{
+					backend: dataPlaneBackend{
+						URL: "http://" + net.JoinHostPort(
+							address, strconv.Itoa(r.options.ModelHost.Port),
+						),
+						ID: id,
+					},
+					priority: priority,
+				}
+				existing, exists := byID[id]
+				if !exists || candidate.priority < existing.priority ||
+					(candidate.priority == existing.priority &&
+						candidate.backend.URL < existing.backend.URL) {
+					byID[id] = candidate
+				}
+			}
+		}
+	}
+
+	if len(byID) == 0 {
+		return fallback
+	}
+	backends := make([]dataPlaneBackend, 0, len(byID))
+	for _, candidate := range byID {
+		backends = append(backends, candidate.backend)
+	}
+	// Sorted so an unchanged endpoint set renders an identical document and the data
+	// plane does not reload for a reordering.
+	sort.Slice(backends, func(i, j int) bool { return backends[i].ID < backends[j].ID })
+	return backends
+}
+
+type modelHostReadiness struct {
+	Ready   int
+	Desired int
+}
+
+func (s modelHostReadiness) fullyReady() bool {
+	return s.Desired > 0 && s.Ready >= s.Desired
+}
+
+// applyHost creates or updates the workload for one deployment and reports how many
+// replicas are ready against how many were requested.
+func (r *Reconciler) applyHost(
+	ctx context.Context, item ModelDeployment,
+) (modelHostReadiness, error) {
 	return r.applyHostWithRollout(ctx, item, RolloutDecision{Release: releaseOf(item)}, rolloutState{})
 }
 
@@ -454,7 +610,8 @@ func (r *Reconciler) applyHost(ctx context.Context, item ModelDeployment) (bool,
 // declared one except while rolling back.
 func (r *Reconciler) applyHostWithRollout(
 	ctx context.Context, item ModelDeployment, decision RolloutDecision, state rolloutState,
-) (bool, error) {
+) (modelHostReadiness, error) {
+	readiness := modelHostReadiness{Desired: item.Spec.DesiredReplicas()}
 	name := hostName(item)
 
 	// The release actually served may differ from the declaration, so the workload is
@@ -472,11 +629,11 @@ func (r *Reconciler) applyHostWithRollout(
 	case kube.IsNotFound(err):
 		path := fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", r.options.Namespace)
 		if err := r.client.Create(ctx, path, desired, nil); err != nil {
-			return false, fmt.Errorf("create model host %s: %w", name, err)
+			return readiness, fmt.Errorf("create model host %s: %w", name, err)
 		}
 		r.options.Log.Info("model host created", "deployment", name)
 	case err != nil:
-		return false, fmt.Errorf("read model host %s: %w", name, err)
+		return readiness, fmt.Errorf("read model host %s: %w", name, err)
 	default:
 		// Patched rather than replaced, so fields defaulted by the API server and
 		// anything a cluster admission controller added are left alone.
@@ -488,12 +645,12 @@ func (r *Reconciler) applyHostWithRollout(
 			},
 		}
 		if err := r.client.MergePatch(ctx, r.deploymentPath(name), patch, nil); err != nil {
-			return false, fmt.Errorf("update model host %s: %w", name, err)
+			return readiness, fmt.Errorf("update model host %s: %w", name, err)
 		}
 	}
 
 	if err := r.applyHostService(ctx, item); err != nil {
-		return false, err
+		return readiness, err
 	}
 
 	// Readiness comes from the workload's own status rather than being assumed from a
@@ -501,12 +658,13 @@ func (r *Reconciler) applyHostWithRollout(
 	// inside it has loaded a model.
 	var current deployment
 	if err := r.client.Get(ctx, r.deploymentPath(name), &current); err != nil {
-		return false, fmt.Errorf("read model host status %s: %w", name, err)
+		return readiness, fmt.Errorf("read model host status %s: %w", name, err)
 	}
 	if current.Status == nil {
-		return false, nil
+		return readiness, nil
 	}
-	return current.Status.ReadyReplicas > 0, nil
+	readiness.Ready = current.Status.ReadyReplicas
+	return readiness, nil
 }
 
 func (r *Reconciler) applyHostService(ctx context.Context, item ModelDeployment) error {
@@ -524,6 +682,22 @@ func (r *Reconciler) applyHostService(ctx context.Context, item ModelDeployment)
 	}
 	if err != nil {
 		return fmt.Errorf("read model host service %s: %w", name, err)
+	}
+
+	// Services created before ADR 0010 have an allocated ClusterIP. clusterIP is
+	// immutable, so patching selector/ports cannot make them headless; recreate the
+	// operator-owned Service in place. Pods are untouched, and the data plane keeps its
+	// previously published concrete endpoint addresses during this short migration.
+	if clusterIP, _ := existing.Spec["clusterIP"].(string); clusterIP != "" && clusterIP != "None" {
+		if err := r.client.Delete(ctx, r.servicePath(name)); err != nil && !kube.IsNotFound(err) {
+			return fmt.Errorf("delete legacy model host service %s: %w", name, err)
+		}
+		path := fmt.Sprintf("/api/v1/namespaces/%s/services", r.options.Namespace)
+		if err := r.client.Create(ctx, path, desired, nil); err != nil {
+			return fmt.Errorf("recreate model host service %s as headless: %w", name, err)
+		}
+		r.options.Log.Info("model host service migrated to headless", "service", name)
+		return nil
 	}
 
 	// A Service's clusterIP is immutable, so only the parts that may change are sent.
