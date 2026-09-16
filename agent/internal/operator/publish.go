@@ -130,6 +130,7 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			KernelMode:    deployment.KernelMode,
 			Replicas:      deployment.Replicas,
 			Strategy:      deployment.Strategy,
+			GPUCount:      deployment.GPUCount,
 		},
 	}
 }

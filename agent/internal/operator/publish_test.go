@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/khushwant04/fabric/agent/internal/state"
@@ -184,5 +185,57 @@ func TestStrategyContractFlowsFromAgentStateThroughCRToDataPlaneDocument(t *test
 	}
 	if len(payload.Deployments) != 1 || payload.Deployments[0].Strategy != "session_affinity" {
 		t.Fatalf("rendered strategy = %+v", payload.Deployments)
+	}
+}
+
+func TestGPUCountContractFlowsFromAgentStateIntoTheCustomResource(t *testing.T) {
+	// The control plane admits a placement against replicas x gpu_count (ADR 0013). The
+	// number has to survive the trip to the cluster or the check is measuring a value that
+	// governs nothing.
+	publisher := NewPublisher(nil, namespace, stampID)
+
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID: "dep-a",
+		AccountID:    "acct-a",
+		ModelAlias:   "alpha-model",
+		UpstreamURL:  "http://legacy.test",
+		Replicas:     2,
+		GPUCount:     4,
+	})
+
+	if declared.Spec.GPUCount != 4 {
+		t.Fatalf("publisher dropped the gpu count: %+v", declared.Spec)
+	}
+	// The CRD spells it gpuCount; a drifted name would be pruned by the API server and the
+	// pod would silently fall back to the stamp's own setting.
+	encoded, err := json.Marshal(declared.Spec)
+	if err != nil {
+		t.Fatalf("encode spec: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"gpuCount":4`) {
+		t.Fatalf("spec does not carry gpuCount: %s", encoded)
+	}
+	if got := declared.Spec.DesiredGPUs(1); got != 4 {
+		t.Fatalf("DesiredGPUs = %d, want the declared 4", got)
+	}
+}
+
+func TestAnUndeclaredGPUCountFallsBackToTheStampsSetting(t *testing.T) {
+	publisher := NewPublisher(nil, namespace, stampID)
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID: "dep-a",
+		AccountID:    "acct-a",
+		ModelAlias:   "alpha-model",
+		UpstreamURL:  "http://legacy.test",
+	})
+
+	// Omitted from the wire form, so the API server stores nothing and an older control
+	// plane's declaration is unchanged.
+	encoded, _ := json.Marshal(declared.Spec)
+	if strings.Contains(string(encoded), "gpuCount") {
+		t.Fatalf("an absent gpu count was serialised: %s", encoded)
+	}
+	if got := declared.Spec.DesiredGPUs(2); got != 2 {
+		t.Fatalf("DesiredGPUs = %d, want the configured 2", got)
 	}
 }

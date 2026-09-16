@@ -1,6 +1,10 @@
 # Direction
 
-**Status:** Proposal. Nothing here is implemented.
+**Status:** M1–M4 implemented (ADRs [0010](context/adrs/0010-operator-publishes-backends-data-plane-balances.md),
+[0011](context/adrs/0011-per-deployment-inference-routing-strategies.md),
+[0012](context/adrs/0012-acknowledged-zero-downtime-rollouts.md),
+[0013](context/adrs/0013-placement-admits-only-what-a-stamp-can-hold.md)). M5 and M6 are still
+proposals. Each milestone below states its own status.
 
 Supersedes `docs/research-directions.md`, which read the project as kernel research. That was
 the wrong frame. Fabric is a **managed inference platform**: someone runs one command on their
@@ -61,7 +65,8 @@ splitting.
 (`control-plane/app/services/deployments.py`) takes `stamp_id` from the caller and only
 *authorizes* it. Every heartbeat reports `capabilities`, `allocatable_gpus`, `requested_gpus`
 and `region`, and nothing reads them. A deployment asking for 8 H100s onto a single-T4 stamp
-returns `201` and then silently never serves.
+returns `201` and then silently never serves. *Fixed by M4, which also had to make the report
+a measurement first: the agent was copying a startup-time struct, so `gpus` was always empty.*
 
 ---
 
@@ -70,6 +75,8 @@ returns `201` and then silently never serves.
 One project, six milestones, in dependency order. M1 unlocks everything after it.
 
 ### M1 — Make a fleet expressible
+
+**Implemented** (ADR [0010](context/adrs/0010-operator-publishes-backends-data-plane-balances.md)).
 
 `upstream_url: str` becomes a pool of backends with per-backend health, and the operator honours
 `replicas`.
@@ -90,6 +97,8 @@ reloads it on change — the pool is a field on a document that is already being
 
 ### M2 — The inference router
 
+**Implemented** (ADR [0011](context/adrs/0011-per-deployment-inference-routing-strategies.md)).
+
 Strategies, per deployment, chosen by the customer:
 
 | Strategy | When it is right |
@@ -106,6 +115,8 @@ Plus the things a router owes a customer regardless of strategy: retry on connec
 
 ### M3 — Rollout without downtime
 
+**Implemented** (ADR [0012](context/adrs/0012-acknowledged-zero-downtime-rollouts.md)).
+
 Today the strategy is `Recreate`: every release change takes the model **fully offline for the
 whole cold start**, measured at ~510 s. That is the single worst operational property of the
 platform, and it is the thing a "fast production rollout" promise most directly contradicts.
@@ -120,17 +131,36 @@ request.
 
 ### M4 — Placement that checks fit
 
+**Implemented** (ADR [0013](context/adrs/0013-placement-admits-only-what-a-stamp-can-hold.md)).
+
 `stamp_id` becomes optional. When absent, filter stamps by GPU class, free GPU count and region,
 then pick the least loaded. When present, still *validate* it — an impossible placement must
 fail at the API, not silently at reconcile time.
 
-All the inputs are already collected and already ignored. `applyProfile` in `hardware.go` even
-computes the smallest GPU's memory and discards it, which is exactly the number that should be
-deriving `max_model_len`, `max_num_seqs` and `gpu_memory_utilization` instead of a per-stamp
-Helm value.
+The plan said all the inputs were already collected and merely ignored. Half of that was wrong,
+and finding out changed the shape of the milestone: the capability report was not a measurement.
+The agent copied `config.Capabilities` — built once at startup from flags — onto every heartbeat,
+so `gpus` was always `[]` and `requested_gpus` always `0`. A fit check over that would either
+reject everything or mean nothing, so the agent now reads its own cluster's nodes and pod claims,
+sharing the operator's profiling code rather than growing a second GPU table.
+
+Three further things the plan did not anticipate:
+
+- **`gpu_count` had to reach the pod.** It was validated centrally and then ignored, with the
+  container's `nvidia.com/gpu` limit coming from a per-stamp Helm value. Admitting against a
+  number that does not govern the workload is theatre, so it now travels into the CR.
+- **Commitment cannot come from the heartbeat.** A placement is committed immediately and
+  reported a heartbeat later, so admission counts its own writes or a burst overcommits.
+- **A class is a minimum, not a product.** Comparing exact compute capability would refuse an
+  A100 for an `a10` request; matching product strings would make every new SKU an outage.
+
+`applyProfile`'s discarded `smallestMemory` is used, though not as the plan assumed: it clamps
+`gpu_memory_utilization` when a fraction of a small device leaves too little absolute headroom
+for the CUDA context. Deriving `max_model_len` and `max_num_seqs` from it needs the model's own
+KV geometry, which the operator does not have, so that part is *not* claimed.
 
 *Exit:* declaring a model with no stamp lands it somewhere it fits, or is rejected with the
-reason.
+reason. Met.
 
 ### M5 — Scale, which means attacking the cold start first
 

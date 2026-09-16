@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import Conflict, Forbidden, NotFound
+from app.core.errors import BadRequest, Conflict, Forbidden, NotFound
 from app.core.platform import is_supported_orchestrator
 from app.core.tenancy import elevated
 from app.models import (
@@ -27,6 +27,7 @@ from app.models import (
     DeploymentStatus,
     InferenceStamp,
 )
+from app.services import placement
 from app.services.accounts import get_account, get_system_account
 from app.services.audit import publish_outbox, record_audit
 
@@ -113,14 +114,21 @@ async def _next_stamp_generation(session: AsyncSession, stamp_id: uuid.UUID, flo
     generation two for one deployment would never be told about a newly placed deployment
     whose first version is one, because it sits below the watermark. The placement existed,
     the API reported it assigned, and nothing was ever served.
+
+    Elevated because "across the stamp" means across every account on it. A managed stamp
+    serves several, and row-level security would otherwise scope this maximum to the caller,
+    computing a watermark below what the stamp has already acknowledged for somebody else —
+    reintroducing exactly the silent non-delivery the watermark exists to prevent. Read-only,
+    and the elevation ends before the placement is written.
     """
-    current = (
-        await session.execute(
-            select(func.coalesce(func.max(DeploymentPlacement.desired_generation), 0)).where(
-                DeploymentPlacement.stamp_id == stamp_id
+    async with elevated(session):
+        current = (
+            await session.execute(
+                select(
+                    func.coalesce(func.max(DeploymentPlacement.desired_generation), 0)
+                ).where(DeploymentPlacement.stamp_id == stamp_id)
             )
-        )
-    ).scalar_one()
+        ).scalar_one()
     return max(floor, int(current) + 1)
 
 
@@ -138,11 +146,57 @@ async def _bump_placements(session: AsyncSession, deployment: Deployment) -> Non
         .all()
     )
     # Per stamp, because each stamp tracks its own watermark and they are not in step.
-    for placement in placements:
-        placement.desired_generation = await _next_stamp_generation(
-            session, placement.stamp_id, deployment.generation
+    for record in placements:
+        record.desired_generation = await _next_stamp_generation(
+            session, record.stamp_id, deployment.generation
         )
-        placement.status = "assigned"
+        record.status = "assigned"
+
+
+async def _refuse_placements_that_no_longer_fit(
+    session: AsyncSession, *, deployment: Deployment, spec: dict[str, Any]
+) -> None:
+    """Raise unless every stamp holding this deployment can still hold it under ``spec``.
+
+    Checked before the spec is stored, so a refused update leaves the deployment exactly as
+    it was rather than depending on a rollback.
+    """
+    demand = await _demand_for_spec(spec)
+
+    existing = (
+        (
+            await session.execute(
+                select(DeploymentPlacement).where(
+                    DeploymentPlacement.account_id == deployment.account_id,
+                    DeploymentPlacement.deployment_id == deployment.id,
+                    DeploymentPlacement.status != "terminating",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not existing:
+        return
+
+    for record in existing:
+        async with elevated(session):
+            stamp = (
+                await session.execute(
+                    select(InferenceStamp).where(InferenceStamp.id == record.stamp_id)
+                )
+            ).scalar_one_or_none()
+        if stamp is None or stamp.revoked_at is not None:
+            # A revoked stamp serves nothing either way, so its capacity is not a reason to
+            # refuse an edit. Withdrawing the placement is a separate action.
+            continue
+        await _refuse_if_stamp_cannot_fit(
+            session,
+            stamp=stamp,
+            deployment_id=deployment.id,
+            demand=demand,
+            require_live=False,
+        )
 
 
 async def update_deployment(
@@ -153,8 +207,15 @@ async def update_deployment(
     spec: dict[str, Any],
     actor_principal_id: uuid.UUID | None,
 ) -> Deployment:
-    """Replace the desired spec and advance the generation monotonically."""
+    """Replace the desired spec and advance the generation monotonically.
+
+    The new spec is checked against every stamp already holding this deployment before
+    anything is written. Raising ``replicas`` or ``gpu_count`` overcommits a stamp exactly as
+    an oversized placement does, and refusing at reconcile time is the failure ADR 0013
+    exists to move to the API.
+    """
     deployment = await get_deployment(session, account_id, deployment_id)
+    await _refuse_placements_that_no_longer_fit(session, deployment=deployment, spec=spec)
     deployment.desired_spec = spec
     deployment.generation += 1
     deployment.status = "pending"
@@ -225,6 +286,41 @@ async def delete_deployment(
     )
 
 
+def _stamp_unavailable(
+    stamp: InferenceStamp, *, account: Account, system_account: Account | None
+) -> Forbidden | None:
+    """Why this account may not deploy onto this stamp, or ``None`` if it may.
+
+    Returned rather than raised because automatic selection has to ask the same question of
+    every candidate and skip the ones that answer badly, while an explicitly named stamp must
+    still fail with these exact codes. One implementation, two callers, so selection cannot
+    drift into handing out capacity the entitlement checks protect.
+    """
+    if stamp.mode == MODE_BYOI:
+        if stamp.account_id != account.id:
+            return Forbidden("stamp_not_available", "Stamp belongs to a different account")
+        return None
+
+    if stamp.mode == MODE_MANAGED:
+        if system_account is None or stamp.account_id != system_account.id:
+            return Forbidden("stamp_not_available", "Managed stamp ownership is invalid")
+        if not is_supported_orchestrator(stamp.orchestrator):
+            return Forbidden(
+                "unsupported_orchestrator",
+                "Managed stamp runs an unsupported Kubernetes distribution",
+                orchestrator=stamp.orchestrator,
+            )
+        if not account.managed_capacity_enabled:
+            return Forbidden(
+                "managed_capacity_not_enabled",
+                "Account is not entitled to managed capacity",
+            )
+        return None
+
+    # Unknown modes fail closed.
+    return Forbidden("unsupported_stamp_mode", "Stamp ownership mode is not supported")
+
+
 async def _authorize_stamp_for_account(
     session: AsyncSession, *, account: Account, stamp_id: uuid.UUID
 ) -> InferenceStamp:
@@ -241,30 +337,129 @@ async def _authorize_stamp_for_account(
     if stamp is None or stamp.revoked_at is not None:
         raise NotFound("stamp_not_found", "Inference stamp does not exist")
 
-    if stamp.mode == MODE_BYOI:
-        if stamp.account_id != account.id:
-            raise Forbidden("stamp_not_available", "Stamp belongs to a different account")
-        return stamp
-
+    system_account = None
     if stamp.mode == MODE_MANAGED:
         system_account = await get_system_account(session)
-        if system_account is None or stamp.account_id != system_account.id:
-            raise Forbidden("stamp_not_available", "Managed stamp ownership is invalid")
-        if not is_supported_orchestrator(stamp.orchestrator):
-            raise Forbidden(
-                "unsupported_orchestrator",
-                "Managed stamp runs an unsupported Kubernetes distribution",
-                orchestrator=stamp.orchestrator,
-            )
-        if not account.managed_capacity_enabled:
-            raise Forbidden(
-                "managed_capacity_not_enabled",
-                "Account is not entitled to managed capacity",
-            )
-        return stamp
+    refusal = _stamp_unavailable(stamp, account=account, system_account=system_account)
+    if refusal is not None:
+        raise refusal
+    return stamp
 
-    # Unknown modes fail closed.
-    raise Forbidden("unsupported_stamp_mode", "Stamp ownership mode is not supported")
+
+async def _demand_for_spec(
+    spec: dict[str, Any] | None, *, region: str | None = None
+) -> placement.Demand:
+    """Read demand from a spec, refusing a class nobody can evaluate.
+
+    A class outside the catalogue is a property of the deployment rather than of any stamp,
+    so it is answered before stamps are considered, and it is a bad request rather than a
+    conflict: no amount of capacity makes it placeable.
+    """
+    demand = placement.demand_of(spec, region=region)
+    if demand.gpu_class not in placement.GPU_CLASSES:
+        raise BadRequest(
+            "unknown_gpu_class",
+            "Deployment asks for a GPU class this platform does not recognise",
+            gpu_class=demand.gpu_class,
+            known_gpu_classes=sorted(placement.GPU_CLASSES),
+        )
+    return demand
+
+
+async def _refuse_if_stamp_cannot_fit(
+    session: AsyncSession,
+    *,
+    stamp: InferenceStamp,
+    deployment_id: uuid.UUID,
+    demand: placement.Demand,
+    require_live: bool,
+) -> placement.StampCapacity:
+    """Raise unless this stamp can hold this demand, naming what is short."""
+    capacity = placement.read_capacity(stamp)
+    committed = await placement.committed_gpus(
+        session, stamp_id=stamp.id, exclude_deployment_id=deployment_id
+    )
+    unfit = placement.check_fit(
+        demand, capacity, committed_gpus=committed, require_live=require_live
+    )
+    if unfit is not None:
+        raise Conflict(
+            "stamp_cannot_fit_deployment",
+            "Stamp cannot host this deployment as specified",
+            reason=unfit.code,
+            stamp_id=str(stamp.id),
+            demand=demand.as_details(),
+            **unfit.details,
+        )
+    return capacity
+
+
+#: How many candidate refusals an error carries. Enough to diagnose, bounded so a large fleet
+#: cannot turn one rejected placement into an unbounded response body.
+_MAX_REPORTED_CANDIDATES = 20
+
+
+async def _select_stamp(
+    session: AsyncSession,
+    *,
+    account: Account,
+    deployment: Deployment,
+    demand: placement.Demand,
+) -> InferenceStamp:
+    """Choose the least loaded stamp this account may use that can hold the deployment.
+
+    Preference order is deliberate: the account's own hardware before Fabric's managed
+    capacity, because a customer's cluster is already paid for and managed capacity is
+    billed; then the most free GPUs, which is what "least loaded" means when GPUs are the
+    only resource modelled; then stamp id, so the same request does not wander between
+    equally good stamps on retry.
+    """
+    system_account = await get_system_account(session)
+    candidates = await placement.candidate_stamps(
+        session,
+        account_id=account.id,
+        system_account_id=system_account.id if system_account else None,
+    )
+
+    fitting: list[tuple[int, int, str, InferenceStamp]] = []
+    refusals: list[dict[str, Any]] = []
+    for stamp in candidates:
+        refusal = _stamp_unavailable(stamp, account=account, system_account=system_account)
+        if refusal is not None:
+            refusals.append({"stamp_id": str(stamp.id), "reason": refusal.code})
+            continue
+
+        capacity = placement.read_capacity(stamp)
+        committed = await placement.committed_gpus(
+            session, stamp_id=stamp.id, exclude_deployment_id=deployment.id
+        )
+        unfit = placement.check_fit(
+            demand, capacity, committed_gpus=committed, require_live=True
+        )
+        if unfit is not None:
+            refusals.append({"stamp_id": str(stamp.id), "reason": unfit.code, **unfit.details})
+            continue
+
+        fitting.append(
+            (
+                0 if stamp.account_id == account.id else 1,
+                -capacity.free_gpus(committed),
+                str(stamp.id),
+                stamp,
+            )
+        )
+
+    if not fitting:
+        raise Conflict(
+            "no_stamp_fits_deployment",
+            "No stamp available to this account can host this deployment",
+            demand=demand.as_details(),
+            candidates=refusals[:_MAX_REPORTED_CANDIDATES],
+            candidates_considered=len(candidates),
+        )
+
+    fitting.sort(key=lambda entry: entry[:3])
+    return fitting[0][3]
 
 
 async def create_placement(
@@ -272,13 +467,36 @@ async def create_placement(
     *,
     account_id: uuid.UUID,
     deployment_id: uuid.UUID,
-    stamp_id: uuid.UUID,
+    stamp_id: uuid.UUID | None,
+    region: str | None = None,
     actor_principal_id: uuid.UUID | None,
 ) -> DeploymentPlacement:
-    """Assign a deployment to an authorized stamp."""
+    """Assign a deployment to a stamp that can actually hold it (ADR 0013).
+
+    ``stamp_id`` omitted selects one. Given, it is authorized as before and then checked for
+    fit, because an assignment a stamp cannot serve is not an assignment: before this the API
+    answered ``201`` and the pod stayed ``Pending`` forever.
+    """
     account = await get_account(session, account_id)
     deployment = await get_deployment(session, account_id, deployment_id)
-    stamp = await _authorize_stamp_for_account(session, account=account, stamp_id=stamp_id)
+    demand = await _demand_for_spec(deployment.desired_spec, region=region)
+
+    selected = stamp_id is None
+    if selected:
+        stamp = await _select_stamp(
+            session, account=account, deployment=deployment, demand=demand
+        )
+        capacity = placement.read_capacity(stamp)
+    else:
+        stamp = await _authorize_stamp_for_account(session, account=account, stamp_id=stamp_id)
+        capacity = await _refuse_if_stamp_cannot_fit(
+            session,
+            stamp=stamp,
+            deployment_id=deployment.id,
+            demand=demand,
+            # A named stamp is not refused for a stale heartbeat; see check_fit.
+            require_live=False,
+        )
 
     existing = (
         await session.execute(
@@ -297,7 +515,9 @@ async def create_placement(
         await session.flush()
         return existing
 
-    placement = DeploymentPlacement(
+    # Named ``record`` rather than ``placement`` so it does not shadow the placement service
+    # this function calls for fit and selection.
+    record = DeploymentPlacement(
         account_id=account_id,
         deployment_id=deployment.id,
         stamp_id=stamp.id,
@@ -306,9 +526,8 @@ async def create_placement(
         ),
         status="assigned",
     )
-    session.add(placement)
+    session.add(record)
     await session.flush()
-
 
     await record_audit(
         session,
@@ -317,18 +536,27 @@ async def create_placement(
         actor_id=str(actor_principal_id) if actor_principal_id else None,
         action="placement.created",
         resource_type="placement",
-        resource_id=str(placement.id),
-        metadata={"stamp_id": str(stamp.id), "stamp_mode": stamp.mode},
+        resource_id=str(record.id),
+        metadata={
+            "stamp_id": str(stamp.id),
+            "stamp_mode": stamp.mode,
+            # Whether the platform chose the stamp or the caller named it, and whether the
+            # GPU class was actually judged: a stamp that describes none of its hardware is
+            # admitted rather than refused, and that has to be visible rather than silent.
+            "stamp_selected": selected,
+            "gpu_class_verified": placement.class_was_verified(demand, capacity),
+            "demand": demand.as_details(),
+        },
     )
     await publish_outbox(
         session,
         account_id=account_id,
         event_type="placement.created",
         aggregate_type="placement",
-        aggregate_id=str(placement.id),
+        aggregate_id=str(record.id),
         payload={"deployment_id": str(deployment.id), "stamp_id": str(stamp.id)},
     )
-    return placement
+    return record
 
 
 async def list_placements(

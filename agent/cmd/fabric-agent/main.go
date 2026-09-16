@@ -16,11 +16,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/agent"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
+	"github.com/khushwant04/fabric/agent/internal/hardware"
 	"github.com/khushwant04/fabric/agent/internal/kube"
 	"github.com/khushwant04/fabric/agent/internal/operator"
 )
@@ -57,10 +59,25 @@ func main() {
 	orchestrator := flag.String("orchestrator", envOr("FABRIC_AGENT_ORCHESTRATOR", "k3s"),
 		"Kubernetes distribution reported in capabilities")
 	region := flag.String("region", envOr("FABRIC_AGENT_REGION", ""), "region reported in capabilities")
-	gpus := flag.Int("gpus", 0, "allocatable GPUs reported in capabilities")
+	gpus := flag.Int("gpus", 0,
+		"allocatable GPUs to report when the cluster cannot be measured; a successful "+
+			"measurement replaces it")
+	measureCapacity := flag.Bool("measure-capacity", true,
+		"read this cluster's GPU nodes and pod claims and report them as capabilities, "+
+			"which is what the control plane places against")
+	capacityInterval := flag.Duration("capacity-interval", time.Minute,
+		"how often to re-measure the cluster's GPUs")
 	poll := flag.Duration("poll", 15*time.Second, "desired-state poll interval")
 	once := flag.Bool("once", false, "reconcile a single time and exit")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+
+	// Repeatable, so the GPU nodes are named the way the cluster labels them. It should
+	// match the operator's --model-host-node-selector: measuring nodes a host will never
+	// be placed on would report capacity this stamp cannot actually serve from.
+	var gpuNodeSelector multiFlag
+	flag.Var(&gpuNodeSelector, "gpu-node-selector",
+		"restrict capacity measurement to nodes matching key=value; repeat for several")
+
 	flag.Parse()
 
 	if *showVersion {
@@ -93,6 +110,7 @@ func main() {
 		TelemetryCredentialPath: *telemetryCredentialPath,
 		UpstreamURL:             *upstream,
 		PollInterval:            *poll,
+		CapacityInterval:        *capacityInterval,
 		Capabilities: controlplane.Capabilities{
 			Orchestrator:    *orchestrator,
 			Region:          *region,
@@ -102,22 +120,51 @@ func main() {
 		},
 	}
 
-	// Publishing to the cluster is opt-in, because an agent without an operator has
-	// no reason to hold Kubernetes permissions at all.
-	if *publish == "kubernetes" {
-		client, err := kube.InCluster()
+	if *publish != "file" && *publish != "kubernetes" {
+		log.Error("--publish must be file or kubernetes", "value", *publish)
+		os.Exit(1)
+	}
+
+	nodeSelector, err := operator.ParseNodeSelector(gpuNodeSelector)
+	if err != nil {
+		log.Error("invalid --gpu-node-selector", "error", err)
+		os.Exit(1)
+	}
+
+	// One client for both jobs, built only when something needs it. Publishing to the
+	// cluster is opt-in because an agent without an operator has no reason to hold
+	// Kubernetes permissions at all; measuring capacity needs only read access, and
+	// degrades to the configured --gpus when it is absent.
+	var client *kube.Client
+	if *publish == "kubernetes" || *measureCapacity {
+		client, err = kube.InCluster()
 		if err != nil {
-			log.Error("--publish=kubernetes needs in-cluster credentials", "error", err)
-			os.Exit(1)
+			if *publish == "kubernetes" {
+				log.Error("--publish=kubernetes needs in-cluster credentials", "error", err)
+				os.Exit(1)
+			}
+			// Not fatal: a stamp running outside Kubernetes, or with no service-account
+			// token mounted, reports the capacity it was configured with.
+			log.Info("not measuring capacity: no in-cluster credentials",
+				"error", err, "reporting_allocatable_gpus", *gpus)
+			client = nil
 		}
+	}
+
+	if *publish == "kubernetes" {
 		// The stamp id is not known until enrollment completes, so the publisher is
 		// attached after Ensure below.
 		config.SinkFactory = func(stampID string) agent.Sink {
 			return operator.NewPublisher(client, client.Namespace, stampID)
 		}
-	} else if *publish != "file" {
-		log.Error("--publish must be file or kubernetes", "value", *publish)
-		os.Exit(1)
+	}
+
+	if *measureCapacity && client != nil {
+		config.Capacity = agent.CapacityFunc(
+			func(ctx context.Context) (hardware.Capacity, error) {
+				return hardware.Measure(ctx, client, nodeSelector)
+			},
+		)
 	}
 
 	instance := agent.New(config, log)
@@ -152,4 +199,14 @@ func orDefault(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// multiFlag collects a flag given more than once.
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, ",") }
+
+func (m *multiFlag) Set(value string) error {
+	*m = append(*m, value)
+	return nil
 }

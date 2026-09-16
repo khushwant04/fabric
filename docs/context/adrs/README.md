@@ -17,6 +17,7 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0010](0010-operator-publishes-backends-data-plane-balances.md) | The operator publishes backend addresses and the data plane balances, with a headless Service for discovery | Implemented pool/health primitive; strategies implemented by ADR 0011 |
 | [0011](0011-per-deployment-inference-routing-strategies.md) | Select least-in-flight, round-robin, session-affinity, or weighted routing per deployment | Implemented |
 | [0012](0012-acknowledged-zero-downtime-rollouts.md) | Prepare a release beside the active one, cut over with weights, acknowledge drain, then clean up | Implemented |
+| [0013](0013-placement-admits-only-what-a-stamp-can-hold.md) | Admit a placement only against measured stamp capacity; select a fitting stamp when none is named | Implemented |
 
 ## ADR status vocabulary
 

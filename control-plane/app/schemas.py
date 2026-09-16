@@ -202,7 +202,15 @@ class RuntimeSpec(BaseModel):
 
 
 class ResourceSpec(BaseModel):
+    #: Devices one replica needs. This reaches the model-host container's ``nvidia.com/gpu``
+    #: limit, and placement admits the deployment against ``replicas x gpu_count``
+    #: (ADR 0013).
     gpu_count: int = Field(default=1, ge=1, le=8)
+    #: The minimum device the deployment needs, named by class. Interpreted as a memory size
+    #: and an arithmetic tier rather than matched as a product, so a strictly better GPU
+    #: satisfies it. Validated against the catalogue at placement rather than here: the
+    #: catalogue grows, and a deployment created before a class was named should not become
+    #: unpatchable.
     gpu_class: str = Field(default="t4", max_length=32)
 
 
@@ -240,7 +248,18 @@ class DeploymentResponse(ORMModel):
 
 
 class PlacementCreateRequest(BaseModel):
-    stamp_id: uuid.UUID
+    """Where to place a deployment, or nothing to let the platform choose.
+
+    Omitting ``stamp_id`` is what makes the platform managed rather than manual: the control
+    plane filters its stamps by entitlement, region, liveness and fit and picks the least
+    loaded one (ADR 0013). Naming a stamp still checks that it fits, and refuses with the
+    reason if it does not.
+    """
+
+    stamp_id: uuid.UUID | None = None
+    #: Restrict placement to one region. Applies to a named stamp as well as to selection,
+    #: so a caller cannot pin a deployment somewhere it did not intend by naming a stamp.
+    region: str | None = Field(default=None, max_length=64)
 
 
 class PlacementResponse(ORMModel):
@@ -416,6 +435,13 @@ class StampCapabilities(BaseModel):
     gpus: list[GpuCapability] = Field(default_factory=list, max_length=64)
     allocatable_gpus: int = Field(default=0, ge=0)
     requested_gpus: int = Field(default=0, ge=0)
+    #: The part of ``requested_gpus`` claimed by model hosts Fabric itself placed. Reported
+    #: separately so placement can subtract foreign workloads without also subtracting its
+    #: own placements, which it accounts for from its own records (ADR 0013).
+    fabric_requested_gpus: int = Field(default=0, ge=0)
+    #: Largest device count on any one node. A stamp-wide total cannot say whether a single
+    #: replica asking for four GPUs can be scheduled at all. Zero means unreported.
+    max_gpus_per_node: int = Field(default=0, ge=0)
     driver_version: str | None = Field(default=None, max_length=64)
     container_runtime_version: str | None = Field(default=None, max_length=64)
     agent_version: str | None = Field(default=None, max_length=64)

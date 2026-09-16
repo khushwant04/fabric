@@ -60,6 +60,15 @@ type Deployment struct {
 	// carried it through the CR into the config document. Empty means the data plane's
 	// own default of least-in-flight.
 	Strategy string `json:"strategy,omitempty"`
+	// GPUCount is how many devices one replica needs. Carried for the operator, which
+	// turns it into the container's nvidia.com/gpu limit; the data plane ignores it.
+	//
+	// The control plane admits a placement by comparing replicas x this against what the
+	// stamp reports (ADR 0013), so it has to be the same number the pod actually asks
+	// for. Before M4 it was validated centrally and then ignored, while the pod was sized
+	// from a per-stamp Helm value. Zero means the field was absent, which the operator
+	// reads as the chart's configured count.
+	GPUCount int `json:"gpu_count,omitempty"`
 }
 
 // DeploymentsFile is the document the data plane loads.

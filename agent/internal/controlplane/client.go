@@ -77,9 +77,17 @@ type Capabilities struct {
 	GPUs                []GPU  `json:"gpus"`
 	AllocatableGPUs     int    `json:"allocatable_gpus"`
 	RequestedGPUs       int    `json:"requested_gpus"`
-	DriverVersion       string `json:"driver_version,omitempty"`
-	AgentVersion        string `json:"agent_version,omitempty"`
-	RuntimeVersion      string `json:"runtime_version,omitempty"`
+	// FabricRequestedGPUs is the part of RequestedGPUs claimed by model hosts this
+	// platform created. Reported separately because the control plane already accounts
+	// for its own placements from its own records, and would otherwise subtract them a
+	// second time when deciding what is free (ADR 0013).
+	FabricRequestedGPUs int `json:"fabric_requested_gpus"`
+	// MaxGPUsPerNode is the largest device count on any one node. A stamp-wide total
+	// cannot say whether a single replica asking for four GPUs can be scheduled at all.
+	MaxGPUsPerNode int    `json:"max_gpus_per_node"`
+	DriverVersion  string `json:"driver_version,omitempty"`
+	AgentVersion   string `json:"agent_version,omitempty"`
+	RuntimeVersion string `json:"runtime_version,omitempty"`
 }
 
 // Stamp is the registered stamp record.

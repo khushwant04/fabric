@@ -40,9 +40,19 @@ stamp:
   # Defaults to the release name.
   name: ""
   orchestrator: k3s
+  # Reported as a capability and used to filter placement when a deployment asks for a
+  # region. Empty means this stamp matches only region-agnostic requests.
   region: ""
-  # GPUs this stamp offers, reported as a capability during enrollment. It does not
-  # reserve anything: scheduling GPUs is the model host's concern, not the agent's.
+  # The agent reads this cluster's GPU nodes and pod claims and reports them, which is
+  # what the control plane decides placement against (ADR 0013). It needs cluster-wide
+  # read on nodes and pods, granted only while this is true.
+  #
+  # Turning it off falls the stamp back to reporting stamp.gpus below, which means the
+  # control plane admits placements against a number nobody is checking.
+  measureCapacity: true
+  # GPUs this stamp offers, reported only when the cluster cannot be measured — no
+  # service-account token, no permission, or measureCapacity false. It does not reserve
+  # anything: scheduling GPUs is the model host's concern, not the agent's.
   gpus: 1
 
 modelHost:
@@ -55,6 +65,9 @@ modelHost:
 
 agent:
   pollInterval: 15s
+  # How often the cluster's GPUs are re-measured. Node hardware does not move, but pod
+  # claims do, so this is shorter than "once" and longer than every poll.
+  capacityInterval: 1m
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}

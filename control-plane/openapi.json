@@ -1099,16 +1099,33 @@
         "type": "object"
       },
       "PlacementCreateRequest": {
+        "description": "Where to place a deployment, or nothing to let the platform choose.\n\nOmitting ``stamp_id`` is what makes the platform managed rather than manual: the control\nplane filters its stamps by entitlement, region, liveness and fit and picks the least\nloaded one (ADR 0013). Naming a stamp still checks that it fits, and refuses with the\nreason if it does not.",
         "properties": {
+          "region": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
           "stamp_id": {
-            "format": "uuid",
-            "title": "Stamp Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stamp Id"
           }
         },
-        "required": [
-          "stamp_id"
-        ],
         "title": "PlacementCreateRequest",
         "type": "object"
       },
@@ -1415,6 +1432,12 @@
             ],
             "title": "Driver Version"
           },
+          "fabric_requested_gpus": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Fabric Requested Gpus",
+            "type": "integer"
+          },
           "gpus": {
             "items": {
               "$ref": "#/components/schemas/GpuCapability"
@@ -1422,6 +1445,12 @@
             "maxItems": 64,
             "title": "Gpus",
             "type": "array"
+          },
+          "max_gpus_per_node": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Max Gpus Per Node",
+            "type": "integer"
           },
           "operator_version": {
             "anyOf": [
@@ -2793,6 +2822,7 @@
         ]
       },
       "post": {
+        "description": "Place a deployment, refusing what the stamp cannot hold.\n\nWith no ``stamp_id`` the platform chooses one that fits. With one, it is authorized and\nthen checked: an assignment a stamp cannot serve used to answer ``201`` and then never\nstart (ADR 0013). The chosen stamp is on the response either way.",
         "operationId": "assign_placement_v1_accounts__account_id__deployments__deployment_id__placements_post",
         "parameters": [
           {
@@ -2822,11 +2852,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PlacementCreateRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PlacementCreateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
@@ -2850,7 +2887,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Assign a deployment to an authorized stamp",
+        "summary": "Assign a deployment to a stamp that fits, or pick one",
         "tags": [
           "deployments"
         ]

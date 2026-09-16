@@ -262,3 +262,70 @@ async def test_usage_ingestion_survives_policies(client: AsyncClient) -> None:
         headers=bearer(token),
     )
     assert usage.json()["events"] == 1
+
+
+
+async def test_the_generation_watermark_spans_accounts_on_a_shared_stamp(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A shared managed stamp acknowledges one number for every account on it.
+
+    The maximum this is taken from ran without elevation, so under policies it saw only the
+    caller's own placements. Two accounts placing onto one managed stamp both computed
+    generation 1: the stamp acknowledged the first, and the second sat below the watermark
+    and was never delivered — the API reporting ``assigned`` for something never served,
+    which is exactly the failure the stamp-wide watermark exists to prevent.
+
+    SQLite cannot represent this. It passes there whether the read is elevated or not.
+    """
+    from tests.helpers import (
+        default_capabilities,
+        enable_managed_capacity,
+        enroll_managed_stamp,
+        place,
+    )
+
+    managed, _system = await enroll_managed_stamp(
+        client, db_session, capabilities=default_capabilities(gpus=8)
+    )
+    stamp_id = managed["stamp"]["id"]
+    agent = managed["agent_credential"]
+
+    first_id, first_token = await onboard(client, "share-a", "share-a-account")
+    second_id, second_token = await onboard(client, "share-b", "share-b-account")
+    await enable_managed_capacity(db_session, first_id)
+    await enable_managed_capacity(db_session, second_id)
+
+    first = await create_deployment(client, first_id, first_token)
+    second = await create_deployment(client, second_id, second_token)
+
+    placed_first = await place(client, first_id, first_token, first["id"], stamp_id=stamp_id)
+    assert placed_first.status_code == 201, placed_first.text
+    reset_context()
+    placed_second = await place(client, second_id, second_token, second["id"], stamp_id=stamp_id)
+    assert placed_second.status_code == 201, placed_second.text
+
+    generations = (
+        placed_first.json()["desired_generation"],
+        placed_second.json()["desired_generation"],
+    )
+    assert generations[1] > generations[0], (
+        f"the second account's placement reused generation {generations[1]}"
+    )
+
+    # And the stamp really is told about both, one after the other.
+    reset_context()
+    initial = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state?after_generation=0", headers=bearer(agent)
+    )
+    assert {entry["deployment_id"] for entry in initial.json()["deployments"]} == {
+        first["id"],
+        second["id"],
+    }
+    acknowledged = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state?after_generation={generations[0]}",
+        headers=bearer(agent),
+    )
+    assert [entry["deployment_id"] for entry in acknowledged.json()["deployments"]] == [
+        second["id"]
+    ]

@@ -297,6 +297,10 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 // up in one another's backend pool.
 func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deployment {
 	host := r.options.ModelHost
+	// The deployment's own device count, which is what the control plane admitted the
+	// placement against (ADR 0013). Falls back to the stamp's configured count for a
+	// declaration that predates the field.
+	host.GPUs = item.Spec.DesiredGPUs(r.options.ModelHost.GPUs)
 	release := releaseOf(item)
 	if release != "" {
 		// Runtime release is the immutable artifact/address the host loads and the name

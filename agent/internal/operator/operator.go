@@ -70,8 +70,15 @@ type Spec struct {
 	// (M2, ADR 0011). It belongs on the deployment rather than the stamp because the
 	// right choice depends on what is being served, not on where. Empty means the data
 	// plane's own default, which is least-in-flight.
-	Strategy   string `json:"strategy,omitempty"`
-	Generation int    `json:"generation"`
+	Strategy string `json:"strategy,omitempty"`
+	// GPUCount is how many devices one replica needs, which becomes the container's
+	// nvidia.com/gpu limit. The control plane admits the placement by comparing
+	// replicas x this against the stamp's reported capacity (ADR 0013), so the pod has to
+	// ask for the same number it was admitted for. Absent or zero means the count the
+	// operator was configured with, so a deployment declared before this field is
+	// unchanged.
+	GPUCount   int `json:"gpuCount,omitempty"`
+	Generation int `json:"generation"`
 }
 
 // DesiredReplicas is the replica count to run, defaulting to one when unset.
@@ -83,6 +90,15 @@ func (s Spec) DesiredReplicas() int {
 		return 1
 	}
 	return s.Replicas
+}
+
+// DesiredGPUs is the per-replica device count, falling back to the operator's configured
+// value when the deployment does not ask for one.
+func (s Spec) DesiredGPUs(configured int) int {
+	if s.GPUCount < 1 {
+		return configured
+	}
+	return s.GPUCount
 }
 
 // Condition is a standard Kubernetes-style status condition.

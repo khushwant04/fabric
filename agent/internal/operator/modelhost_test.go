@@ -1024,3 +1024,95 @@ func TestCandidateSelectorCannotCollideWithLegacyStableWorkload(t *testing.T) {
 			stableArgs, candidateArgs)
 	}
 }
+
+// containerGPULimit reads the device count the rendered pod actually asks Kubernetes for.
+//
+// Read through JSON rather than by type assertion: a spec built in this process holds
+// []map[string]any while one that has been through the API server holds []any, and the
+// assertion that works on one fails on the other.
+func containerGPULimit(t *testing.T, host *deployment) string {
+	t.Helper()
+	encoded, err := json.Marshal(host.Spec)
+	if err != nil {
+		t.Fatalf("encode host spec: %v", err)
+	}
+	var shape struct {
+		Template struct {
+			Spec struct {
+				Containers []struct {
+					Resources struct {
+						Limits map[string]json.Number `json:"limits"`
+					} `json:"resources"`
+				} `json:"containers"`
+			} `json:"spec"`
+		} `json:"template"`
+	}
+	if err := json.Unmarshal(encoded, &shape); err != nil {
+		t.Fatalf("decode host spec: %v", err)
+	}
+	if len(shape.Template.Spec.Containers) == 0 {
+		t.Fatalf("no containers in %s", encoded)
+	}
+	limit, present := shape.Template.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]
+	if !present {
+		t.Fatalf("no GPU limit in %s", encoded)
+	}
+	return limit.String()
+}
+
+func TestTheDeploymentsGPUCountReachesTheContainer(t *testing.T) {
+	// The control plane admits a placement against replicas x gpu_count (ADR 0013). Before
+	// M4 the pod was sized from a per-stamp Helm value instead, so a deployment could be
+	// admitted for four devices and given one, which makes the fit check govern nothing.
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.GPUCount = 4
+	state, client := newHostServer(t, item)
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	host := state.deploys["fabric-host-dep-a"]
+	if host == nil {
+		t.Fatalf("no model host was created: %v", state.deploys)
+	}
+	if got := containerGPULimit(t, host); got != "4" {
+		t.Fatalf("gpu limit = %v, want the deployment's 4", got)
+	}
+}
+
+func TestAnAbsentGPUCountKeepsTheStampsConfiguredDevices(t *testing.T) {
+	// A declaration that predates the field must be unchanged, not sized to zero, which
+	// would render a pod asking for no GPU at all.
+	host := testHost()
+	host.GPUs = 2
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, host).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if got := containerGPULimit(t, state.deploys["fabric-host-dep-a"]); got != "2" {
+		t.Fatalf("gpu limit = %v, want the configured 2", got)
+	}
+}
+
+func TestOneDeploymentsGPUCountDoesNotLeakIntoAnother(t *testing.T) {
+	// The host settings are copied per deployment; mutating the reconciler's own options
+	// would carry one deployment's device count to every later one on the stamp.
+	first := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	first.Spec.GPUCount = 4
+	second := resource("beta", "dep-b", "acct-b", "beta-model", 1)
+	state, client := newHostServer(t, first, second)
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if got := containerGPULimit(t, state.deploys["fabric-host-dep-a"]); got != "4" {
+		t.Fatalf("first deployment gpu limit = %v, want 4", got)
+	}
+	if got := containerGPULimit(t, state.deploys["fabric-host-dep-b"]); got != "1" {
+		t.Fatalf("second deployment gpu limit = %v, want the configured 1", got)
+	}
+}

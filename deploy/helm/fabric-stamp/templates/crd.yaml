@@ -111,6 +111,16 @@ spec:
                     pins a session key to a stable backend, and "weighted" spreads
                     proportionally to per-backend weight. Absent means least_in_flight.
                   enum: [least_in_flight, round_robin, session_affinity, weighted]
+                gpuCount:
+                  type: integer
+                  description: |
+                    How many GPUs one replica needs, which becomes the model-host
+                    container's nvidia.com/gpu limit. The control plane admitted this
+                    placement by comparing replicas x this against what the stamp
+                    reported, so the pod asks for the number it was admitted for. Absent
+                    means the count the operator was configured with.
+                  minimum: 1
+                  maximum: 8
                 generation:
                   type: integer
                   description: Control-plane generation this declaration came from.

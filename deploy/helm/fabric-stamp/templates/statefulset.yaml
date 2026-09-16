@@ -30,9 +30,10 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "fabric-stamp.serviceAccountName" . }}
-      # Mounted only when an operator runs: the agent needs the API server to declare
-      # intent. Without an operator it needs no Kubernetes access at all.
-      automountServiceAccountToken: {{ .Values.operator.enabled }}
+      # Mounted when the agent has a reason to reach the API server: to declare intent for
+      # an operator, or to measure this stamp's GPU capacity. With neither it needs no
+      # Kubernetes access at all, and the agent falls back to the configured stamp.gpus.
+      automountServiceAccountToken: {{ or .Values.operator.enabled .Values.stamp.measureCapacity }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -68,6 +69,18 @@ spec:
             - --upstream={{ include "fabric-stamp.modelHostUrl" . }}
             - --gpus={{ .Values.stamp.gpus }}
             - --poll={{ .Values.agent.pollInterval }}
+            {{- if .Values.stamp.measureCapacity }}
+            # Measured capacity replaces --gpus above. The selector matches the operator's
+            # --model-host-node-selector: measuring nodes a host will never be placed on
+            # would report capacity this stamp cannot serve from.
+            - --measure-capacity
+            - --capacity-interval={{ .Values.agent.capacityInterval }}
+            {{- range $key, $value := .Values.gpu.nodeSelector }}
+            - --gpu-node-selector={{ $key }}={{ $value }}
+            {{- end }}
+            {{- else }}
+            - --measure-capacity=false
+            {{- end }}
             # Secret state stays on the agent's own volume; the rendered
             # configuration goes to a volume the data plane mounts read-only. Two
             # mounts rather than one is what stops the data plane's container from
