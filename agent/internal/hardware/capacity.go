@@ -2,7 +2,6 @@ package hardware
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -48,11 +47,17 @@ type Capacity struct {
 	// FabricRequestedGPUs is the subset claimed by model hosts this platform created.
 	FabricRequestedGPUs int
 	// Measured reports that the nodes were read. False means nothing here is trustworthy
-	// and the caller should keep whatever it was configured with.
+	// and the caller should keep whatever it was configured with. It is always true when
+	// Measure returned no error.
 	Measured bool
 	// PodsMeasured reports that pod claims were read. False leaves RequestedGPUs at zero,
-	// which overstates free capacity by however much a foreign workload is using.
+	// which is indistinguishable from an idle cluster, so it is reported to the control
+	// plane rather than only logged here.
 	PodsMeasured bool
+	// PodClaimsError explains a missing claim measurement, for the caller to log. Held as a
+	// string rather than an error because Measure's error return is reserved for a failure
+	// that makes the whole result unusable.
+	PodClaimsError string
 }
 
 // pod is the part of a Kubernetes pod this needs.
@@ -120,8 +125,14 @@ type podList struct {
 	Items []pod `json:"items"`
 }
 
-// MeasurePodGPURequests sums the devices scheduled pods have claimed, returning the total
-// and the subset belonging to Fabric's own model hosts.
+// MeasurePodGPURequests sums the devices scheduled pods have claimed on the given nodes,
+// returning the total and the subset belonging to Fabric's own model hosts.
+//
+// Restricted to “onNodes“ because the nodes were themselves selected: a stamp that narrows
+// its GPU node selector offers only those nodes' devices, and counting claims from the rest
+// of the cluster would subtract GPUs from a total that never included them. On a shared
+// cluster that arithmetic goes negative and the stamp refuses everything forever, with a
+// reason pointing at capacity rather than at configuration.
 //
 // Only scheduled pods count. A pod with no node has not taken a device from anything, and
 // counting it would make a stamp look full because somebody left an unschedulable pod
@@ -129,7 +140,9 @@ type podList struct {
 //
 // Terminal pods are excluded server-side, so a node's history does not accumulate against
 // its capacity.
-func MeasurePodGPURequests(ctx context.Context, client Getter) (total int, fabric int, err error) {
+func MeasurePodGPURequests(
+	ctx context.Context, client Getter, onNodes map[string]bool,
+) (total int, fabric int, err error) {
 	path := "/api/v1/pods?fieldSelector=" +
 		"status.phase%21%3DSucceeded,status.phase%21%3DFailed"
 	var pods podList
@@ -138,7 +151,7 @@ func MeasurePodGPURequests(ctx context.Context, client Getter) (total int, fabri
 	}
 
 	for _, item := range pods.Items {
-		if item.Spec.NodeName == "" {
+		if item.Spec.NodeName == "" || !onNodes[item.Spec.NodeName] {
 			continue
 		}
 		count := item.gpus()
@@ -155,42 +168,41 @@ func MeasurePodGPURequests(ctx context.Context, client Getter) (total int, fabri
 
 // Measure reads what this cluster can offer.
 //
-// A node-read failure leaves Measured false, which tells the caller to keep the capacity
-// it was configured with rather than report zero: a missing permission should degrade to
-// the declared number, not to a stamp that appears to have no hardware. A pod-read failure
-// is reported the same way through PodsMeasured, and is less severe because the control
-// plane subtracts what it has placed itself regardless.
+// A non-nil error means nothing usable was obtained, so the ordinary Go shape — return on
+// error, trust the value otherwise — is correct here. It is the node read that decides
+// that: without it there is no hardware, no device class and no node set to scope claims to,
+// and the caller should keep the capacity it was configured with. A missing permission
+// should degrade to the declared number, not to a stamp that appears to have no hardware.
 //
-// Both failures are also returned as an error so the caller can log why, which is why the
-// returned Capacity is still meaningful alongside a non-nil error.
+// A pod-read failure is not that: the hardware is known and only the claims are missing. It
+// is recorded in PodsMeasured and PodClaimsError and travels to the control plane, because
+// zero claimed GPUs is indistinguishable from an idle cluster and the difference decides
+// placements.
 func Measure(ctx context.Context, client Getter, selector map[string]string) (Capacity, error) {
-	var problems []error
-	capacity := Capacity{}
-
 	profiles, err := ProfileNodes(ctx, client, selector)
 	if err != nil {
-		return capacity, err
+		return Capacity{}, err
 	}
-	capacity.Measured = true
-	capacity.Profiles = profiles
-	capacity.GPUs = groupProfiles(profiles)
+
+	capacity := Capacity{Measured: true, Profiles: profiles, GPUs: groupProfiles(profiles)}
+	onNodes := make(map[string]bool, len(profiles))
 	for _, profile := range profiles {
 		capacity.AllocatableGPUs += profile.Count
 		if profile.Count > capacity.MaxGPUsPerNode {
 			capacity.MaxGPUsPerNode = profile.Count
 		}
+		onNodes[profile.Node] = true
 	}
 
-	total, fabric, podErr := MeasurePodGPURequests(ctx, client)
+	total, fabric, podErr := MeasurePodGPURequests(ctx, client, onNodes)
 	if podErr != nil {
-		problems = append(problems, podErr)
-	} else {
-		capacity.PodsMeasured = true
-		capacity.RequestedGPUs = total
-		capacity.FabricRequestedGPUs = fabric
+		capacity.PodClaimsError = podErr.Error()
+		return capacity, nil
 	}
-
-	return capacity, errors.Join(problems...)
+	capacity.PodsMeasured = true
+	capacity.RequestedGPUs = total
+	capacity.FabricRequestedGPUs = fabric
+	return capacity, nil
 }
 
 // aggregate accumulates one device class across the nodes carrying it.

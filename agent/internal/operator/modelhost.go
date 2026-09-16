@@ -274,6 +274,13 @@ func (m ModelHost) hostArgs() []string {
 	if m.MaxNumSeqs > 0 {
 		args = append(args, "--max-num-seqs="+strconv.Itoa(m.MaxNumSeqs))
 	}
+	if m.GPUs > 1 {
+		// Without this the container reserves every device it asked for and the server uses
+		// one, so the rest are held by the limit and usable by nothing. A deployment
+		// admitted for four devices per replica (ADR 0013) has to actually shard across
+		// them, and tensor parallelism is how a single model does that.
+		args = append(args, "--tensor-parallel-size="+strconv.Itoa(m.GPUs))
+	}
 	if m.GPUMemoryUtilization != "" {
 		args = append(args, "--gpu-memory-utilization="+m.GPUMemoryUtilization)
 	}

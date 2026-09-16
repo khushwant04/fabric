@@ -232,23 +232,57 @@ func TestAnUnreadableNodeListReportsNothingMeasured(t *testing.T) {
 }
 
 func TestUnreadablePodsStillReportTheHardware(t *testing.T) {
-	// Less severe than losing the nodes: the control plane subtracts what it has placed
-	// itself regardless, so this is the pre-measurement behaviour rather than a new risk.
+	// Less severe than losing the nodes: the hardware is known and only the claims are
+	// missing. A non-nil error is reserved for a result nobody can use, so that a future
+	// caller writing the ordinary `if err != nil { return }` does not throw away a good node
+	// measurement because a pod list was refused.
 	cluster := &clusterStub{nodes: twoT4Nodes, podErr: errors.New("forbidden")}
 
 	capacity, err := Measure(context.Background(), cluster, nil)
 
-	if err == nil {
-		t.Fatal("a failed pod read must be reported")
+	if err != nil {
+		t.Fatalf("a usable measurement was returned as an error: %v", err)
 	}
 	if !capacity.Measured || capacity.PodsMeasured {
 		t.Fatalf("partial measurement not marked: %+v", capacity)
+	}
+	// The reason still has to reach the caller, or the degradation is silent.
+	if !strings.Contains(capacity.PodClaimsError, "forbidden") {
+		t.Fatalf("pod failure not explained: %q", capacity.PodClaimsError)
 	}
 	if capacity.AllocatableGPUs != 3 {
 		t.Fatalf("hardware was discarded with the pod failure: %+v", capacity)
 	}
 	if capacity.RequestedGPUs != 0 {
 		t.Fatalf("claims were invented: %d", capacity.RequestedGPUs)
+	}
+}
+
+func TestClaimsAreCountedOnlyOnTheProfiledNodes(t *testing.T) {
+	// The selector scopes what this stamp offers. Counting claims from the rest of the
+	// cluster subtracts GPUs from a total that never included them, which on a shared
+	// cluster goes negative and refuses every placement with a reason pointing at capacity
+	// rather than at configuration.
+	cluster := &clusterStub{nodes: twoT4Nodes, pods: `{"items":[
+		{"metadata":{"name":"ours"},"spec":{"nodeName":"gpu-0","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
+		{"metadata":{"name":"neighbours-training-job"},
+		 "spec":{"nodeName":"other-pool-7","containers":[
+			{"resources":{"limits":{"nvidia.com/gpu":"64"}}}]}}]}`}
+
+	capacity, err := Measure(
+		context.Background(), cluster, map[string]string{"pool": "fabric"},
+	)
+	if err != nil {
+		t.Fatalf("measure: %v", err)
+	}
+
+	if capacity.RequestedGPUs != 1 {
+		t.Fatalf("requested = %d, want only the claim on a profiled node",
+			capacity.RequestedGPUs)
+	}
+	if capacity.AllocatableGPUs-capacity.RequestedGPUs < 0 {
+		t.Fatal("free capacity went negative from a claim outside this stamp")
 	}
 }
 
@@ -283,5 +317,69 @@ func TestGroupsAreSortedSoAnUnchangedClusterReportsIdentically(t *testing.T) {
 	}
 	if capacity.GPUs[0].Product != "NVIDIA A100" || capacity.GPUs[1].Product != "Tesla T4" {
 		t.Fatalf("groups are not ordered: %+v", capacity.GPUs)
+	}
+}
+
+func TestGPUsAreDescribedWithoutFeatureDiscoveryOnEveryCloudWeSupport(t *testing.T) {
+	// An undescribed device is not refused, it is admitted with the GPU class unjudged
+	// (ADR 0013). An Azure-only machine table therefore meant every GPU node on EKS or GKE
+	// without feature discovery was placed against blind, which is a much larger hole than
+	// "an older agent".
+	cases := []struct {
+		name   string
+		labels string
+		model  string
+	}{
+		{"gke accelerator label", `"cloud.google.com/gke-accelerator":"nvidia-l4"`, "NVIDIA L4"},
+		{"aws g4dn family", `"node.kubernetes.io/instance-type":"g4dn.2xlarge"`, "Tesla T4"},
+		{"aws g5 family", `"node.kubernetes.io/instance-type":"g5.12xlarge"`, "NVIDIA A10G"},
+		{"aws p4d exact", `"node.kubernetes.io/instance-type":"p4d.24xlarge"`, "NVIDIA A100"},
+		{"gcp a2 family", `"node.kubernetes.io/instance-type":"a2-highgpu-1g"`, "NVIDIA A100"},
+		{
+			"gcp a2 ultra takes the longer prefix",
+			`"node.kubernetes.io/instance-type":"a2-ultragpu-1g"`,
+			"NVIDIA A100 80GB",
+		},
+		{"azure still works", `"node.kubernetes.io/instance-type":"Standard_NC4as_T4_v3"`, "Tesla T4"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[{"metadata":{
+				"name":"gpu-0","labels":{` + testCase.labels + `}},
+				"status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+
+			capacity, err := Measure(context.Background(), cluster, nil)
+			if err != nil {
+				t.Fatalf("measure: %v", err)
+			}
+			if len(capacity.GPUs) != 1 || capacity.GPUs[0].Product != testCase.model {
+				t.Fatalf("product = %+v, want %q", capacity.GPUs, testCase.model)
+			}
+			// Described means the control plane can judge the class, which needs both.
+			if capacity.GPUs[0].MemoryBytes == 0 || capacity.GPUs[0].ComputeCapability == "" {
+				t.Fatalf("device is not fully described: %+v", capacity.GPUs[0])
+			}
+			// Provenance has to say this was inferred, not measured on the device.
+			if capacity.Profiles[0].Source == "node label" {
+				t.Fatalf("an inferred profile claims to be measured: %+v", capacity.Profiles[0])
+			}
+		})
+	}
+}
+
+func TestAnUnrecognisedMachineIsStillReportedAsUnknown(t *testing.T) {
+	// The table can only ever be partial, so the honest failure has to stay honest.
+	cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[{"metadata":{
+		"name":"gpu-0","labels":{"node.kubernetes.io/instance-type":"zz9-plural-z-alpha"}},
+		"status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+
+	capacity, _ := Measure(context.Background(), cluster, nil)
+
+	if capacity.GPUs[0].Product != "unknown" || capacity.GPUs[0].ComputeCapability != "" {
+		t.Fatalf("an unknown machine was described anyway: %+v", capacity.GPUs[0])
+	}
+	if !strings.Contains(capacity.Profiles[0].Source, "unrecognised") {
+		t.Fatalf("provenance does not say it failed: %q", capacity.Profiles[0].Source)
 	}
 }

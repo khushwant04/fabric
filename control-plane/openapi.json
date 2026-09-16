@@ -1438,6 +1438,11 @@
             "title": "Fabric Requested Gpus",
             "type": "integer"
           },
+          "gpu_claims_measured": {
+            "default": false,
+            "title": "Gpu Claims Measured",
+            "type": "boolean"
+          },
           "gpus": {
             "items": {
               "$ref": "#/components/schemas/GpuCapability"

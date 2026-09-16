@@ -269,11 +269,12 @@ func (a *Agent) refreshCapacity(ctx context.Context) {
 		return
 	}
 	if !capacity.PodsMeasured {
-		// Without pod claims, GPUs held by workloads Fabric did not place are invisible
-		// and the stamp looks emptier than it is. The control plane still subtracts its
-		// own placements, so this is the pre-measurement behaviour rather than a new risk.
+		// Without pod claims, GPUs held by workloads Fabric did not place are invisible and
+		// the stamp looks emptier than it is. Logged here and also reported, because the
+		// control plane cannot otherwise tell an unmeasured stamp from an idle one and it
+		// decides placements on the difference.
 		a.log.Warn("reporting capacity without pod claims; foreign gpu use is not visible",
-			"allocatable_gpus", capacity.AllocatableGPUs)
+			"allocatable_gpus", capacity.AllocatableGPUs, "error", capacity.PodClaimsError)
 	}
 	a.measured = capacity
 	a.measuredAt = time.Now()
@@ -313,6 +314,7 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 	capabilities.MaxGPUsPerNode = a.measured.MaxGPUsPerNode
 	capabilities.RequestedGPUs = a.measured.RequestedGPUs
 	capabilities.FabricRequestedGPUs = a.measured.FabricRequestedGPUs
+	capabilities.GPUClaimsMeasured = a.measured.PodsMeasured
 	return capabilities
 }
 

@@ -1116,3 +1116,36 @@ func TestOneDeploymentsGPUCountDoesNotLeakIntoAnother(t *testing.T) {
 		t.Fatalf("second deployment gpu limit = %v, want the configured 1", got)
 	}
 }
+
+func TestAMultiGPUReplicaShardsAcrossItsDevices(t *testing.T) {
+	// Reserving four devices and serving from one is the same defect the fit check exists to
+	// remove, one layer down: the number would govern the reservation and not the workload,
+	// and the three idle devices are held by the limit so nothing else can use them.
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.GPUCount = 4
+	state, client := newHostServer(t, item)
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	if !strings.Contains(string(encoded), "--tensor-parallel-size=4") {
+		t.Fatalf("a four-device replica does not shard: %s", encoded)
+	}
+}
+
+func TestASingleGPUReplicaIsNotGivenTensorParallelism(t *testing.T) {
+	// The flag is meaningless at one device, and adding it would change the command line of
+	// every deployment already running.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	if strings.Contains(string(encoded), "tensor-parallel-size") {
+		t.Fatalf("a single-device host was given tensor parallelism: %s", encoded)
+	}
+}

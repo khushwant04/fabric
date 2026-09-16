@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
@@ -163,6 +163,22 @@ class Demand:
     def total_gpus(self) -> int:
         return self.replicas * self.gpus_per_replica
 
+    def exceeds(self, previous: Demand) -> bool:
+        """Whether this asks a stamp for more than ``previous`` did.
+
+        Used so editing a placed deployment is judged on the *change* rather than on the
+        stamp's current occupancy. Without it, a stamp that filled up for any other reason
+        refuses even an edit that shrinks the deployment — which is the one remedy its owner
+        has.
+        """
+        if self.total_gpus > previous.total_gpus:
+            return True
+        if self.gpus_per_replica > previous.gpus_per_replica:
+            # One replica cannot be split across nodes, so a wider replica can fail to
+            # schedule even when the total falls.
+            return True
+        return _class_is_stricter(self.gpu_class, previous.gpu_class)
+
     def as_details(self) -> dict[str, Any]:
         return {
             "replicas": self.replicas,
@@ -171,6 +187,23 @@ class Demand:
             "gpu_class": self.gpu_class,
             "region": self.region,
         }
+
+
+def _class_is_stricter(candidate: str, previous: str) -> bool:
+    """Whether ``candidate`` demands more hardware than ``previous``.
+
+    An unrecognised name on either side counts as stricter, because a class nobody can
+    evaluate cannot be shown to be a relaxation.
+    """
+    if candidate == previous:
+        return False
+    wanted, had = GPU_CLASSES.get(candidate), GPU_CLASSES.get(previous)
+    if wanted is None or had is None:
+        return True
+    return (
+        wanted.minimum_memory_bytes > had.minimum_memory_bytes
+        or wanted.capability_floor > had.capability_floor
+    )
 
 
 def demand_of(spec: dict[str, Any] | None, *, region: str | None = None) -> Demand:
@@ -203,6 +236,12 @@ class StampCapacity:
     #: own report of Fabric-owned claims from its total, so hosts this platform created are
     #: not counted here *and* in ``committed_gpus``.
     foreign_requested_gpus: int
+    #: GPUs the stamp says Fabric's own model hosts are holding right now. Compared against
+    #: what the control plane has committed rather than added to it — see ``used_gpus``.
+    fabric_requested_gpus: int
+    #: Whether the stamp measured claims at all. False makes the two claim numbers zero,
+    #: which is indistinguishable from an idle cluster without this flag.
+    claims_measured: bool
     #: Largest device count on one node, which bounds what a single replica can ask for.
     #: Zero means the stamp did not say.
     max_gpus_per_node: int
@@ -213,8 +252,33 @@ class StampCapacity:
     region: str | None
     last_heartbeat_at: dt.datetime | None
 
+    def used_gpus(self, committed_gpus: int) -> int:
+        """Devices this stamp cannot offer, whichever of the two views is larger.
+
+        Fabric's own consumption is taken as ``max(committed, reported)`` rather than as
+        either one alone, because each is authoritative in a different direction and both
+        directions really happen:
+
+        *Rows ahead of pods.* A placement is committed the instant it is written and the
+        stamp reports the consequence a heartbeat later. Trusting the report would let every
+        placement in a burst see the same free capacity.
+
+        *Pods ahead of rows.* A release change under ADR 0012 runs the candidate and the
+        active workload side by side, so a deployment really holds twice its replicas for the
+        duration; and a deleted deployment's placements go ``terminating`` before its pods
+        finish. Trusting the rows would hand out capacity that is physically occupied.
+
+        The maximum is correct in both, and it is not a sum: adding them would double-count
+        the ordinary case where the rows and the pods describe the same hosts.
+
+        Foreign claims are added separately because they are disjoint from Fabric's by
+        construction — the stamp reports its own subset so this can subtract each exactly
+        once.
+        """
+        return max(committed_gpus, self.fabric_requested_gpus) + self.foreign_requested_gpus
+
     def free_gpus(self, committed_gpus: int) -> int:
-        return self.allocatable_gpus - self.foreign_requested_gpus - committed_gpus
+        return self.allocatable_gpus - self.used_gpus(committed_gpus)
 
     @property
     def describes_its_hardware(self) -> bool:
@@ -267,7 +331,11 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
 
     return StampCapacity(
         allocatable_gpus=allocatable,
+        # Fails toward zero rather than into a negative subtraction, so a partial or buggy
+        # report whose Fabric subset exceeds its total cannot inflate free capacity.
         foreign_requested_gpus=max(0, requested - fabric_requested),
+        fabric_requested_gpus=fabric_requested,
+        claims_measured=bool(capabilities.get("gpu_claims_measured")),
         max_gpus_per_node=_positive_int(capabilities.get("max_gpus_per_node")),
         weakest_memory_bytes=weakest_memory,
         weakest_capability=weakest_capability,
@@ -284,7 +352,13 @@ class Unfit:
     """Why a stamp cannot hold a deployment."""
 
     code: str
+    #: Facts about the request and about hardware the stamp advertises. Safe to return for
+    #: any stamp: a caller choosing capacity needs them, and they say nothing about who else
+    #: is on it.
     details: dict[str, Any]
+    #: How full the stamp is. Returned only for a stamp the caller owns, because on shared
+    #: managed capacity these are sums across every account on it.
+    occupancy: dict[str, Any] = field(default_factory=dict)
 
 
 def check_fit(
@@ -322,6 +396,10 @@ def check_fit(
             )
 
     if capacity.allocatable_gpus == 0:
+        # A drained pool, or a device plugin between restarts, genuinely cannot schedule a
+        # GPU pod right now. Reporting the last hardware seen instead would be reporting
+        # fiction, so this is correct rather than a gap — but it does mean a plugin outage
+        # makes a stamp temporarily unplaceable.
         return Unfit("stamp_reports_no_gpus", {"allocatable_gpus": 0})
 
     if 0 < capacity.max_gpus_per_node < demand.gpus_per_replica:
@@ -357,10 +435,13 @@ def check_fit(
     if free < demand.total_gpus:
         return Unfit(
             "insufficient_free_gpus",
-            {
+            {"gpu_claims_measured": capacity.claims_measured},
+            occupancy={
                 "free_gpus": free,
                 "allocatable_gpus": capacity.allocatable_gpus,
+                "used_gpus": capacity.used_gpus(committed_gpus),
                 "committed_gpus": committed_gpus,
+                "fabric_requested_gpus": capacity.fabric_requested_gpus,
                 "foreign_requested_gpus": capacity.foreign_requested_gpus,
             },
         )
@@ -383,6 +464,28 @@ def class_was_verified(demand: Demand, capacity: StampCapacity) -> bool:
 
 
 # --- commitment -----------------------------------------------------------
+
+
+async def lock_stamp(session: AsyncSession, *, stamp_id: uuid.UUID) -> None:
+    """Serialize capacity decisions about one stamp against other placements.
+
+    ``committed_gpus`` reads placements and the caller writes one afterwards. Under READ
+    COMMITTED two requests naming the same stamp cannot see each other's uncommitted row, so
+    both would pass a check only one of them should, and both would commit. Taking the
+    stamp's own row first makes the second request wait for the first to finish.
+
+    The stamp row is the lock because it is the thing capacity belongs to; nothing else is
+    written here, so this cannot block a heartbeat's own read. Elevated because managed
+    capacity is owned by the system account and the lock has to be takeable by whichever
+    account is placing onto it. SQLite has no row locks and its dialect emits nothing, which
+    is correct there: the suite runs one connection at a time.
+    """
+    async with elevated(session):
+        await session.execute(
+            select(InferenceStamp.id)
+            .where(InferenceStamp.id == stamp_id)
+            .with_for_update()
+        )
 
 
 async def committed_gpus(

@@ -439,6 +439,11 @@ class StampCapabilities(BaseModel):
     #: separately so placement can subtract foreign workloads without also subtracting its
     #: own placements, which it accounts for from its own records (ADR 0013).
     fabric_requested_gpus: int = Field(default=0, ge=0)
+    #: Whether the stamp read pod claims at all. Zero claimed GPUs is otherwise
+    #: indistinguishable from an idle cluster, and placement decides on the difference, so an
+    #: admission made without claim data is recorded rather than assumed. Defaults false,
+    #: which is the truthful reading of an agent that does not send it.
+    gpu_claims_measured: bool = False
     #: Largest device count on any one node. A stamp-wide total cannot say whether a single
     #: replica asking for four GPUs can be scheduled at all. Zero means unreported.
     max_gpus_per_node: int = Field(default=0, ge=0)

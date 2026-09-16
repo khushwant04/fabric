@@ -84,7 +84,14 @@ func applyProfile(host ModelHost, profiles []GPUProfile) (ModelHost, []Adjustmen
 		if weakest.Capability.AtLeast(profile.Capability) {
 			weakest = profile
 		}
-		if profile.MemoryMiB > 0 && (smallestMemory == 0 || profile.MemoryMiB < smallestMemory) {
+		switch {
+		case profile.MemoryMiB <= 0:
+			// One node nobody could describe makes the whole pool undescribed for memory
+			// purposes, matching how the reported capacity treats it: a host may land on
+			// that node, and a setting derived from the nodes that *were* described would
+			// be a setting sized for hardware the pod may never see.
+			smallestMemory = 0
+		case smallestMemory > 0 && profile.MemoryMiB < smallestMemory:
 			smallestMemory = profile.MemoryMiB
 		}
 	}

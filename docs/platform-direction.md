@@ -146,13 +146,21 @@ sharing the operator's profiling code rather than growing a second GPU table.
 
 Three further things the plan did not anticipate:
 
-- **`gpu_count` had to reach the pod.** It was validated centrally and then ignored, with the
-  container's `nvidia.com/gpu` limit coming from a per-stamp Helm value. Admitting against a
-  number that does not govern the workload is theatre, so it now travels into the CR.
-- **Commitment cannot come from the heartbeat.** A placement is committed immediately and
-  reported a heartbeat later, so admission counts its own writes or a burst overcommits.
+- **`gpu_count` had to reach the pod, and then actually be used.** It was validated centrally
+  and then ignored, with the container's `nvidia.com/gpu` limit coming from a per-stamp Helm
+  value. Admitting against a number that does not govern the workload is theatre — and so is
+  reserving four devices and serving from one, so a multi-device replica now gets
+  `--tensor-parallel-size` too.
+- **Neither view of GPU use is enough alone.** A placement is committed immediately and reported
+  a heartbeat later, so trusting the report lets a burst overcommit. But M3's rollout runs two
+  workloads for one deployment, so trusting the rows hands out capacity that is physically
+  occupied. Use is `max(committed, reported)` plus foreign claims.
 - **A class is a minimum, not a product.** Comparing exact compute capability would refuse an
   A100 for an `a10` request; matching product strings would make every new SKU an outage.
+- **One hole is admitted rather than closed.** A stamp that cannot describe its devices is placed
+  onto with the class unchecked, because refusing would make an agent upgrade a prerequisite for
+  placing anything. It is written to the audit trail, and device recognition was widened past
+  Azure to shrink how often it applies.
 
 `applyProfile`'s discarded `smallestMemory` is used, though not as the plan assumed: it clamps
 `gpu_memory_utilization` when a fraction of a small device leaves too little absolute headroom

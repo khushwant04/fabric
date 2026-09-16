@@ -252,3 +252,25 @@ func TestAnUnparseableFractionIsLeftForTheServerToReject(t *testing.T) {
 			adjusted.GPUMemoryUtilization, changes)
 	}
 }
+
+func TestAnUndescribedNodeSuppressesTheMemoryClamp(t *testing.T) {
+	// A host may land on the node nobody could describe, so a clamp computed from the nodes
+	// that *were* described would be sized for hardware the pod may never see. The reported
+	// capacity demotes a group the same way; this keeps the two consistent.
+	host := testHost()
+	host.DType = "float16"
+	host.GPUMemoryUtilization = "0.99"
+	profiles := []GPUProfile{
+		{Node: "known", Model: "Small", Capability: ComputeCapability{Major: 8, Minor: 0},
+			MemoryMiB: 8192, Count: 1},
+		{Node: "unknown", Model: "", Capability: ComputeCapability{Major: 8, Minor: 0},
+			MemoryMiB: 0, Count: 1},
+	}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	if adjusted.GPUMemoryUtilization != "0.99" || len(changes) != 0 {
+		t.Fatalf("clamped against partially described hardware: %q %+v",
+			adjusted.GPUMemoryUtilization, changes)
+	}
+}

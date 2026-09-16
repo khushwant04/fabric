@@ -154,14 +154,34 @@ async def _bump_placements(session: AsyncSession, deployment: Deployment) -> Non
 
 
 async def _refuse_placements_that_no_longer_fit(
-    session: AsyncSession, *, deployment: Deployment, spec: dict[str, Any]
-) -> None:
+    session: AsyncSession,
+    *,
+    account: Account,
+    deployment: Deployment,
+    spec: dict[str, Any],
+) -> bool:
     """Raise unless every stamp holding this deployment can still hold it under ``spec``.
 
     Checked before the spec is stored, so a refused update leaves the deployment exactly as
-    it was rather than depending on a rollback.
+    it was rather than depending on a rollback. Returns whether the GPU class was actually
+    judged, for the audit trail.
+
+    Only an edit that asks for *more* is checked. Judging every edit against the stamp's
+    current occupancy would mean that once a stamp is oversubscribed — a foreign workload
+    appeared, a rollout is in flight, a device plugin restarted — even lowering ``replicas``
+    is refused, and shrinking is the one remedy its owner has.
     """
-    demand = await _demand_for_spec(spec)
+    previous = placement.demand_of(deployment.desired_spec)
+    demand = placement.demand_of(spec, region=None)
+
+    if demand.gpu_class != previous.gpu_class:
+        # Validated only when it changes. A deployment created before a class was named must
+        # stay editable, which is the whole reason creation does not validate the catalogue;
+        # setting a class nobody recognises is still refused.
+        await _demand_for_spec(spec)
+
+    if not demand.exceeds(previous):
+        return demand.gpu_class in placement.GPU_CLASSES
 
     existing = (
         (
@@ -176,9 +196,7 @@ async def _refuse_placements_that_no_longer_fit(
         .scalars()
         .all()
     )
-    if not existing:
-        return
-
+    verified = True
     for record in existing:
         async with elevated(session):
             stamp = (
@@ -190,13 +208,16 @@ async def _refuse_placements_that_no_longer_fit(
             # A revoked stamp serves nothing either way, so its capacity is not a reason to
             # refuse an edit. Withdrawing the placement is a separate action.
             continue
-        await _refuse_if_stamp_cannot_fit(
+        capacity = await _refuse_if_stamp_cannot_fit(
             session,
+            account=account,
             stamp=stamp,
             deployment_id=deployment.id,
             demand=demand,
             require_live=False,
         )
+        verified = verified and placement.class_was_verified(demand, capacity)
+    return verified
 
 
 async def update_deployment(
@@ -214,8 +235,11 @@ async def update_deployment(
     an oversized placement does, and refusing at reconcile time is the failure ADR 0013
     exists to move to the API.
     """
+    account = await get_account(session, account_id)
     deployment = await get_deployment(session, account_id, deployment_id)
-    await _refuse_placements_that_no_longer_fit(session, deployment=deployment, spec=spec)
+    class_verified = await _refuse_placements_that_no_longer_fit(
+        session, account=account, deployment=deployment, spec=spec
+    )
     deployment.desired_spec = spec
     deployment.generation += 1
     deployment.status = "pending"
@@ -230,7 +254,13 @@ async def update_deployment(
         action="deployment.updated",
         resource_type="deployment",
         resource_id=str(deployment.id),
-        metadata={"generation": deployment.generation},
+        metadata={
+            "generation": deployment.generation,
+            # Recorded on this path too: re-admitting a deployment onto a stamp that describes
+            # none of its hardware skips the class requirement, and that has to be as visible
+            # here as it is at placement.
+            "gpu_class_verified": class_verified,
+        },
     )
     await publish_outbox(
         session,
@@ -369,12 +399,18 @@ async def _demand_for_spec(
 async def _refuse_if_stamp_cannot_fit(
     session: AsyncSession,
     *,
+    account: Account,
     stamp: InferenceStamp,
     deployment_id: uuid.UUID,
     demand: placement.Demand,
     require_live: bool,
 ) -> placement.StampCapacity:
-    """Raise unless this stamp can hold this demand, naming what is short."""
+    """Raise unless this stamp can hold this demand, naming what is short.
+
+    Takes the stamp's row first, so the capacity this decides on cannot change under it while
+    another placement is being admitted.
+    """
+    await placement.lock_stamp(session, stamp_id=stamp.id)
     capacity = placement.read_capacity(stamp)
     committed = await placement.committed_gpus(
         session, stamp_id=stamp.id, exclude_deployment_id=deployment_id
@@ -390,6 +426,9 @@ async def _refuse_if_stamp_cannot_fit(
             stamp_id=str(stamp.id),
             demand=demand.as_details(),
             **unfit.details,
+            # Occupancy only for the caller's own hardware: on shared managed capacity these
+            # are sums across every account on the stamp.
+            **(unfit.occupancy if stamp.account_id == account.id else {}),
         )
     return capacity
 
@@ -423,10 +462,22 @@ async def _select_stamp(
 
     fitting: list[tuple[int, int, str, InferenceStamp]] = []
     refusals: list[dict[str, Any]] = []
+
+    def refusal_entry(stamp: InferenceStamp, unfit: placement.Unfit) -> dict[str, Any]:
+        # A stamp the caller does not own is reported without its id or its occupancy: the
+        # reason is what a caller can act on, while the id of managed capacity it is not
+        # entitled to, and how full that capacity is, are not its business.
+        own = stamp.account_id == account.id
+        entry: dict[str, Any] = {"reason": unfit.code, **unfit.details}
+        if own:
+            entry["stamp_id"] = str(stamp.id)
+            entry.update(unfit.occupancy)
+        return entry
+
     for stamp in candidates:
         refusal = _stamp_unavailable(stamp, account=account, system_account=system_account)
         if refusal is not None:
-            refusals.append({"stamp_id": str(stamp.id), "reason": refusal.code})
+            refusals.append(refusal_entry(stamp, placement.Unfit(refusal.code, {})))
             continue
 
         capacity = placement.read_capacity(stamp)
@@ -437,7 +488,7 @@ async def _select_stamp(
             demand, capacity, committed_gpus=committed, require_live=True
         )
         if unfit is not None:
-            refusals.append({"stamp_id": str(stamp.id), "reason": unfit.code, **unfit.details})
+            refusals.append(refusal_entry(stamp, unfit))
             continue
 
         fitting.append(
@@ -486,17 +537,22 @@ async def create_placement(
         stamp = await _select_stamp(
             session, account=account, deployment=deployment, demand=demand
         )
-        capacity = placement.read_capacity(stamp)
     else:
         stamp = await _authorize_stamp_for_account(session, account=account, stamp_id=stamp_id)
-        capacity = await _refuse_if_stamp_cannot_fit(
-            session,
-            stamp=stamp,
-            deployment_id=deployment.id,
-            demand=demand,
-            # A named stamp is not refused for a stale heartbeat; see check_fit.
-            require_live=False,
-        )
+
+    # Re-checked under the stamp's own row lock, whether it was named or selected. Selection
+    # filters on a read nobody was holding, so the winner is a candidate rather than a
+    # decision until this passes.
+    capacity = await _refuse_if_stamp_cannot_fit(
+        session,
+        account=account,
+        stamp=stamp,
+        deployment_id=deployment.id,
+        demand=demand,
+        # Liveness is a selection rule, not an admission rule: a named stamp is not refused
+        # for a stale heartbeat, and a selected one already passed it. See check_fit.
+        require_live=False,
+    )
 
     existing = (
         await session.execute(

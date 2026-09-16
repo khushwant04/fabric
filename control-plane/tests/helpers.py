@@ -136,6 +136,9 @@ def default_capabilities(
         "allocatable_gpus": gpus,
         "requested_gpus": requested_gpus,
         "fabric_requested_gpus": fabric_requested_gpus,
+        # A measuring agent says so; zero claimed devices is otherwise indistinguishable from
+        # an idle cluster.
+        "gpu_claims_measured": True,
         "max_gpus_per_node": gpus if max_gpus_per_node is None else max_gpus_per_node,
     }
 

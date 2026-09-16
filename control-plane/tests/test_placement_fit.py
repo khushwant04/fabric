@@ -9,15 +9,18 @@ name one.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditEvent, InferenceStamp
 from app.services import placement as placement_service
+from tests.conftest import USING_POSTGRES
 from tests.helpers import (
     bearer,
     create_deployment,
@@ -575,9 +578,10 @@ async def test_selection_skips_managed_capacity_without_the_entitlement(
     assert refused.status_code == 409
     error = _error(refused)
     assert error["code"] == "no_stamp_fits_deployment"
-    assert error["details"]["candidates"] == [
-        {"stamp_id": managed["stamp"]["id"], "reason": "managed_capacity_not_enabled"}
-    ]
+    # No stamp id: managed capacity this account is not entitled to is not its business,
+    # and the reason is the part it can act on.
+    assert error["details"]["candidates"] == [{"reason": "managed_capacity_not_enabled"}]
+    assert managed["stamp"]["id"] not in refused.text
 
 
 async def test_selection_skips_managed_capacity_on_an_unsupported_orchestrator(
@@ -596,9 +600,8 @@ async def test_selection_skips_managed_capacity_on_an_unsupported_orchestrator(
     refused = await place(client, account_id, token, deployment["id"])
 
     assert refused.status_code == 409
-    assert _error(refused)["details"]["candidates"] == [
-        {"stamp_id": managed["stamp"]["id"], "reason": "unsupported_orchestrator"}
-    ]
+    assert _error(refused)["details"]["candidates"] == [{"reason": "unsupported_orchestrator"}]
+    assert managed["stamp"]["id"] not in refused.text
 
 
 async def test_a_revoked_stamp_is_never_selected(
@@ -783,5 +786,345 @@ async def test_the_capability_schema_accepts_the_fields_the_agent_now_measures(
     assert capacity.allocatable_gpus == 4
     # Three claimed, two of them ours: one belongs to somebody else.
     assert capacity.foreign_requested_gpus == 1
+    assert capacity.fabric_requested_gpus == 2
+    assert capacity.claims_measured is True
     assert capacity.max_gpus_per_node == 2
-    assert capacity.free_gpus(committed_gpus=1) == 2
+    # Two Fabric GPUs are running while one placement's worth is committed, which is what a
+    # rollout looks like. Use is the larger of the two views, not their sum: 2 + 1 foreign.
+    assert capacity.used_gpus(committed_gpus=1) == 3
+    assert capacity.free_gpus(committed_gpus=1) == 1
+
+
+
+# --- what the stamp reports it is using ----------------------------------
+
+
+async def test_gpus_running_beyond_what_is_committed_are_not_offered(
+    client: AsyncClient,
+) -> None:
+    """A release change under ADR 0012 runs two workloads for one deployment.
+
+    So a deployment really holds twice its replicas while it rolls out. Counting only the
+    placement rows would offer capacity that is physically occupied, and the new placement's
+    pod would sit Pending — the failure this milestone exists to move to the API, reached from
+    the other side.
+    """
+    account_id, token = await onboard(client, "surge", "surge-account")
+    # Four devices, two of them held by Fabric hosts, and one placement's worth committed:
+    # a one-replica deployment mid-rollout.
+    enrolled = await enroll_stamp(
+        client,
+        account_id,
+        token,
+        capabilities=default_capabilities(gpus=4, requested_gpus=2, fabric_requested_gpus=2),
+    )
+    stamp_id = enrolled["stamp"]["id"]
+
+    rolling = await create_deployment(client, account_id, token, name="rolling", replicas=1)
+    placed = await place(client, account_id, token, rolling["id"], stamp_id=stamp_id)
+    assert placed.status_code == 201, placed.text
+
+    # Committed says 1, the stamp says 2 are running. Three more replicas would fit against
+    # the rows and do not fit against the hardware.
+    incoming = await create_deployment(client, account_id, token, name="incoming", replicas=3)
+    refused = await place(client, account_id, token, incoming["id"], stamp_id=stamp_id)
+
+    assert refused.status_code == 409, refused.text
+    details = _error(refused)["details"]
+    assert details["reason"] == "insufficient_free_gpus"
+    assert details["committed_gpus"] == 1
+    assert details["fabric_requested_gpus"] == 2
+    # The larger of the two views, plus foreign use, and not their sum.
+    assert details["used_gpus"] == 2
+    assert details["free_gpus"] == 2
+
+
+async def test_running_and_committed_gpus_are_not_added_together(
+    client: AsyncClient,
+) -> None:
+    """In the ordinary case the rows and the pods describe the same hosts."""
+    account_id, token = await onboard(client, "no-double", "no-double-account")
+    enrolled = await enroll_stamp(
+        client,
+        account_id,
+        token,
+        capabilities=default_capabilities(gpus=4, requested_gpus=2, fabric_requested_gpus=2),
+    )
+    stamp_id = enrolled["stamp"]["id"]
+
+    settled = await create_deployment(client, account_id, token, name="settled", replicas=2)
+    assert (
+        await place(client, account_id, token, settled["id"], stamp_id=stamp_id)
+    ).status_code == 201
+
+    # Two committed and the same two running, so two devices remain. Summing would leave none.
+    incoming = await create_deployment(client, account_id, token, name="incoming", replicas=2)
+    placed = await place(client, account_id, token, incoming["id"], stamp_id=stamp_id)
+    assert placed.status_code == 201, placed.text
+
+
+async def test_a_stamp_that_did_not_measure_claims_says_so_when_it_refuses(
+    client: AsyncClient,
+) -> None:
+    """An admission decided without claim data has to be visible in the refusal."""
+    account_id, token = await onboard(client, "unmeasured", "unmeasured-account")
+    blind = default_capabilities(gpus=1)
+    blind["gpu_claims_measured"] = False
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=blind)
+    deployment = await create_deployment(client, account_id, token, replicas=2)
+
+    refused = await place(
+        client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"]
+    )
+
+    assert refused.status_code == 409
+    assert _error(refused)["details"]["gpu_claims_measured"] is False
+
+
+# --- what a refusal discloses --------------------------------------------
+
+
+async def test_a_managed_stamps_occupancy_is_not_disclosed(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Managed capacity is shared, so its free and committed counts are other tenants'."""
+    account_id, token = await onboard(client, "opaque", "opaque-account")
+    managed, _system = await enroll_managed_stamp(
+        client, db_session, capabilities=default_capabilities(gpus=1)
+    )
+    await enable_managed_capacity(db_session, account_id)
+    deployment = await create_deployment(client, account_id, token, replicas=4)
+
+    refused = await place(
+        client, account_id, token, deployment["id"], stamp_id=managed["stamp"]["id"]
+    )
+
+    assert refused.status_code == 409
+    details = _error(refused)["details"]
+    assert details["reason"] == "insufficient_free_gpus"
+    # The caller still learns what it asked for and that the stamp cannot take it.
+    assert details["demand"]["gpus_total"] == 4
+    for disclosed in ("free_gpus", "committed_gpus", "used_gpus", "allocatable_gpus"):
+        assert disclosed not in details, f"{disclosed} describes other accounts' use"
+
+
+async def test_an_owned_stamps_occupancy_is_disclosed(client: AsyncClient) -> None:
+    """A customer's own cluster is its own business, and the numbers are how it acts."""
+    account_id, token = await onboard(client, "clear", "clear-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=1)
+    )
+    deployment = await create_deployment(client, account_id, token, replicas=4)
+
+    refused = await place(
+        client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"]
+    )
+
+    details = _error(refused)["details"]
+    assert details["free_gpus"] == 1
+    assert details["allocatable_gpus"] == 1
+
+
+# --- editing a placed deployment on a full stamp -------------------------
+
+
+async def test_an_edit_that_asks_for_less_is_allowed_on_a_full_stamp(
+    client: AsyncClient,
+) -> None:
+    """Shrinking is the remedy for an oversubscribed stamp, so it cannot be the thing refused.
+
+    A stamp fills up for reasons its owner did not cause — a foreign workload appearing, a
+    rollout in flight. Judging every edit against current occupancy would leave the owner
+    unable to do the only thing that helps.
+    """
+    account_id, token = await onboard(client, "shrink", "shrink-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=4)
+    )
+    deployment = await create_deployment(client, account_id, token, replicas=4)
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"])
+    ).status_code == 201
+
+    shrunk = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 2}},
+        headers=bearer(token),
+    )
+    assert shrunk.status_code == 200, shrunk.text
+    assert shrunk.json()["desired_spec"]["replicas"] == 2
+
+
+async def test_an_unrelated_edit_is_allowed_on_a_full_stamp(client: AsyncClient) -> None:
+    """A release change asks for nothing extra, so occupancy is not its concern."""
+    account_id, token = await onboard(client, "release", "release-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=2)
+    )
+    deployment = await create_deployment(client, account_id, token, replicas=2)
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"])
+    ).status_code == 201
+
+    rolled = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-2"}, "replicas": 2}},
+        headers=bearer(token),
+    )
+    assert rolled.status_code == 200, rolled.text
+
+
+async def test_a_wider_replica_is_checked_even_when_the_total_falls(
+    client: AsyncClient,
+) -> None:
+    """Four replicas of one device become one of four: fewer GPUs, and unschedulable."""
+    account_id, token = await onboard(client, "wider", "wider-account")
+    enrolled = await enroll_stamp(
+        client,
+        account_id,
+        token,
+        capabilities=default_capabilities(gpus=4, max_gpus_per_node=1),
+    )
+    deployment = await create_deployment(client, account_id, token, replicas=4)
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"])
+    ).status_code == 201
+
+    refused = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={
+            "spec": {
+                "runtime": {"release": "runtime-release-1"},
+                "replicas": 1,
+                "resources": {"gpu_count": 4, "gpu_class": "t4"},
+            }
+        },
+        headers=bearer(token),
+    )
+
+    assert refused.status_code == 409
+    assert _error(refused)["details"]["reason"] == "gpu_count_exceeds_largest_node"
+
+
+async def test_a_legacy_gpu_class_does_not_block_an_unrelated_edit(
+    client: AsyncClient,
+) -> None:
+    """The reason creation does not validate the catalogue: it grows.
+
+    A deployment naming a class this platform no longer recognises has to stay editable, and a
+    caller setting an unrecognised class is still refused.
+    """
+    account_id, token = await onboard(client, "legacy-class", "legacy-class-account")
+    deployment = await create_deployment(
+        client, account_id, token, resources={"gpu_count": 1, "gpu_class": "gtx-1080"}
+    )
+
+    kept = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={
+            "spec": {
+                "runtime": {"release": "runtime-release-2"},
+                "replicas": 1,
+                "resources": {"gpu_count": 1, "gpu_class": "gtx-1080"},
+            }
+        },
+        headers=bearer(token),
+    )
+    assert kept.status_code == 200, kept.text
+
+    refused = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={
+            "spec": {
+                "runtime": {"release": "runtime-release-2"},
+                "replicas": 1,
+                "resources": {"gpu_count": 1, "gpu_class": "rtx-9090"},
+            }
+        },
+        headers=bearer(token),
+    )
+    assert refused.status_code == 400
+    assert _error(refused)["code"] == "unknown_gpu_class"
+
+
+async def test_growing_onto_an_undescribed_stamp_records_the_unverified_class(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The skip has to be as visible on an edit as it is at placement."""
+    account_id, token = await onboard(client, "grow-blind", "grow-blind-account")
+    legacy = {"orchestrator": "k3s", "region": "local", "gpus": [], "allocatable_gpus": 8}
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=legacy)
+    deployment = await create_deployment(
+        client, account_id, token, replicas=1, resources={"gpu_count": 1, "gpu_class": "h100"}
+    )
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"])
+    ).status_code == 201
+
+    grown = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={
+            "spec": {
+                "runtime": {"release": "runtime-release-1"},
+                "replicas": 4,
+                "resources": {"gpu_count": 1, "gpu_class": "h100"},
+            }
+        },
+        headers=bearer(token),
+    )
+    assert grown.status_code == 200, grown.text
+
+    event = (
+        await db_session.execute(
+            select(AuditEvent).where(
+                AuditEvent.account_id == uuid.UUID(account_id),
+                AuditEvent.action == "deployment.updated",
+            )
+        )
+    ).scalar_one()
+    assert event.event_metadata["gpu_class_verified"] is False
+
+
+
+@pytest.mark.skipif(
+    not USING_POSTGRES,
+    reason="serialization needs row locks; SQLite runs one connection at a time",
+)
+async def test_two_placements_racing_for_the_last_gpus_do_not_both_win(
+    client: AsyncClient,
+) -> None:
+    """Admission counts its own writes, which is only true if the writes are ordered.
+
+    Each request reads what is committed and then writes a placement. Under READ COMMITTED
+    neither can see the other's uncommitted row, so without a lock on the stamp both would
+    pass a check only one of them should and both would commit.
+    """
+    account_id, token = await onboard(client, "race-cap", "race-cap-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=2)
+    )
+    stamp_id = enrolled["stamp"]["id"]
+
+    contenders = [
+        await create_deployment(client, account_id, token, name=f"racer-{index}", replicas=2)
+        for index in range(4)
+    ]
+    responses = await asyncio.gather(
+        *(
+            place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+            for deployment in contenders
+        )
+    )
+
+    codes = sorted(response.status_code for response in responses)
+    assert codes == [201, 409, 409, 409], [response.text for response in responses]
+    for response in responses:
+        if response.status_code == 409:
+            assert _error(response)["details"]["reason"] == "insufficient_free_gpus"
+
+    # And the stamp really is holding one deployment's worth, not four.
+    placements = await client.get(
+        f"/v1/accounts/{account_id}/deployments/{contenders[0]['id']}/placements",
+        headers=bearer(token),
+    )
+    assert placements.status_code == 200

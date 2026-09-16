@@ -80,28 +80,83 @@ var knownGPUs = map[string]struct {
 	Capability ComputeCapability
 	MemoryMiB  int
 }{
-	"Tesla T4":         {ComputeCapability{7, 5}, 16384},
-	"NVIDIA A10":       {ComputeCapability{8, 6}, 24576},
-	"NVIDIA A100":      {ComputeCapability{8, 0}, 40960},
-	"NVIDIA L4":        {ComputeCapability{8, 9}, 24576},
-	"NVIDIA H100":      {ComputeCapability{9, 0}, 81920},
-	"NVIDIA V100":      {ComputeCapability{7, 0}, 16384},
-	"NVIDIA RTX A4000": {ComputeCapability{8, 6}, 16384},
+	"Tesla T4":                {ComputeCapability{7, 5}, 16384},
+	"NVIDIA A10":              {ComputeCapability{8, 6}, 24576},
+	"NVIDIA A10G":             {ComputeCapability{8, 6}, 23028},
+	"NVIDIA A100":             {ComputeCapability{8, 0}, 40960},
+	"NVIDIA A100 80GB":        {ComputeCapability{8, 0}, 81920},
+	"NVIDIA L4":               {ComputeCapability{8, 9}, 24576},
+	"NVIDIA L40S":             {ComputeCapability{8, 9}, 49152},
+	"NVIDIA H100":             {ComputeCapability{9, 0}, 81920},
+	"NVIDIA V100":             {ComputeCapability{7, 0}, 16384},
+	"NVIDIA RTX A4000":        {ComputeCapability{8, 6}, 16384},
+	"NVIDIA RTX A6000":        {ComputeCapability{8, 6}, 49152},
+	"NVIDIA GeForce RTX 4090": {ComputeCapability{8, 9}, 24564},
 }
 
 // machineTypeGPUs maps a cloud machine type to the GPU it carries. Used when the cluster
 // reports the machine but nothing has reported the device itself, which is the normal case
 // on a cluster without GPU feature discovery installed.
+//
+// Covering more than one cloud matters more than it looks. An unrecognised machine leaves the
+// device undescribed, and the control plane cannot judge a GPU class it cannot see, so it
+// admits the placement and records that the class went unverified (ADR 0013). An Azure-only
+// table therefore means every GPU node on EKS or GKE without feature discovery is placed
+// against blind. These entries are the families this platform is plausibly deployed on;
+// anything else still degrades to an unverified admission rather than to a wrong one.
 var machineTypeGPUs = map[string]string{
+	// Azure.
 	"Standard_NC4as_T4_v3":      "Tesla T4",
 	"Standard_NC8as_T4_v3":      "Tesla T4",
 	"Standard_NC16as_T4_v3":     "Tesla T4",
 	"Standard_NC64as_T4_v3":     "Tesla T4",
 	"Standard_NV6ads_A10_v5":    "NVIDIA A10",
 	"Standard_NV12ads_A10_v5":   "NVIDIA A10",
-	"Standard_NC24ads_A100_v4":  "NVIDIA A100",
+	"Standard_NV18ads_A10_v5":   "NVIDIA A10",
+	"Standard_NV36ads_A10_v5":   "NVIDIA A10",
+	"Standard_NC24ads_A100_v4":  "NVIDIA A100 80GB",
+	"Standard_NC48ads_A100_v4":  "NVIDIA A100 80GB",
+	"Standard_NC96ads_A100_v4":  "NVIDIA A100 80GB",
 	"Standard_NC40ads_H100_v5":  "NVIDIA H100",
 	"Standard_NC80adis_H100_v5": "NVIDIA H100",
+	// AWS. Matched by instance family below as well, because the sizes are numerous and
+	// the GPU is a property of the family.
+	"p3.2xlarge":   "NVIDIA V100",
+	"p4d.24xlarge": "NVIDIA A100",
+	"p5.48xlarge":  "NVIDIA H100",
+}
+
+// machineFamilyGPUs maps a machine-type prefix to the GPU that family carries, for clouds
+// whose instance names enumerate sizes rather than devices. Consulted only after an exact
+// match fails, and longest prefix wins so "g4dn" is not shadowed by "g4".
+var machineFamilyGPUs = map[string]string{
+	// AWS.
+	"g4dn.": "Tesla T4",
+	"g5.":   "NVIDIA A10G",
+	"g6.":   "NVIDIA L4",
+	"g6e.":  "NVIDIA L40S",
+	"p3.":   "NVIDIA V100",
+	"p4d.":  "NVIDIA A100",
+	"p4de.": "NVIDIA A100 80GB",
+	"p5.":   "NVIDIA H100",
+	// GCP, whose A- and G-series carry one device per family.
+	"a2-":          "NVIDIA A100",
+	"a2-ultragpu-": "NVIDIA A100 80GB",
+	"a3-":          "NVIDIA H100",
+	"g2-":          "NVIDIA L4",
+}
+
+// acceleratorLabelGPUs maps the accelerator labels managed Kubernetes offerings apply to
+// their GPU pools. GKE sets cloud.google.com/gke-accelerator on every GPU node without any
+// feature discovery installed, which makes it the cheapest way to describe a GKE stamp.
+var acceleratorLabelGPUs = map[string]string{
+	"nvidia-tesla-t4":       "Tesla T4",
+	"nvidia-tesla-v100":     "NVIDIA V100",
+	"nvidia-tesla-a100":     "NVIDIA A100",
+	"nvidia-a100-80gb":      "NVIDIA A100 80GB",
+	"nvidia-l4":             "NVIDIA L4",
+	"nvidia-h100-80gb":      "NVIDIA H100",
+	"nvidia-h100-mega-80gb": "NVIDIA H100",
 }
 
 // GPUResource is the extended resource an NVIDIA device plugin advertises.
@@ -165,13 +220,28 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 		profile := Profile{Node: item.Metadata.Name, Count: count, Source: "unknown"}
 
 		// Preferred: a label naming the device, which GPU feature discovery provides.
-		if model := item.Metadata.Labels["nvidia.com/gpu.product"]; model != "" {
-			profile.Model = normaliseModel(model)
+		switch {
+		case item.Metadata.Labels["nvidia.com/gpu.product"] != "":
+			profile.Model = normaliseModel(item.Metadata.Labels["nvidia.com/gpu.product"])
 			profile.Source = "node label"
-		} else if machine := item.Metadata.Labels["node.kubernetes.io/instance-type"]; machine != "" {
+		default:
+			// Then the provider's own accelerator label, which needs nothing installed.
+			accelerator := item.Metadata.Labels["cloud.google.com/gke-accelerator"]
+			if model, ok := acceleratorLabelGPUs[strings.ToLower(accelerator)]; ok {
+				profile.Model = model
+				profile.Source = "accelerator label " + accelerator
+				break
+			}
+			machine := item.Metadata.Labels["node.kubernetes.io/instance-type"]
+			if machine == "" {
+				break
+			}
 			if model, ok := machineTypeGPUs[machine]; ok {
 				profile.Model = model
 				profile.Source = "machine type " + machine
+			} else if model, family := machineFamilyGPU(machine); model != "" {
+				profile.Model = model
+				profile.Source = "machine family " + family
 			} else {
 				profile.Source = "unrecognised machine type " + machine
 			}
@@ -206,4 +276,22 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 func normaliseModel(label string) string {
 	// Feature discovery uses hyphens where the device reports spaces.
 	return strings.ReplaceAll(label, "-", " ")
+}
+
+// machineFamilyGPU resolves a machine type by its family prefix, returning the device and the
+// prefix that matched so the profile can record how it was learned.
+//
+// Longest prefix wins, so "g4dn.xlarge" resolves as g4dn rather than being shadowed by a
+// shorter entry, and "a2-ultragpu-1g" resolves to the 80 GB part rather than the 40 GB one.
+func machineFamilyGPU(machine string) (model string, family string) {
+	lowered := strings.ToLower(machine)
+	for prefix, candidate := range machineFamilyGPUs {
+		if !strings.HasPrefix(lowered, prefix) {
+			continue
+		}
+		if len(prefix) > len(family) {
+			model, family = candidate, prefix
+		}
+	}
+	return model, family
 }

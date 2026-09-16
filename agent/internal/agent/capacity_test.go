@@ -281,3 +281,50 @@ func TestGPUCountReachesTheDeclaredDeployment(t *testing.T) {
 		t.Fatalf("replicas = %d, want 2", configured[0].Replicas)
 	}
 }
+
+func TestAnUnmeasuredClaimCountIsReportedAsSuch(t *testing.T) {
+	// Zero claimed GPUs looks exactly like an idle cluster, and the control plane decides
+	// placements on the difference. Logging it locally is not enough.
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	instance, _ := newAgent(t, server.URL)
+	partial := measuredT4Stamp()
+	partial.PodsMeasured = false
+	partial.RequestedGPUs = 0
+	partial.FabricRequestedGPUs = 0
+	partial.PodClaimsError = "pods is forbidden"
+	instance.config.Capacity = &countingSource{capacity: partial}
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if stub.lastCapabilities.GPUClaimsMeasured {
+		t.Fatal("an unmeasured claim count was reported as measured")
+	}
+	// The hardware is still reported: only the claims were missing.
+	if stub.lastCapabilities.AllocatableGPUs != 3 {
+		t.Fatalf("hardware was dropped: %+v", stub.lastCapabilities)
+	}
+}
+
+func TestAMeasuredClaimCountSaysSo(t *testing.T) {
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	instance, _ := newAgent(t, server.URL)
+	instance.config.Capacity = &countingSource{capacity: measuredT4Stamp()}
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if !stub.lastCapabilities.GPUClaimsMeasured {
+		t.Fatal("a measured claim count was reported as unmeasured")
+	}
+}

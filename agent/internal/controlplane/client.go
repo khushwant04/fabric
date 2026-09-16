@@ -84,10 +84,14 @@ type Capabilities struct {
 	FabricRequestedGPUs int `json:"fabric_requested_gpus"`
 	// MaxGPUsPerNode is the largest device count on any one node. A stamp-wide total
 	// cannot say whether a single replica asking for four GPUs can be scheduled at all.
-	MaxGPUsPerNode int    `json:"max_gpus_per_node"`
-	DriverVersion  string `json:"driver_version,omitempty"`
-	AgentVersion   string `json:"agent_version,omitempty"`
-	RuntimeVersion string `json:"runtime_version,omitempty"`
+	MaxGPUsPerNode int `json:"max_gpus_per_node"`
+	// GPUClaimsMeasured says whether RequestedGPUs was read from the cluster. Zero claimed
+	// devices is indistinguishable from an idle cluster otherwise, and the difference
+	// decides whether a placement is admitted, so the control plane is told which it has.
+	GPUClaimsMeasured bool   `json:"gpu_claims_measured"`
+	DriverVersion     string `json:"driver_version,omitempty"`
+	AgentVersion      string `json:"agent_version,omitempty"`
+	RuntimeVersion    string `json:"runtime_version,omitempty"`
 }
 
 // Stamp is the registered stamp record.
