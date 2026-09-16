@@ -8,6 +8,7 @@ a healthy backend remains.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 
 import httpx
@@ -71,6 +72,39 @@ def test_a_backends_list_loads_and_carries_id_and_weight() -> None:
     assert deployment.backends[1].weight == 1.0
 
 
+def test_strategy_is_parsed_from_the_config_and_defaults_to_least_in_flight() -> None:
+    registry = DeploymentRegistry.from_payload(
+        _payload(
+            {
+                "deployment_id": str(DEP),
+                "account_id": str(ACCOUNT),
+                "model_alias": "launch-model",
+                "upstream_url": "http://model-host.test",
+                "strategy": "weighted",
+            }
+        )
+    )
+    deployment = registry.resolve("launch-model", account_id=ACCOUNT)
+    assert deployment.strategy == "weighted"
+    assert deployment.build_pool().strategy_name == "weighted"
+
+
+def test_strategy_defaults_when_absent() -> None:
+    registry = DeploymentRegistry.from_payload(
+        _payload(
+            {
+                "deployment_id": str(DEP),
+                "account_id": str(ACCOUNT),
+                "model_alias": "launch-model",
+                "upstream_url": "http://model-host.test",
+            }
+        )
+    )
+    deployment = registry.resolve("launch-model", account_id=ACCOUNT)
+    assert deployment.strategy == "least_in_flight"
+    assert deployment.build_pool().strategy_name == "least_in_flight"
+
+
 def test_backends_win_when_both_shapes_are_present() -> None:
     registry = DeploymentRegistry.from_payload(
         _payload(
@@ -101,7 +135,7 @@ def _backends(*urls: str) -> list[Backend]:
 
 
 def test_the_pool_round_robins_across_healthy_backends() -> None:
-    pool = BackendPool(_backends("http://a", "http://b", "http://c"))
+    pool = BackendPool(_backends("http://a", "http://b", "http://c"), strategy="round_robin")
     picks = [pool.select().backend_id for _ in range(6)]
     # Every backend is used and none is starved.
     assert set(picks) == {"http://a", "http://b", "http://c"}
@@ -218,6 +252,10 @@ def _pool_registry() -> DeploymentRegistry:
                     Backend(url="http://a.test", backend_id="pod-a"),
                     Backend(url="http://b.test", backend_id="pod-b"),
                 ),
+                # Round-robin so sequential requests visibly spread; the M1 health
+                # behaviour under test (skip a dead backend, reselect) is independent of
+                # which strategy chooses among the healthy ones.
+                strategy="round_robin",
             )
         ]
     )
@@ -382,9 +420,20 @@ def test_a_pool_rebuilds_when_a_stable_backend_id_moves(pool_plane) -> None:
 
 
 
-def test_withdrawn_deployment_pools_are_retired(pool_plane) -> None:
+def test_withdrawn_deployment_pools_and_backend_metrics_are_retired(pool_plane) -> None:
     old_deployment = _pool_registry().resolve("launch-model", account_id=ACCOUNT_A)
-    pool_plane.pool_for(old_deployment)
+    old_pool = pool_plane.pool_for(old_deployment)
+    for backend in old_pool.backends:
+        pool_plane.metrics.backend_health(
+            deployment=str(DEPLOYMENT_A), backend=backend.backend_id, available=True
+        )
+        pool_plane.metrics.backend_started(
+            deployment=str(DEPLOYMENT_A), backend=backend.backend_id
+        )
+        pool_plane.metrics.backend_finished(
+            deployment=str(DEPLOYMENT_A), backend=backend.backend_id, outcome="ok"
+        )
+    assert "pod-a" in pool_plane.metrics.render()
 
     replacement_id = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
     replacement = Deployment(
@@ -398,3 +447,84 @@ def test_withdrawn_deployment_pools_are_retired(pool_plane) -> None:
 
     assert DEPLOYMENT_A not in pool_plane._pools
     assert replacement_id in pool_plane._pools
+    assert "pod-a" not in pool_plane.metrics.render()
+    assert "pod-b" not in pool_plane.metrics.render()
+
+
+
+def test_unknown_strategy_falls_back_to_least_in_flight() -> None:
+    registry = DeploymentRegistry.from_payload(
+        _payload(
+            {
+                "deployment_id": str(DEP),
+                "account_id": str(ACCOUNT),
+                "model_alias": "launch-model",
+                "upstream_url": "http://model-host.test",
+                "strategy": "future-strategy",
+            }
+        )
+    )
+    assert registry.resolve("launch-model", account_id=ACCOUNT).strategy == "least_in_flight"
+
+
+@pytest.mark.parametrize("weight", [-1, float("inf"), float("nan")])
+def test_invalid_backend_weight_is_rejected(weight: float) -> None:
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        DeploymentRegistry.from_payload(
+            _payload(
+                {
+                    "deployment_id": str(DEP),
+                    "account_id": str(ACCOUNT),
+                    "model_alias": "launch-model",
+                    "backends": [{"url": "http://model-host.test", "weight": weight}],
+                }
+            )
+        )
+
+
+def test_a_pool_rebuilds_strategy_without_losing_health_or_active_load(pool_plane) -> None:
+    original = _pool_registry().resolve("launch-model", account_id=ACCOUNT_A)
+    before = pool_plane.pool_for(original)
+    first = before.backends[0]
+    second = before.backends[1]
+    before.health.acquire(first)
+    # Default threshold is three; cross it so the ejection cooldown is live.
+    for _ in range(3):
+        before.health.record_failure(second)
+    assert before.health.is_available(second) is False
+
+    changed = dataclasses.replace(original, strategy="session_affinity")
+    after = pool_plane.pool_for(changed)
+
+    assert after is not before
+    assert after.health is before.health
+    assert after.strategy_name == "session_affinity"
+    assert after.health.in_flight()[first.backend_id] == 1
+    assert after.health.is_available(second) is False
+    after.health.release(first)
+
+
+
+def test_removal_to_empty_tombstones_late_backend_metric_updates(pool_plane) -> None:
+    deployment = _pool_registry().resolve("launch-model", account_id=ACCOUNT_A)
+    pool = pool_plane.pool_for(deployment)
+    backend = pool.backends[0]
+    label = str(DEPLOYMENT_A)
+    pool.health.acquire(backend)
+    pool_plane.metrics.backend_started(deployment=label, backend=backend.backend_id)
+
+    pool_plane.registry = DeploymentRegistry([])
+    pool_plane.reconcile_pools()
+    assert DEPLOYMENT_A not in pool_plane._pools
+    assert backend.backend_id not in pool_plane.metrics.render()
+
+    # An attempt dispatched before withdrawal finishes later. Its release must not
+    # resurrect metric labels for a backend that is no longer routable.
+    pool.health.release(backend)
+    pool_plane.metrics.backend_finished(
+        deployment=label, backend=backend.backend_id, outcome="ok"
+    )
+    pool_plane.metrics.backend_health(
+        deployment=label, backend=backend.backend_id, available=True
+    )
+    assert backend.backend_id not in pool_plane.metrics.render()

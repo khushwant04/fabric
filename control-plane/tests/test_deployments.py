@@ -46,6 +46,90 @@ async def test_deployment_lifecycle_advances_generation(client: AsyncClient) -> 
     assert missing.json()["error"]["code"] == "deployment_not_found"
 
 
+async def test_runtime_strategy_defaults_to_least_in_flight(client: AsyncClient) -> None:
+    """A deployment that names no balancing strategy defaults to least-in-flight (ADR 0011).
+
+    The default is stored on the deployment record so it flows verbatim through desired
+    state to the agent and on to the data plane.
+    """
+    account_id, token = await onboard(client, "strategy-default-user", "strategy-default-account")
+    created = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "primary",
+            "model_alias": "launch-model",
+            "spec": {"runtime": {"release": "runtime-release-1"}},
+        },
+        headers=bearer(token),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["desired_spec"]["runtime"]["strategy"] == "least_in_flight"
+
+
+async def test_runtime_strategy_is_recorded_as_declared(client: AsyncClient) -> None:
+    account_id, token = await onboard(client, "strategy-user", "strategy-account")
+    created = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "primary",
+            "model_alias": "launch-model",
+            "spec": {"runtime": {"release": "runtime-release-1", "strategy": "weighted"}},
+        },
+        headers=bearer(token),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["desired_spec"]["runtime"]["strategy"] == "weighted"
+
+
+async def test_an_unknown_strategy_is_rejected(client: AsyncClient) -> None:
+    """The control plane validates the vocabulary so an agent never sees a bad value."""
+    account_id, token = await onboard(client, "bad-strategy-user", "bad-strategy-account")
+    response = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "primary",
+            "model_alias": "launch-model",
+            "spec": {"runtime": {"release": "runtime-release-1", "strategy": "made_up"}},
+        },
+        headers=bearer(token),
+    )
+    assert response.status_code == 422
+
+
+async def test_strategy_flows_into_desired_state(client: AsyncClient) -> None:
+    """The agent's strategyFromSpec reads spec.runtime.strategy, so it must survive intact."""
+    account_id, token = await onboard(client, "strategy-flow-user", "strategy-flow-account")
+    created = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "primary",
+            "model_alias": "launch-model",
+            "spec": {"runtime": {"release": "runtime-release-1", "strategy": "session_affinity"}},
+        },
+        headers=bearer(token),
+    )
+    assert created.status_code == 201, created.text
+    deployment = created.json()
+
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id = enrolled["stamp"]["id"]
+    agent = enrolled["agent_credential"]
+
+    placed = await client.post(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}/placements",
+        json={"stamp_id": stamp_id},
+        headers=bearer(token),
+    )
+    assert placed.status_code == 201, placed.text
+
+    desired = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state?after_generation=0", headers=bearer(agent)
+    )
+    assert desired.status_code == 200
+    assignment = desired.json()["deployments"][0]
+    assert assignment["spec"]["runtime"]["strategy"] == "session_affinity"
+
+
 async def test_duplicate_active_name_conflicts(client: AsyncClient) -> None:
     account_id, token = await onboard(client, "dup-user", "dup-account")
     await create_deployment(client, account_id, token, name="same")

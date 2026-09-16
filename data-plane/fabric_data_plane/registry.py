@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 import pathlib
 import threading
 import time
@@ -22,7 +23,13 @@ import uuid
 from typing import Any
 
 from fabric_data_plane.errors import Forbidden, NotFound
-from fabric_data_plane.pool import Backend, BackendHealth, BackendPool
+from fabric_data_plane.pool import (
+    DEFAULT_STRATEGY,
+    STRATEGIES,
+    Backend,
+    BackendHealth,
+    BackendPool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +52,14 @@ class Deployment:
     upstream_url: str | None = None
     upstream_model: str | None = None
     backends: tuple[Backend, ...] = ()
+    #: How the pool balances across ``backends``. Defaults to least-in-flight, which is
+    #: also what an entry that predates the field gets (M2, ADR 0011). The vocabulary is
+    #: validated by the control plane; an unknown value here defaults rather than raising.
+    strategy: str = DEFAULT_STRATEGY
 
     def __post_init__(self) -> None:
+        if self.strategy not in STRATEGIES:
+            object.__setattr__(self, "strategy", DEFAULT_STRATEGY)
         if not self.backends:
             if not self.upstream_url:
                 raise ValueError("a deployment needs an upstream_url or a backends list")
@@ -61,18 +74,17 @@ class Deployment:
     def build_pool(
         self, *, failure_threshold: int = 3, recovery_seconds: float = 30.0
     ) -> BackendPool:
-        """Build a fresh pool with per-backend health for this deployment.
+        """Build a fresh pool with per-backend health and this deployment's strategy.
 
         The caller memoises the result so health survives across requests; the pool is
-        built here so the backend set is defined in one place. ``select`` on the returned
-        pool is a single healthy pick (round-robin), with strategies deferred to M2.
+        built here so the backend set and its balancing strategy are defined in one place.
         """
         health = BackendHealth(
             list(self.backends),
             failure_threshold=failure_threshold,
             recovery_seconds=recovery_seconds,
         )
-        return BackendPool(list(self.backends), health)
+        return BackendPool(list(self.backends), health, strategy=self.strategy)
 
 
 class DeploymentRegistry:
@@ -117,16 +129,21 @@ class DeploymentRegistry:
             parsed: list[Backend] = []
             for item in raw_backends:
                 url = str(item["url"]).rstrip("/")
+                weight = float(item.get("weight", 1.0))
+                if not math.isfinite(weight) or weight < 0:
+                    raise ValueError("backend weight must be finite and non-negative")
                 parsed.append(
                     Backend(
                         url=url,
                         backend_id=str(item.get("id") or url),
-                        weight=float(item.get("weight", 1.0)),
+                        weight=weight,
                     )
                 )
             backends = tuple(parsed)
 
         upstream_url = entry.get("upstream_url")
+        raw_strategy = entry.get("strategy")
+        strategy = str(raw_strategy) if raw_strategy in STRATEGIES else DEFAULT_STRATEGY
         return Deployment(
             deployment_id=uuid.UUID(str(entry["deployment_id"])),
             account_id=uuid.UUID(str(entry["account_id"])),
@@ -134,6 +151,7 @@ class DeploymentRegistry:
             upstream_url=str(upstream_url).rstrip("/") if upstream_url else None,
             upstream_model=entry.get("upstream_model"),
             backends=backends,
+            strategy=strategy,
         )
 
     @classmethod

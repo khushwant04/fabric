@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     #: ejection is a cooldown rather than a permanent write-off.
     backend_recovery_seconds: float = Field(default=30.0, ge=0)
 
+    #: How many backends a single non-streamed request may try before giving up. On a
+    #: connection failure the request is retried against another healthy backend; this
+    #: bounds that retry so a pool where every backend is failing degrades to a clear
+    #: UpstreamUnavailable rather than looping. Each attempt is a distinct backend, so the
+    #: effective ceiling is also the pool size; the default is generous enough for a small
+    #: fleet without letting one request stampede a large one.
+    backend_max_attempts: int = Field(default=3, ge=1)
+
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod
     def _strip(cls, value: str) -> str:

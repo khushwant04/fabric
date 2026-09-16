@@ -129,6 +129,7 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			UpstreamModel: deployment.UpstreamModel,
 			KernelMode:    deployment.KernelMode,
 			Replicas:      deployment.Replicas,
+			Strategy:      deployment.Strategy,
 		},
 	}
 }
