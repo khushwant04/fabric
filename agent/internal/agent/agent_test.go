@@ -41,6 +41,11 @@ type controlPlaneStub struct {
 	lastAfter    string
 	failStatus   int
 	failCode     string
+	// What the stamp last reported about itself. The control plane places against these
+	// numbers (ADR 0013), so a test has to be able to see them.
+	lastCapabilities *controlplane.Capabilities
+	// Capabilities presented at enrollment, which happens before the first heartbeat.
+	enrolledCapabilities *controlplane.Capabilities
 }
 
 func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
@@ -52,6 +57,13 @@ func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
 		if r.Header.Get("Authorization") != "" {
 			t.Error("enrollment must not present a bearer credential")
 		}
+		var body struct {
+			Capabilities *controlplane.Capabilities `json:"capabilities"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode enrollment: %v", err)
+		}
+		s.enrolledCapabilities = body.Capabilities
 		writeJSON(w, 201, controlplane.EnrollResponse{
 			Stamp: controlplane.Stamp{
 				ID: stampID, AccountID: systemAcc, Mode: "managed", Status: "registered",
@@ -64,6 +76,15 @@ func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/v1/stamps/"+stampID+"/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		s.heartbeats.Add(1)
 		requireAgentCredential(t, r)
+		var body struct {
+			Capabilities *controlplane.Capabilities `json:"capabilities"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode heartbeat: %v", err)
+		}
+		if body.Capabilities != nil {
+			s.lastCapabilities = body.Capabilities
+		}
 		writeJSON(w, 200, map[string]any{"stamp_id": stampID})
 	})
 

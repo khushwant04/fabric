@@ -274,6 +274,13 @@ func (m ModelHost) hostArgs() []string {
 	if m.MaxNumSeqs > 0 {
 		args = append(args, "--max-num-seqs="+strconv.Itoa(m.MaxNumSeqs))
 	}
+	if m.GPUs > 1 {
+		// Without this the container reserves every device it asked for and the server uses
+		// one, so the rest are held by the limit and usable by nothing. A deployment
+		// admitted for four devices per replica (ADR 0013) has to actually shard across
+		// them, and tensor parallelism is how a single model does that.
+		args = append(args, "--tensor-parallel-size="+strconv.Itoa(m.GPUs))
+	}
 	if m.GPUMemoryUtilization != "" {
 		args = append(args, "--gpu-memory-utilization="+m.GPUMemoryUtilization)
 	}
@@ -297,6 +304,10 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 // up in one another's backend pool.
 func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deployment {
 	host := r.options.ModelHost
+	// The deployment's own device count, which is what the control plane admitted the
+	// placement against (ADR 0013). Falls back to the stamp's configured count for a
+	// declaration that predates the field.
+	host.GPUs = item.Spec.DesiredGPUs(r.options.ModelHost.GPUs)
 	release := releaseOf(item)
 	if release != "" {
 		// Runtime release is the immutable artifact/address the host loads and the name

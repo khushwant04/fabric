@@ -14,10 +14,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/agentcontract"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
+	"github.com/khushwant04/fabric/agent/internal/hardware"
 	"github.com/khushwant04/fabric/agent/internal/state"
 )
 
@@ -42,6 +44,25 @@ type StatusSource interface {
 	ObservedConditions(ctx context.Context) (map[string]agentcontract.ObservedCondition, error)
 }
 
+// CapacitySource measures what this stamp can offer.
+//
+// The agent used to report a capability document built once at startup from flags, which
+// meant `gpus: []` and `requested_gpus: 0` on every heartbeat forever. The control plane
+// decides placement against those numbers (ADR 0013), so they have to be measured rather
+// than declared. Nil leaves the configured values in place, which is right for a stamp
+// with no Kubernetes access to read.
+type CapacitySource interface {
+	Measure(ctx context.Context) (hardware.Capacity, error)
+}
+
+// CapacityFunc adapts a function to CapacitySource.
+type CapacityFunc func(ctx context.Context) (hardware.Capacity, error)
+
+// Measure calls the wrapped function.
+func (f CapacityFunc) Measure(ctx context.Context) (hardware.Capacity, error) {
+	return f(ctx)
+}
+
 type Config struct {
 	ControlPlaneURL string
 	EnrollmentToken string
@@ -63,9 +84,17 @@ type Config struct {
 	// in the data plane's configuration; it does not start the host.
 	UpstreamURL string
 
-	Capabilities   controlplane.Capabilities
-	PollInterval   time.Duration
-	RequestTimeout time.Duration
+	// Capabilities is what this stamp reports about itself. The GPU fields are a
+	// fallback: when Capacity can read the cluster, the measurement replaces them.
+	Capabilities controlplane.Capabilities
+	// Capacity measures the cluster's GPUs. Nil reports Capabilities unchanged.
+	Capacity CapacitySource
+	// CapacityInterval is how often the cluster is re-measured. Node hardware does not
+	// move, but pod claims do, so this is far shorter than "once" and far longer than
+	// every pass.
+	CapacityInterval time.Duration
+	PollInterval     time.Duration
+	RequestTimeout   time.Duration
 }
 
 // Agent holds one stamp's reconciliation state.
@@ -86,6 +115,13 @@ type Agent struct {
 	// The cluster observation last accepted by the control plane per deployment, so a
 	// changed phase or replica count is sent and an unchanged one is not resent.
 	reportedObservation map[string]string
+
+	// The last successful capacity measurement and when it was taken. Kept rather than
+	// re-read every pass, and kept rather than discarded on a failed read: last known
+	// hardware is a better answer than none, and reporting zero GPUs would make a live
+	// stamp look unplaceable because one API call timed out.
+	measured   hardware.Capacity
+	measuredAt time.Time
 }
 
 // New builds an agent. It does not perform any network call.
@@ -95,6 +131,9 @@ func New(config Config, log *slog.Logger) *Agent {
 	}
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = 30 * time.Second
+	}
+	if config.CapacityInterval <= 0 {
+		config.CapacityInterval = time.Minute
 	}
 	return &Agent{
 		config:              config,
@@ -173,8 +212,12 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		return errors.New("no credentials on disk and no enrollment token supplied")
 	}
 
+	// Measured before enrolling, so the stamp is placeable from its first heartbeat
+	// rather than from whenever the first measurement happens to land.
+	a.refreshCapacity(ctx)
+
 	enrolled, err := a.client.Enroll(
-		ctx, a.config.EnrollmentToken, a.config.StampName, a.config.Capabilities,
+		ctx, a.config.EnrollmentToken, a.config.StampName, a.reportedCapabilities(),
 	)
 	if err != nil {
 		return fmt.Errorf("enroll: %w", err)
@@ -203,6 +246,144 @@ func (a *Agent) Ensure(ctx context.Context) error {
 	return nil
 }
 
+// refreshCapacity re-measures the cluster's GPUs when the last measurement is stale.
+//
+// A failure is a warning, not an error. The control plane decides placement against this
+// report, and the honest degradation is to keep reporting the last hardware seen, or the
+// configured fallback if none has ever been seen, rather than to stop reconciling because
+// a node list timed out.
+func (a *Agent) refreshCapacity(ctx context.Context) {
+	if a.config.Capacity == nil {
+		return
+	}
+	if a.measured.Measured && time.Since(a.measuredAt) < a.config.CapacityInterval {
+		return
+	}
+
+	capacity, err := a.config.Capacity.Measure(ctx)
+	if err != nil {
+		// Logged at warn even when part of the read succeeded, because an unmeasured
+		// stamp is one whose placements are decided on stale or declared numbers.
+		a.log.Warn("could not measure this stamp's capacity", "error", err)
+	}
+	if !capacity.Measured {
+		return
+	}
+	if !capacity.PodsMeasured {
+		// Without pod claims, GPUs held by workloads Fabric did not place are invisible and
+		// the stamp looks emptier than it is. Logged here and also reported, because the
+		// control plane cannot otherwise tell an unmeasured stamp from an idle one and it
+		// decides placements on the difference.
+		a.log.Warn("reporting capacity without pod claims; foreign gpu use is not visible",
+			"allocatable_gpus", capacity.AllocatableGPUs, "error", capacity.PodClaimsError)
+	}
+	a.measured = capacity
+	a.measuredAt = time.Now()
+	a.log.Info("measured stamp capacity",
+		"allocatable_gpus", capacity.AllocatableGPUs,
+		"requested_gpus", capacity.RequestedGPUs,
+		"fabric_requested_gpus", capacity.FabricRequestedGPUs,
+		"max_gpus_per_node", capacity.MaxGPUsPerNode,
+		"gpu_classes", len(capacity.GPUs))
+}
+
+// reportedCapabilities is the capability document to send.
+//
+// Configured values supply everything the cluster cannot answer — orchestrator, region,
+// versions — and a measurement replaces only the GPU facts, so a stamp that cannot read
+// its cluster still reports what it was told.
+func (a *Agent) reportedCapabilities() controlplane.Capabilities {
+	capabilities := a.config.Capabilities
+	if capabilities.FabricGPUClaims == nil {
+		capabilities.FabricGPUClaims = []controlplane.GPUClaim{}
+	}
+	if capabilities.AvailableGPUSlots == nil {
+		capabilities.AvailableGPUSlots = []int{}
+	}
+	if !a.measured.Measured {
+		if capabilities.GPUs == nil {
+			capabilities.GPUs = []controlplane.GPU{}
+		}
+		return capabilities
+	}
+
+	gpus := make([]controlplane.GPU, 0, len(a.measured.GPUs))
+	for _, group := range a.measured.GPUs {
+		gpus = append(gpus, controlplane.GPU{
+			Product:           group.Product,
+			Count:             group.Count,
+			MemoryBytes:       group.MemoryBytes,
+			ComputeCapability: group.ComputeCapability,
+		})
+	}
+	capabilities.GPUs = gpus
+	capabilities.AllocatableGPUs = a.measured.AllocatableGPUs
+	capabilities.MaxGPUsPerNode = a.measured.MaxGPUsPerNode
+	capabilities.MaxFreeGPUsPerNode = a.measured.MaxFreeGPUsPerNode
+	capabilities.AvailableGPUSlots = append(
+		[]int{}, a.measured.AvailableGPUSlots...,
+	)
+	capabilities.RequestedGPUs = a.measured.RequestedGPUs
+	capabilities.FabricRequestedGPUs = a.measured.FabricRequestedGPUs
+	capabilities.GPUClaimsMeasured = a.measured.PodsMeasured
+
+	claims := a.reportedFabricClaims()
+	capabilities.FabricGPUClaims = claims
+	return capabilities
+}
+
+// reportedFabricClaims puts live control-plane assignments before every other measured
+// Fabric pod, then applies the bounded wire cap.
+//
+// The hardware layer sees terminating and out-of-band pods too. If it truncated before this
+// ordering, one of those could permanently displace a supported live deployment id, making a
+// multi-GPU observation wait impossible to clear. The agent's known map is the authoritative
+// set it is reconciling; after a deletion/replacement race it catches up on the same desired-
+// state pass, so a newly live id is prioritized on the next heartbeat.
+func (a *Agent) reportedFabricClaims() []controlplane.GPUClaim {
+	byID := make(map[string]int, len(a.measured.FabricClaims))
+	for _, claim := range a.measured.FabricClaims {
+		byID[claim.DeploymentID] += claim.GPUs
+	}
+
+	live := make([]string, 0, len(a.known))
+	for deploymentID := range a.known {
+		if byID[deploymentID] > 0 {
+			live = append(live, deploymentID)
+		}
+	}
+	sort.Strings(live)
+
+	claims := make([]controlplane.GPUClaim, 0, min(len(byID), hardware.MaxReportedClaims))
+	included := make(map[string]bool, len(live))
+	for _, deploymentID := range live {
+		claims = append(claims, controlplane.GPUClaim{
+			DeploymentID: deploymentID,
+			GPUs:         byID[deploymentID],
+		})
+		included[deploymentID] = true
+		if len(claims) == hardware.MaxReportedClaims {
+			return claims
+		}
+	}
+
+	// Measurement already orders the remainder by GPUs descending then id, preserving the
+	// most consequential unsupported claims when room remains.
+	for _, claim := range a.measured.FabricClaims {
+		if included[claim.DeploymentID] {
+			continue
+		}
+		claims = append(claims, controlplane.GPUClaim{
+			DeploymentID: claim.DeploymentID,
+			GPUs:         claim.GPUs,
+		})
+		if len(claims) == hardware.MaxReportedClaims {
+			break
+		}
+	}
+	return claims
+}
+
 // handOffTelemetryCredential writes the collector's credential if one is wanted.
 //
 // This runs on every start, not only after enrollment. Credentials persist on a
@@ -229,7 +410,8 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		return nil, errors.New("not enrolled")
 	}
 
-	capabilities := a.config.Capabilities
+	a.refreshCapacity(ctx)
+	capabilities := a.reportedCapabilities()
 	if err := a.client.Heartbeat(ctx, a.credentials.StampID, &capabilities); err != nil {
 		return nil, fmt.Errorf("heartbeat: %w", err)
 	}
@@ -265,6 +447,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.KernelMode = kernelModeFromSpec(assignment.Spec)
 		entry.Replicas = replicasFromSpec(assignment.Spec)
 		entry.Strategy = strategyFromSpec(assignment.Spec)
+		entry.GPUCount = gpuCountFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || previous != entry {
 			changed = true
 			a.log.Info("configured deployment",
@@ -556,6 +739,35 @@ func strategyFromSpec(spec map[string]any) string {
 	default:
 		return ""
 	}
+}
+
+// gpuCountFromSpec extracts how many devices one replica of this deployment needs.
+//
+// The control plane has validated resources.gpu_count (1-8) since the beginning and nothing
+// read it: the pod's GPU limit came from a per-stamp Helm value instead, so a deployment
+// could ask for four devices and be given one. Placement is now admitted against
+// replicas x this number (ADR 0013), which only means something if the same number reaches
+// the pod. An absent, non-numeric, or below-one value is reported as zero, which the
+// operator reads as the stamp's configured count, so a deployment that predates the field
+// is unchanged.
+func gpuCountFromSpec(spec map[string]any) int {
+	resources, ok := spec["resources"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	// JSON numbers decode into float64 through an any-typed map, so both shapes are
+	// accepted rather than assuming one decoder.
+	switch value := resources["gpu_count"].(type) {
+	case float64:
+		if value >= 1 {
+			return int(value)
+		}
+	case int:
+		if value >= 1 {
+			return value
+		}
+	}
+	return 0
 }
 
 // releaseFromSpec extracts the runtime release the host should serve.

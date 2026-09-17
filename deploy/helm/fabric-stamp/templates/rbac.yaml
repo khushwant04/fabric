@@ -107,12 +107,15 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "fabric-stamp.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
-{{- end }}
 ---
 # Nodes are cluster scoped, so describing the hardware needs a cluster role. This is the
 # operator's only permission outside its own namespace, and it is read-only on one
 # resource: several serving settings are properties of the GPU rather than preferences, and
 # a value the hardware cannot execute does not degrade serving, it prevents it.
+#
+# Gated on the operator being enabled, like the roles above: without it the ServiceAccount
+# these bind to is never created, and a ClusterRoleBinding to a subject that does not exist
+# is a grant nobody can account for.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -138,3 +141,45 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "fabric-stamp.fullname" . }}-operator
     namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.stamp.measureCapacity }}
+---
+# The agent reports this stamp's capacity so the control plane can decide whether a
+# deployment fits before accepting it (ADR 0013). Both reads are cluster scoped because
+# nodes are, and because a GPU held by a workload in another namespace is still a GPU this
+# stamp cannot offer.
+#
+# Read-only, and no write verb anywhere: the agent describes the cluster, it does not
+# schedule in it. Pods are the wider of the two grants, so it is opt-out through
+# stamp.measureCapacity, which falls the stamp back to reporting stamp.gpus.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-capacity
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  # How many devices are already claimed. Without it the agent can only report what the
+  # nodes advertise, which counts a GPU somebody else is using as free.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-capacity
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "fabric-stamp.fullname" . }}-agent-capacity
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

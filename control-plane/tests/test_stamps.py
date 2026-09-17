@@ -15,17 +15,16 @@ from app.core.errors import Unauthorized
 from app.core.security import require_agent_credential, require_telemetry_credential
 from app.core.timeutil import utc_now
 from app.models import Account, InferenceStamp
-from app.services.accounts import ensure_system_account
-from app.services.stamps import create_enrollment_token
-from tests.helpers import bearer, create_deployment, enroll_stamp, onboard
+from tests.helpers import (
+    bearer,
+    create_deployment,
+    default_capabilities,
+    enroll_managed_stamp,
+    enroll_stamp,
+    onboard,
+)
 
-CAPABILITIES = {
-    "orchestrator": "k3s",
-    "region": "local",
-    "gpus": [{"product": "test-gpu", "count": 2, "memory_bytes": 2048}],
-    "allocatable_gpus": 2,
-    "requested_gpus": 1,
-}
+CAPABILITIES = default_capabilities(gpus=2, requested_gpus=1, fabric_requested_gpus=1)
 
 
 def _bearer_request(token: str) -> Request:
@@ -335,26 +334,9 @@ async def _enroll_managed_stamp(
     client: AsyncClient, db_session: AsyncSession, *, orchestrator: str = "aks"
 ) -> tuple[dict, Account]:
     """Register a managed stamp owned by the protected Fabric system account."""
-    system_account = await ensure_system_account(db_session)
-    _record, enrollment_token = await create_enrollment_token(
-        db_session,
-        account=system_account,
-        allowed_mode="managed",
-        expires_in_minutes=30,
-        actor_user_id=None,
+    return await enroll_managed_stamp(
+        client, db_session, orchestrator=orchestrator, capabilities=CAPABILITIES
     )
-    await db_session.commit()
-
-    enrolled = await client.post(
-        "/v1/stamps/enroll",
-        json={
-            "enrollment_token": enrollment_token,
-            "name": f"managed-{orchestrator}",
-            "capabilities": {**CAPABILITIES, "orchestrator": orchestrator},
-        },
-    )
-    assert enrolled.status_code == 201, enrolled.text
-    return enrolled.json(), system_account
 
 
 async def test_managed_placement_requires_entitlement(

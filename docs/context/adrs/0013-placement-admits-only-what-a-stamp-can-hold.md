@@ -1,0 +1,425 @@
+# ADR 0013: Placement admits only what a stamp can hold, against measured capacity
+
+**Decision status:** Accepted  
+**Implementation status:** Implemented  
+**Date:** 2026-09-16
+
+## Context
+
+`create_placement` took `stamp_id` from the caller and only *authorized* it. Nothing compared
+what the deployment asked for against what the stamp had. A deployment requesting eight H100s
+onto a single-T4 stamp returned `201 assigned`, the agent delivered it, and the pod stayed
+`Pending` forever. The API reported success for something that could never serve.
+
+Every input a fit check needs was already being collected and ignored:
+
+- `DeploymentSpec.resources.gpu_count` and `gpu_class` were validated (1–8, 32 chars), stored in
+  `deployments.desired_spec`, and read by no Python or Go code. The operator sized the pod's
+  `nvidia.com/gpu` limit from a per-stamp Helm value instead.
+- `StampCapabilities.gpus[]`, `allocatable_gpus`, `requested_gpus` and `region` were persisted on
+  every heartbeat and read by nothing but the response model.
+- `applyProfile` computed `smallestMemory` across the stamp's GPU nodes and discarded it.
+
+Worse, the capability report was not a measurement. The agent copied
+`config.Capabilities` verbatim on every heartbeat, and that struct was built once at startup
+from flags: `gpus: []` always, `requested_gpus: 0` always, `allocatable_gpus` whatever
+`--gpus` said, default `0`. A fit check over that data would either reject everything or mean
+nothing. The one component that *did* know the truth — the operator, which lists GPU nodes and
+reads their product, memory and compute-capability labels — kept it in-process.
+
+## Decision
+
+Five parts, in dependency order.
+
+### 1. Capacity is measured, not declared
+
+The agent reads the cluster it runs in and reports what it finds. Node `status.allocatable`
+gives the schedulable GPU count; the `nvidia.com/gpu.product`, `nvidia.com/gpu.memory` and
+`nvidia.com/cuda.compute-capability.*` labels give the device, with the machine-type table as
+the fallback on a cluster without feature discovery. The node-profiling primitives move from
+`internal/operator` to `internal/hardware` so the agent and the operator read the hardware the
+same way rather than growing two tables that drift.
+
+`--gpus` becomes a fallback used only when the cluster cannot be read — a missing permission or
+a stamp with no operator degrades to the declared number instead of to an outage.
+
+Pod GPU requests are also summed, split into two reported numbers:
+`requested_gpus` (every scheduled pod) and `fabric_requested_gpus` (the subset carrying
+`app.kubernetes.io/managed-by=fabric-operator`). The split exists so the control plane can
+subtract foreign workloads without double-counting Fabric's own hosts, which it already
+accounts for from its own records. `max_gpus_per_node` is reported too, because whether a
+single replica asking for four GPUs can ever schedule depends on the largest node, and a
+stamp-wide total cannot answer that.
+
+Current packing is reported separately. `max_free_gpus_per_node` says how wide one new replica
+can be, and `available_gpu_slots[k-1]` says how many `k`-GPU replicas fit into the free devices
+without splitting one across nodes. Both are needed: free nodes `[3,1]` have four GPUs in total
+and a largest free node of three, but only one slot for a two-GPU replica. Without the slot
+vector, two such replicas pass both aggregate checks and the second stays `Pending`.
+
+Claims are counted **only on the nodes that were profiled**. The node read is filtered by
+`--gpu-node-selector`, so a stamp offering one pool must not subtract GPUs another team is
+using elsewhere in the same cluster: that arithmetic goes negative and the stamp refuses
+everything with a reason pointing at capacity rather than at configuration. This matters
+because narrowing the selector is the remedy this ADR recommends for a mixed-hardware stamp.
+
+`gpu_claims_measured` reports whether the claim read happened at all. Zero claimed devices is
+otherwise indistinguishable from an idle cluster, and the control plane decides admissions on
+the difference, so a stamp that could not list pods says so rather than looking empty. In that
+partial case `available_gpu_slots` is an empty list, never JSON `null`; an empty vector means
+packing was not reported. That also keeps a claim-aware agent from before slot reporting
+placeable during a control-plane-first upgrade. Zero *inside a present vector* remains a real
+measurement.
+
+Device recognition covers the accelerator and machine-type labels of the three clouds this
+platform is plausibly deployed on, not only Azure. That is not cosmetic: an unrecognised
+machine leaves the device *undescribed*, and an undescribed device means the GPU class is
+admitted unjudged (part 3), so an Azure-only table meant every GKE and EKS stamp without
+feature discovery was placed against blind.
+
+### 2. Fabric's own use is the larger of what is committed and what is running
+
+Two views of Fabric's GPU consumption exist and each is authoritative in a different
+direction, so neither one alone is safe.
+
+*Rows ahead of pods.* A placement is committed the instant it is written and the stamp reports
+the consequence one heartbeat later, 15 seconds by default. Admitting against the report alone
+would let every placement in a burst pass the same check and collectively overcommit.
+
+*Pods ahead of rows.* A release change under ADR 0012 runs the candidate beside the active
+workload, so a deployment genuinely holds twice its replicas for the duration of a rollout.
+A deleted deployment's placements go `terminating` before its pods finish. Admitting against
+the rows alone would hand out capacity that is physically occupied — and the new pod would sit
+`Pending`, which is the failure this ADR exists to remove, arrived at from the other side.
+
+So:
+
+```
+free = allocatable_gpus - used
+used = SUM over deployments d of max(committed[d], running[d])
+     + untracked_fabric + foreign_requested
+
+running[d]        = fabric_gpu_claims, reported per deployment by the stamp
+committed[d]      = replicas x gpu_count from this deployment's live placement
+untracked_fabric  = fabric_requested_gpus - sum(running), for a truncated list or an
+                    unlabelled host
+foreign_requested = max(0, requested_gpus - fabric_requested_gpus)
+```
+
+Three things about that shape are load-bearing.
+
+*The maximum, not the sum.* Adding them would double-count the ordinary case where a
+deployment's row and its pods describe the same hosts.
+
+*Per deployment, not over the stamp's totals.* This is why the stamp reports claims broken down
+by deployment rather than as one number. Over totals the two divergences cancel: a stamp where
+one deployment's pods lead its rows and another's rows lead its pods sums to exactly what a
+stamp with no divergence sums to, and admitting against that overcommits by the size of the
+surge.
+
+*The deployment being decided about drops out of both terms — except for surge.* Its committed
+row is excluded because its new demand replaces its old one, and the ordinary part of its
+reported claim is excluded for the same reason. Excluding only the row would charge a
+deployment for its own running pods and then for its new demand on top, so a two-replica
+deployment holding two of four devices could never be grown to four, and re-placing it would
+start to fail. If it reports four GPUs running for two committed while a rollout is in flight,
+only the ordinary two are replaceable: the extra two stay charged as transient surge. A resize
+cannot pretend an active and candidate workload are not physically holding them.
+
+`max(0, ...)` on the foreign term means a partial or buggy report whose Fabric subset exceeds
+its total fails toward zero rather than inflating free capacity. Foreign claims are added rather
+than compared because they are disjoint from Fabric's by construction — the stamp reports its
+own subset — so each is subtracted exactly once.
+
+Admission takes the stamp's own row with `SELECT ... FOR UPDATE` before reading commitment.
+Without it two requests naming the same stamp cannot see each other's uncommitted placement
+under READ COMMITTED, so both would pass a check only one of them should and both would commit.
+For a one-GPU replica, aggregate free capacity already subtracts those committed rows and is the
+exact slot count. For a wider replica, a row written after the last heartbeat has no known node
+and the physical slot vector is stale; another multi-GPU admission is therefore refused with
+`capacity_commitments_pending_observation` until one heartbeat reports where the first pods
+land. That bounded wait prevents two requests from spending the same reported slot.
+
+The row is re-read under the lock rather than merely locked, because the capability report lives
+on it and deciding from a copy loaded beforehand would serialize half the arithmetic while
+leaving the other half stale. A heartbeat writes the same row, so one arriving mid-admission
+waits for the placement to commit; that is brief, and the alternative is deciding against
+capacity that changes underneath the decision. Where several stamps are locked — an edit to a
+deployment placed on more than one — they are taken in `stamp_id` order, so two concurrent edits
+cannot acquire them in opposite orders and deadlock.
+
+The deployment row is locked before either placement or spec replacement reads it, and before
+any stamp lock. This closes the other admission race: a first placement cannot check replicas=1
+while a concurrent update sees no placement and commits replicas=8 unchecked. Whichever obtains
+the deployment lock first defines one consistent world — placement commits and update sees the
+assignment, or update commits and placement evaluates the new spec. The global lock order is
+therefore deployment first, then stamps in id order.
+
+### 3. A GPU class is a minimum on memory and arithmetic, not a product match
+
+`gpu_class` is interpreted as two requirements taken from a class catalogue: a memory size and
+a compute-capability tier. Fit holds when the **weakest** GPU the stamp advertises meets both.
+
+Weakest, not best, because the pod may be scheduled onto any GPU node the operator's selector
+allows. A guarantee that holds only on the best node in a mixed pool is a guarantee that fails
+intermittently, which is the same reason `applyProfile` already lets the weakest GPU decide
+dtype. Because the check is against the weakest device, the class filter needs no node
+selector on the pod to be sound: wherever the pod lands inside an admitted stamp, the request
+is satisfied.
+
+Capability is compared by tier rather than exact value, where the tiers are the boundaries that
+change what the hardware can execute: 7.0, bfloat16 at 8.0, and fp8 at 8.9. Comparing exact
+capabilities would reject an A100 (8.0, 40 GiB) for an `a10` request (8.6, 24 GiB) even though
+it is the better device in both properties that matter. Memory is compared with a 10% tolerance
+because a nominal "16 GB" T4 advertises 15360 MiB.
+
+An unrecognised `gpu_class` is a `400`, listing the catalogue. It is a property of the
+deployment, not of any stamp, so it is answered before stamps are considered. Deployment
+creation stays permissive, and an edit validates the class only when it *changes*: the
+catalogue grows, and a deployment created before a class was named must stay editable.
+
+**The class requirement is skipped when it cannot be judged, and the placement is admitted.**
+A stamp that reports no usable memory or capability for one of its devices — an older agent, or
+a cluster whose machine type is not in the table — is placed onto with the class unchecked, and
+`gpu_class_verified: false` is written to the audit trail on a placement or on an update that
+actually re-runs capacity admission. Refusing instead would make upgrading every agent a
+prerequisite for placing anything,
+turning a safety improvement into an outage. It is the one place where this ADR admits
+something it cannot vouch for, so it is recorded rather than silent, and part 1's wider device
+recognition exists to shrink the population it applies to.
+
+### 4. `gpu_count` reaches the pod
+
+A fit check against a number that does not govern the workload is theatre. `gpu_count` now
+flows control plane -> desired state -> agent -> `FabricModelDeployment.spec.gpuCount` ->
+the model-host container's `nvidia.com/gpu` limit, with the chart's `managedModelHost.gpus` as
+the default when the field is absent.
+
+Reaching the *limit* is not enough on its own: a container that reserves four devices and
+serves from one holds three that nothing else can use, which is the same defect one layer down.
+A replica asking for more than one device therefore also gets `--tensor-parallel-size`, so the
+model actually shards across what it was admitted for. The flag is omitted at one device, so a
+deployment asking for one — every deployment predating this field — is unchanged. Above one it
+makes `gpu_count` a constraint on the model as well as on the scheduler: a model whose attention
+heads do not divide by it refuses to start, where before it started and wasted the devices. That
+is the correct failure of the two, and it is stated as a requirement below rather than validated
+here, because the head count is a property of weights the control plane never sees.
+
+`gpu_class` deliberately does **not** travel into the CR. It is a placement-time filter whose
+guarantee is discharged by admitting the stamp (part 3), so carrying it into the cluster would
+add another field nothing reads — the exact defect this ADR exists to remove.
+
+### 5. `stamp_id` becomes optional, and every refusal names its reason
+
+With no `stamp_id`, the control plane enumerates the account's own BYOI stamps plus managed
+capacity, applies the identical authorization gates an explicit stamp passes, filters by
+region, liveness and fit, and picks the least loaded — most free GPUs, preferring the account's
+own hardware over Fabric's managed capacity, with stamp id as the deterministic tie-break.
+
+With a `stamp_id`, the stamp is still checked for fit and refused with the reason.
+
+Liveness is asymmetric on purpose. Auto-selection requires a heartbeat inside the liveness
+window, because sending work to a stamp that may be gone is a choice the platform is making
+and it has alternatives. An explicitly named stamp is not refused for staleness: the caller
+chose it, a stamp that missed a few beats commonly returns, and refusing would be wrong the
+moment it does.
+
+Refusals are `409` with the demand and, for auto-selection, a per-candidate reason, so a caller
+learns whether to shrink the request, pick another region, or add capacity.
+
+Occupancy numbers — free, used, committed, allocatable — are returned **only for a stamp the
+caller owns**. On shared managed capacity they are sums across every account on it, and a
+customer does not get to watch Fabric's fleet fill up and empty. For the same reason a
+selection refusal names the ids of stamps the caller owns and reduces managed capacity to the
+set of actionable reasons, with no ids and no count.
+
+A successful placement still returns its assigned `stamp_id`, including for managed capacity.
+That id is the durable reference used by placement and status APIs and is necessary to explain
+where this deployment is running. The privacy boundary is therefore *unassigned fleet shape*:
+a customer cannot enumerate stamps it has not landed on from refusals, but learns the stamp
+that actually serves its deployment. Least-loaded selection remains deterministic, so repeated
+successful placements can reveal more of the managed fleet over time; hiding that would require
+a separate opaque placement-target identifier rather than selectively deleting a field from
+this response.
+
+The same check runs on `PATCH /deployments/{id}`, because raising `replicas` on a placed
+deployment overcommits a stamp exactly as an oversized placement does. It runs only when the
+edit asks for *more*, judged by total GPUs, per-replica width, and class strictness. Judging
+every edit against the stamp's current occupancy would mean that once a stamp filled up for a
+reason its owner did not cause, even shrinking the deployment would be refused — and shrinking
+is the only remedy its owner has.
+
+## Consequences
+
+### Positive
+
+- An impossible placement fails at the API with a reason instead of succeeding and never serving.
+- Capacity reflects the cluster rather than a number a human typed once at install.
+- `gpu_count`, `gpu_class`, `region`, `allocatable_gpus`, `requested_gpus` and `smallestMemory`
+  stop being decoration.
+- Declaring a model with no `stamp_id` lands it somewhere it fits, which is what makes the
+  platform managed rather than manual.
+- Overcommitment is prevented in the three directions that produce it, and in combination: a
+  burst of sequential placements, because admission counts its own writes; two concurrent
+  placements, because the stamp row is locked first; and a rollout or teardown whose pods
+  outnumber its rows, because each deployment is charged at the larger of its two views. They
+  compose because the comparison is per deployment — over stamp-wide totals two divergences in
+  opposite directions cancel and the surge is admitted into.
+- The one case that still escapes it is a stamp that could not read its own pod claims, where
+  the reported side is empty and only the rows are left. Recorded on the audit trail as
+  `gpu_claims_measured: false` and named in a refusal, so an admission decided that way is not
+  mistaken afterwards for one decided against measured hardware.
+- A GPU a foreign workload is holding is no longer counted as free, which was true of every
+  placement before this.
+
+### Negative
+
+- The agent needs cluster-wide read on `nodes` and `pods`. Nodes it already needed for the
+  operator; pods is new, is granted only when `stamp.measureCapacity` is on, and carries no
+  write verb. The chart refuses the combination that would bind it to a borrowed
+  `default` ServiceAccount.
+- **The class requirement is skipped on a stamp that cannot describe its devices**, so an `h100`
+  request can be admitted onto T4s there. Audited, never silent, and narrowed by recognising
+  more devices, but it is a real hole and it is the price of not requiring an agent upgrade
+  before anything can be placed. Closing it properly means refusing an unverifiable stamp, which
+  should become an account-level or platform-level choice rather than a default.
+- **Rollout headroom is accounted for but not reserved.** A stamp filled to exactly zero free is
+  a legal state, and a deployment on it cannot roll out until something frees: the candidate
+  workload has nowhere to go. ADR 0012 degrades correctly there — the active release keeps
+  serving, the candidate stays `Pending`, and auto-rollback reclaims it after the deadline — but
+  the release does not land. Reserving a deployment-sized block at admission would double the
+  capacity every deployment needs, which would make a single-GPU stamp unable to host a
+  single-GPU deployment, so it is not done. Sizing a stamp with one deployment's worth of spare
+  GPUs is the operational answer, and `deploy/helm/fabric-stamp/values.yaml` already says so.
+- A mixed-hardware stamp is admitted at its weakest device, so an A100+T4 stamp will not accept
+  an `a100` deployment. The escape hatch is to enroll the pools as separate stamps or narrow the
+  operator's node selector — both make the stamp describe one class of hardware, which is what
+  the fit check assumes.
+- Only scheduled pods count toward `requested_gpus`, so a pending foreign pod is invisible until
+  it lands.
+- A stamp whose nodes advertise no allocatable GPUs is refused, and a device plugin between
+  restarts looks exactly like a drained pool. Reporting the last hardware seen instead would be
+  reporting fiction, so this is correct rather than a defect, but it does make such a stamp
+  temporarily unplaceable. Edits to deployments already on it are unaffected, because an edit is
+  judged on the change.
+- The class catalogue and the device tables must be extended as hardware appears. An unknown
+  product string falls back to the stamp's reported capability and memory; a stamp reporting
+  neither is admitted with the class unjudged, as above.
+- `gpu_count` above one now requires a model that can be sharded across that many devices, and
+  the platform cannot check that: a model whose attention-head count is not divisible by
+  `gpu_count` will fail to start. Previously it started and used one device of the several it
+  reserved, which was worse but quieter.
+- Occupancy is withheld from a caller that does not own the stamp, which means a customer using
+  managed capacity is told only that it does not fit, not by how much. That is deliberate; the
+  alternative discloses other tenants' load.
+- Free capacity is still GPU count only. Host memory, CPU and disk are not modelled, so a stamp
+  can fit on GPUs and fail on something else.
+- A stamp supports at most 512 live placements. The agent's per-deployment claim list and the
+  receiving schema use the same bound, and admission refuses the next assignment before a
+  supported committed deployment id can be permanently omitted from every heartbeat. Hardware
+  measurement retains all Fabric pod claims in-process; the agent puts every live assignment it
+  is reconciling ahead of terminating or out-of-band pods before applying the wire cap. A
+  delete/replacement race may take one heartbeat for the new live id to enter `known`, but the
+  observation wait then clears. Unsupported extras remain in the total and are charged as
+  untracked rather than displacing a supported id.
+- Packing for a growing **multi-GPU** deployment is conservative because the report does not
+  attribute each claim to a node as well as to a deployment. Current free slots are checked
+  before growth; the old pods may eventually free a wider slot, but admission will not promise
+  that without knowing where. Width one has no packing ambiguity — aggregate free is its exact
+  slot count — so an ordinary one-GPU deployment can grow into its replaceable pods. Shrinks and
+  unrelated edits bypass admission and remain available as remedies.
+
+### Neutral
+
+- `requested_gpus` keeps its literal meaning (all scheduled pods on the profiled nodes) rather
+  than being redefined to mean foreign pods. The subtraction happens in the control plane where
+  both numbers are known.
+- `applyProfile` now uses the smallest profiled GPU's memory, which it previously computed and
+  discarded, to lower `gpu_memory_utilization` when a fraction of a small device would leave too
+  little absolute headroom for the CUDA context. That is a model-host serving fix rather than a
+  placement one; it lives here because it is the same discarded number this milestone was
+  supposed to put to work. Deriving `max_model_len` or `max_num_seqs` from it needs the model's
+  KV geometry, which the operator does not have, and is not claimed.
+
+## Alternatives considered
+
+- **Filter capacity in SQL over the `capabilities` JSON column.** Rejected: the test engine is
+  SQLite, so the predicate would be unexercised where it runs and only meaningful in production.
+  Stamps per account number in the tens; the filter runs in Python over an elevated read.
+- **Promote `allocatable_gpus`/`requested_gpus`/`gpu_product` to typed columns.** Deferred, not
+  rejected. It is the right move once selection needs an index, but it is a migration in service
+  of a query that currently returns tens of rows.
+- **Admit against the stamp's reported `requested_gpus` alone.** Rejected: it lags placement by a
+  heartbeat, so a burst of placements all see the same free capacity.
+- **Have the operator report capacity to the control plane.** Rejected: the operator holds no
+  central credential, and giving it one would collapse the credential split that bounds a
+  compromise of either process.
+- **Have the agent ask the operator over the network.** Rejected: it adds a second in-cluster
+  listener and a startup ordering dependency to obtain facts the agent can read directly from the
+  API server it already talks to.
+- **Match `gpu_class` against the product string.** Rejected: it makes `a100` and
+  `NVIDIA-A100-SXM4-40GB` different classes and turns every new SKU into a placement outage.
+- **Compare exact compute capability.** Rejected: it rejects an A100 for an `a10` request despite
+  the A100 being better in both properties that decide whether a model can be served.
+- **Put a `gpu_class` node selector on the pod.** Rejected as unnecessary: admitting on the
+  weakest device already guarantees the class wherever the pod lands, and the label key that
+  carries the product differs between clusters.
+- **Reject an unknown `gpu_class` at deployment creation.** Rejected: the catalogue grows, and a
+  deployment created before a class was named would become unpatchable.
+- **Refuse an explicitly named stamp that has stopped heartbeating.** Rejected: a stamp that
+  missed a few beats usually returns, and the caller named it deliberately.
+- **Reserve a deployment-sized block of GPUs at admission so a rollout always fits.** Rejected:
+  it doubles the capacity every deployment needs and would stop a single-GPU stamp from hosting
+  a single-GPU deployment. The surge is *counted* while it is happening, which prevents
+  overcommitting into it; it is not pre-reserved.
+- **Refuse a stamp that cannot describe its devices.** Rejected for now: it makes an agent
+  upgrade a prerequisite for placing anything onto an existing stamp. Recorded as a hole above
+  rather than presented as a guarantee.
+- **Serialize placements with a global lock or a serializable transaction.** Rejected: the
+  contention is per stamp, so the stamp's own row is the smallest thing that orders the decisions
+  that actually conflict.
+
+## Verification
+
+Tests must prove: an oversized placement is refused with a reason rather than assigned; a
+placement that fits is still assigned; committed placements reduce what the next placement may
+take, within one heartbeat window; a foreign GPU workload reduces free capacity while Fabric's
+own hosts are not counted twice; GPUs the stamp reports running beyond what is committed are not
+offered, the two views are never added, and two divergences in opposite directions do not cancel;
+a deployment is not charged for its own running pods, so it can be grown to the whole stamp and
+re-placed idempotently; Fabric GPUs attributed to no deployment are still charged; the agent
+reports claims per deployment, bounds the list without losing the total, counts an unlabelled
+host in the total only, reports the largest free node and an exact slot count for widths one
+through eight, and keeps the claim bound equal to the supported 512 placements per stamp; a
+stamp that did not measure claims says so when it refuses and on the
+audit trail when it admits; `stamp_id` omitted selects a stamp that fits and refuses with per-candidate reasons when
+none does; auto-selection never picks a revoked, unentitled, unsupported-orchestrator,
+wrong-region or stale stamp, and never crosses into another account's BYOI capacity; a managed
+stamp's occupancy, id and count are absent from a refusal while an owned stamp's are present; a class
+request is satisfied by a strictly better device and refused by a weaker one, judged on the
+weakest GPU in the stamp, for every ordering of the reported devices; an unknown class is a 400
+naming the catalogue; a stamp that describes nothing is admitted with `gpu_class_verified: false`
+on the audit trail when a stamp was consulted, and an edit that consulted none — including one
+whose every placement is revoked — records `capacity_checked: false` rather than claiming a
+verification nothing performed; measured-claims provenance is recorded on both placements and
+growth edits; `gpu_count` reaches the container's GPU limit, defaults to the chart value when
+absent, does not leak between deployments, and produces `--tensor-parallel-size` above one
+device; a steady one-GPU deployment can grow into the ordinary pods its new demand replaces,
+while an in-flight rollout's excess remains charged; raising `replicas` beyond capacity on a placed
+deployment is refused while shrinking it and changing its release are not; aggregate free GPUs
+cannot hide per-node fragmentation, and several replicas are checked against exact equal-width
+slots rather than only the largest free node; a multi-GPU row committed ahead of its pod blocks
+reuse of the stale slot until the next claim observation, while a pre-slot agent's empty vector
+is treated as unreported; replaying an existing placement succeeds even if
+the stamp filled later; an in-flight rollout's excess GPUs remain charged during a resize; two concurrent
+placements for the last GPUs produce exactly one assignment, which fails without the row lock;
+concurrent first-placement replays return one placement id rather than a uniqueness failure; a
+first placement and concurrent growth serialize on the deployment row so the final spec is the
+one admitted; the capability report a decision reads is the one on the locked row;
+the agent reports measured node and pod capacity, counts claims only on the nodes it profiled,
+describes devices on each supported cloud without feature discovery, keeps the last good
+measurement when a read fails, and falls back to the configured count when the cluster cannot be
+read at all; `applyProfile` clamps a memory fraction that leaves too little absolute headroom on a
+small device, leaves a workable one untouched, and declines to clamp against partially described
+hardware; and the generation watermark is computed across every account's placements on a shared
+managed stamp with row-level security active, which fails without the elevation.

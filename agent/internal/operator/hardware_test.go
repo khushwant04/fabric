@@ -86,7 +86,7 @@ func TestBFloat16IsRefusedOnHardwareThatCannotRunIt(t *testing.T) {
 	// hardware was a T4, and the host exited before it ever listened.
 	host := testHost()
 	host.DType = "bfloat16"
-	profiles := []GPUProfile{{Node: "gpu-0", Model: "Tesla T4", Capability: ComputeCapability{7, 5}, MemoryMiB: 16384, Count: 1}}
+	profiles := []GPUProfile{{Node: "gpu-0", Model: "Tesla T4", Capability: ComputeCapability{Major: 7, Minor: 5}, MemoryMiB: 16384, Count: 1}}
 
 	adjusted, changes := applyProfile(host, profiles)
 
@@ -107,7 +107,7 @@ func TestASupportedRequestIsLeftAlone(t *testing.T) {
 	// would make the platform unpredictable.
 	host := testHost()
 	host.DType = "bfloat16"
-	profiles := []GPUProfile{{Node: "gpu-0", Model: "NVIDIA A100", Capability: ComputeCapability{8, 0}, MemoryMiB: 40960, Count: 1}}
+	profiles := []GPUProfile{{Node: "gpu-0", Model: "NVIDIA A100", Capability: ComputeCapability{Major: 8, Minor: 0}, MemoryMiB: 40960, Count: 1}}
 
 	adjusted, changes := applyProfile(host, profiles)
 
@@ -122,8 +122,8 @@ func TestTheWeakestGPUDecides(t *testing.T) {
 	host := testHost()
 	host.DType = "bfloat16"
 	profiles := []GPUProfile{
-		{Node: "gpu-0", Model: "NVIDIA A100", Capability: ComputeCapability{8, 0}, MemoryMiB: 40960, Count: 1},
-		{Node: "gpu-1", Model: "Tesla T4", Capability: ComputeCapability{7, 5}, MemoryMiB: 16384, Count: 1},
+		{Node: "gpu-0", Model: "NVIDIA A100", Capability: ComputeCapability{Major: 8, Minor: 0}, MemoryMiB: 40960, Count: 1},
+		{Node: "gpu-1", Model: "Tesla T4", Capability: ComputeCapability{Major: 7, Minor: 5}, MemoryMiB: 16384, Count: 1},
 	}
 
 	adjusted, changes := applyProfile(host, profiles)
@@ -144,4 +144,133 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+func TestASmallDeviceGetsItsMemoryFractionLowered(t *testing.T) {
+	// gpu-memory-utilization is a fraction of *total* memory, but the CUDA context, driver
+	// allocations and fragmentation live outside that accounting. On a large card the
+	// omission never shows; on a small one the same fraction leaves less than the runtime
+	// needs and the server dies allocating rather than starting. This is what the profiled
+	// smallest-GPU memory is for: before M4 it was computed and thrown away.
+	host := testHost()
+	host.DType = "float16"
+	host.GPUMemoryUtilization = "0.97"
+	profiles := []GPUProfile{{
+		Node: "gpu-0", Model: "Small", Capability: ComputeCapability{Major: 8, Minor: 0},
+		MemoryMiB: 8192, Count: 1,
+	}}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	if len(changes) != 1 || changes[0].Setting != "gpu-memory-utilization" {
+		t.Fatalf("the change was not recorded: %+v", changes)
+	}
+	// (8192 - 1024) / 8192 = 0.875, floored to two decimals so the result never rises back
+	// above the ceiling it came from.
+	if adjusted.GPUMemoryUtilization != "0.87" {
+		t.Fatalf("utilization = %q, want 0.87", adjusted.GPUMemoryUtilization)
+	}
+	// The reason has to name the hardware, or an operator cannot tell why their value moved.
+	if !contains(changes[0].Reason, "8192") {
+		t.Fatalf("reason does not explain itself: %q", changes[0].Reason)
+	}
+}
+
+func TestAWorkableMemoryFractionIsLeftAlone(t *testing.T) {
+	// Only settings that cannot work are changed. A T4 at 0.80 leaves over 3 GiB spare.
+	host := testHost()
+	host.DType = "float16"
+	profiles := []GPUProfile{{
+		Node: "gpu-0", Model: "Tesla T4", Capability: ComputeCapability{Major: 7, Minor: 5},
+		MemoryMiB: 16384, Count: 1,
+	}}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	if adjusted.GPUMemoryUtilization != host.GPUMemoryUtilization || len(changes) != 0 {
+		t.Fatalf("a workable fraction was altered: %q %+v", adjusted.GPUMemoryUtilization, changes)
+	}
+}
+
+func TestTheSmallestGPUDecidesTheMemoryFraction(t *testing.T) {
+	// A host may land on either node, so a fraction that only fits the larger one fails
+	// intermittently.
+	host := testHost()
+	host.DType = "float16"
+	host.GPUMemoryUtilization = "0.95"
+	profiles := []GPUProfile{
+		{Node: "big", Model: "NVIDIA A100", Capability: ComputeCapability{Major: 8, Minor: 0},
+			MemoryMiB: 40960, Count: 1},
+		{Node: "small", Model: "Tesla T4", Capability: ComputeCapability{Major: 7, Minor: 5},
+			MemoryMiB: 16384, Count: 1},
+	}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	// (16384 - 1024) / 16384 = 0.9375 -> 0.93.
+	if adjusted.GPUMemoryUtilization != "0.93" {
+		t.Fatalf("utilization = %q, want 0.93 from the T4", adjusted.GPUMemoryUtilization)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected one change, got %+v", changes)
+	}
+}
+
+func TestADeviceTooSmallToServeIsNotGivenAnInventedFraction(t *testing.T) {
+	// No fraction makes this host work. Replacing a clear allocation failure with a
+	// confusing one helps nobody, and the setting is not what is wrong.
+	host := testHost()
+	host.DType = "float16"
+	host.GPUMemoryUtilization = "0.99"
+	profiles := []GPUProfile{{
+		Node: "tiny", Model: "Tiny", Capability: ComputeCapability{Major: 8, Minor: 0},
+		MemoryMiB: 1536, Count: 1,
+	}}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	if adjusted.GPUMemoryUtilization != "0.99" || len(changes) != 0 {
+		t.Fatalf("a value was invented for an unusable device: %q %+v",
+			adjusted.GPUMemoryUtilization, changes)
+	}
+}
+
+func TestAnUnparseableFractionIsLeftForTheServerToReject(t *testing.T) {
+	// Not this code's error to report: the server names the real problem.
+	host := testHost()
+	host.DType = "float16"
+	host.GPUMemoryUtilization = "eighty-five percent"
+	profiles := []GPUProfile{{
+		Node: "gpu-0", Model: "Small", Capability: ComputeCapability{Major: 8, Minor: 0},
+		MemoryMiB: 8192, Count: 1,
+	}}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	if adjusted.GPUMemoryUtilization != "eighty-five percent" || len(changes) != 0 {
+		t.Fatalf("an unparseable value was rewritten: %q %+v",
+			adjusted.GPUMemoryUtilization, changes)
+	}
+}
+
+func TestAnUndescribedNodeSuppressesTheMemoryClamp(t *testing.T) {
+	// A host may land on the node nobody could describe, so a clamp computed from the nodes
+	// that *were* described would be sized for hardware the pod may never see. The reported
+	// capacity demotes a group the same way; this keeps the two consistent.
+	host := testHost()
+	host.DType = "float16"
+	host.GPUMemoryUtilization = "0.99"
+	profiles := []GPUProfile{
+		{Node: "known", Model: "Small", Capability: ComputeCapability{Major: 8, Minor: 0},
+			MemoryMiB: 8192, Count: 1},
+		{Node: "unknown", Model: "", Capability: ComputeCapability{Major: 8, Minor: 0},
+			MemoryMiB: 0, Count: 1},
+	}
+
+	adjusted, changes := applyProfile(host, profiles)
+
+	if adjusted.GPUMemoryUtilization != "0.99" || len(changes) != 0 {
+		t.Fatalf("clamped against partially described hardware: %q %+v",
+			adjusted.GPUMemoryUtilization, changes)
+	}
 }

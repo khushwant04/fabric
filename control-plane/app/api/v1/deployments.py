@@ -169,23 +169,31 @@ async def delete(
     _BASE + "/{deployment_id}/placements",
     response_model=PlacementResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Assign a deployment to an authorized stamp",
+    summary="Assign a deployment to a stamp that fits, or pick one",
 )
 async def assign_placement(
-    payload: PlacementCreateRequest,
+    payload: PlacementCreateRequest | None = None,
     deployment_id: uuid.UUID = Path(...),
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_WRITE)),
     session: AsyncSession = Depends(get_db_session),
 ) -> PlacementResponse:
-    placement = await create_placement(
+    """Place a deployment, refusing what the stamp cannot hold.
+
+    With no ``stamp_id`` the platform chooses one that fits. With one, it is authorized and
+    then checked: an assignment a stamp cannot serve used to answer ``201`` and then never
+    start (ADR 0013). The chosen stamp is on the response either way.
+    """
+    request = payload or PlacementCreateRequest()
+    record = await create_placement(
         session,
         account_id=principal.account_id,
         deployment_id=deployment_id,
-        stamp_id=payload.stamp_id,
+        stamp_id=request.stamp_id,
+        region=request.region,
         actor_principal_id=principal.principal_id,
     )
     await session.commit()
-    return PlacementResponse.model_validate(placement)
+    return PlacementResponse.model_validate(record)
 
 
 @router.get(

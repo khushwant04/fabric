@@ -69,6 +69,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and (not .Values.enrollment.token) (not .Values.enrollment.existingSecret) -}}
 {{- fail "enrollment.token or enrollment.existingSecret is required for the first install" -}}
 {{- end -}}
+{{- if and .Values.stamp.measureCapacity (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
+{{- fail "stamp.measureCapacity needs a dedicated ServiceAccount: without serviceAccount.create or serviceAccount.name the cluster-wide node and pod read would be bound to the namespace's default account, which every other pod there can mount. Set serviceAccount.name, or stamp.measureCapacity=false to report stamp.gpus instead." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
