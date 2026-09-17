@@ -13,6 +13,7 @@ the local cache and deployments from local configuration (AR-DP02, AR-ID04).
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 import math
@@ -44,6 +45,7 @@ from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.pool import Backend, BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
+from fabric_data_plane.streaming import UsageMeter, streaming_upstream_payload
 from fabric_data_plane.usage import UsageBuffer, UsageRecord
 
 logger = logging.getLogger("fabric.data_plane")
@@ -95,7 +97,18 @@ class DataPlane:
         # deployment id because the registry may hand back an equal-but-new Deployment on
         # a reload; the health that matters is per stable deployment, not per object.
         self._pools: dict[uuid.UUID, BackendPool] = {}
-        self._retired_pools: dict[uuid.UUID, BackendPool] = {}
+        # Every draining generation is retained. A stable deployment id can be withdrawn,
+        # reintroduced, and withdrawn again before its oldest attempt ends; one slot per id would
+        # overwrite that older pool and make retirement forget a live backend lease.
+        self._retired_pools: dict[uuid.UUID, list[BackendPool]] = {}
+        # Registry identities whose placement-level metric baselines are currently published.
+        # Kept separately from pools because an idle deployment has metrics before its first
+        # request builds a pool.
+        self._known_deployments: set[uuid.UUID] = set()
+        # Streams are admitted before Starlette enters their body iterator. Keep that interval
+        # visible to placement retirement too: a registry withdrawal must not tombstone the loss
+        # label of a captured request that can still reach its host.
+        self._admitted_streams: dict[uuid.UUID, int] = {}
         self._pools_lock = threading.Lock()
         self.rate_limiter = RateLimiter(
             RateLimit(
@@ -107,23 +120,60 @@ class DataPlane:
             )
         )
         self.concurrency = ConcurrencyLimiter(settings.max_in_flight_per_account)
+        # Publish zero-valued placement counters before the first request can finish. A counter
+        # first observed at one hides that first event from Prometheus rate()/increase().
+        self.reconcile_pools()
 
     def authenticate(self, authorization: str | None) -> InferencePrincipal:
         token = extract_bearer_token(authorization)
         return verify_inference_token(token, settings=self.settings, keys=self.keys)
 
     def reconcile_pools(self) -> None:
-        """Retire routing and metric state for placements no longer in the registry."""
-        deployment_ids = getattr(self.registry, "deployment_ids", None)
-        if not callable(deployment_ids):
-            return
-        active = deployment_ids()
+        """Activate current placements and retire state for placements no longer present."""
+        deployments = getattr(self.registry, "deployments", None)
+        if callable(deployments):
+            # One immutable snapshot supplies both ids and account labels. Separate registry
+            # calls can straddle a lazy reload and briefly pair identities from different views.
+            current = deployments()
+            active = {deployment.deployment_id for deployment in current}
+            for deployment in current:
+                self.metrics.activate_deployment(
+                    deployment=str(deployment.deployment_id),
+                    account=str(deployment.account_id),
+                )
+        else:
+            deployment_ids = getattr(self.registry, "deployment_ids", None)
+            if not callable(deployment_ids):
+                return
+            active = deployment_ids()
+
         with self._pools_lock:
+            withdrawn = self._known_deployments - active
+            self._known_deployments = set(active)
             for stale_id in self._pools.keys() - active:
                 pool = self._pools.pop(stale_id)
-                if sum(pool.health.in_flight().values()) > 0:
-                    self._retired_pools[stale_id] = pool
-                else:
+                admitted = self._admitted_streams.get(stale_id, 0)
+                current_in_flight = sum(pool.health.in_flight().values())
+                retired_in_flight = sum(
+                    sum(retired.health.in_flight().values())
+                    for retired in self._retired_pools.get(stale_id, [])
+                )
+                if current_in_flight > 0 or admitted > 0:
+                    self._retired_pools.setdefault(stale_id, []).append(pool)
+                elif retired_in_flight == 0:
+                    # An idle current generation may coexist with an older draining generation.
+                    # Retirement is stable-id wide, so it must include every generation's lease.
+                    self.metrics.retire_deployment(str(stale_id))
+            # An idle placement has no pool but still has the zero baselines published above.
+            # Remove its active membership when the registry withdraws it; process-lifetime
+            # counter values stay published. An admitted stream or active retired pool keeps
+            # membership until its last cleanup/drain.
+            for stale_id in withdrawn:
+                if (
+                    stale_id not in self._retired_pools
+                    and stale_id not in self._pools
+                    and self._admitted_streams.get(stale_id, 0) == 0
+                ):
                     self.metrics.retire_deployment(str(stale_id))
 
     def pool_for(self, deployment: Deployment) -> BackendPool:
@@ -134,7 +184,14 @@ class DataPlane:
         backend is not carried forward under stale health.
         """
         self.reconcile_pools()
+        # Defensive fallback for registry implementations that can resolve a Deployment but do
+        # not expose deployments() for proactive activation.
+        self.metrics.activate_deployment(
+            deployment=str(deployment.deployment_id),
+            account=str(deployment.account_id),
+        )
         with self._pools_lock:
+            self._known_deployments.add(deployment.deployment_id)
             pool = self._pools.get(deployment.deployment_id)
             current_backends = tuple(
                 (backend.backend_id, backend.url, backend.weight, backend.workload)
@@ -187,6 +244,43 @@ class DataPlane:
                 )
             return pool
 
+    def retain_stream(self, deployment: Deployment) -> None:
+        """Hold placement metric membership from response admission through cleanup."""
+        deployment_id = deployment.deployment_id
+        self.metrics.activate_deployment(
+            deployment=str(deployment_id),
+            account=str(deployment.account_id),
+        )
+        with self._pools_lock:
+            self._admitted_streams[deployment_id] = (
+                self._admitted_streams.get(deployment_id, 0) + 1
+            )
+
+    def release_stream(self, deployment: Deployment) -> None:
+        """Release an admitted stream, tombstoning membership only after its loss was counted."""
+        deployment_id = deployment.deployment_id
+        retire = False
+        with self._pools_lock:
+            remaining = self._admitted_streams.get(deployment_id, 0) - 1
+            if remaining > 0:
+                self._admitted_streams[deployment_id] = remaining
+            else:
+                self._admitted_streams.pop(deployment_id, None)
+                retired_pools = self._retired_pools.get(deployment_id, [])
+                backend_in_flight = sum(
+                    sum(pool.health.in_flight().values()) for pool in retired_pools
+                )
+                retire = (
+                    deployment_id not in self._known_deployments
+                    and backend_in_flight == 0
+                )
+                if retire and retired_pools:
+                    del self._retired_pools[deployment_id]
+        if retire:
+            # Counter values are process-lifetime history and remain exposed; this only prevents
+            # a cleanup that was not retained before withdrawal from creating a new event.
+            self.metrics.retire_deployment(str(deployment_id))
+
     def router_state(self) -> dict[str, Any]:
         """Loaded route revision and active attempts for acknowledged rollout drain."""
         # A removal-to-empty document has no deployments to pass through pool_for, so
@@ -227,23 +321,44 @@ class DataPlane:
                         }
                     )
         with self._pools_lock:
-            for deployment_id, pool in list(self._retired_pools.items()):
-                counts = pool.health.in_flight()
-                total = sum(counts.values())
-                if total == 0:
+            for deployment_id, pools in list(self._retired_pools.items()):
+                # Drop drained generations individually, never the stable-id slot wholesale:
+                # repeated withdraw/reintroduce cycles may leave several generations alive.
+                draining = [
+                    pool for pool in pools if sum(pool.health.in_flight().values()) > 0
+                ]
+                admitted = self._admitted_streams.get(deployment_id, 0)
+                if not draining and admitted == 0:
                     del self._retired_pools[deployment_id]
-                    self.metrics.retire_deployment(str(deployment_id))
+                    # The same stable id may have been reintroduced while an old generation
+                    # drained. Do not let old-pool retirement erase new placement membership.
+                    if deployment_id not in self._known_deployments:
+                        self.metrics.retire_deployment(str(deployment_id))
                     continue
-                workloads = pool.health.workloads()
-                for backend_id, in_flight in counts.items():
-                    if in_flight <= 0:
-                        continue
+                self._retired_pools[deployment_id] = draining or pools
+
+                # Router state has no generation label, so aggregate identical backend ids across
+                # retired generations instead of emitting ambiguous duplicate rows.
+                retired_counts: dict[str, int] = {}
+                retired_workloads: dict[str, str] = {}
+                for pool in draining:
+                    workloads = pool.health.workloads()
+                    for backend_id, in_flight in pool.health.in_flight().items():
+                        if in_flight <= 0:
+                            continue
+                        retired_counts[backend_id] = (
+                            retired_counts.get(backend_id, 0) + in_flight
+                        )
+                        retired_workloads.setdefault(
+                            backend_id, workloads.get(backend_id, "")
+                        )
+                for backend_id, in_flight in retired_counts.items():
                     entries.append(
                         {
                             "deployment_id": str(deployment_id),
                             "backend_id": backend_id,
                             "route_revision": "",
-                            "workload": workloads.get(backend_id, ""),
+                            "workload": retired_workloads[backend_id],
                             "in_flight": in_flight,
                             "retired": True,
                         }
@@ -413,6 +528,13 @@ async def _proxy(
 
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
+    client_wants_usage_frame = False
+    if streaming:
+        # Ask the host to report its own token counts. Without this a streamed request is
+        # unmetered, and streaming is what chat clients do by default (M6).
+        upstream_payload, client_wants_usage_frame = streaming_upstream_payload(
+            upstream_payload
+        )
     headers = forwardable_headers(dict(request.headers))
 
     # A deployment is served by a pool of backends (ADR 0010). The pool skips a backend
@@ -540,25 +662,66 @@ async def _proxy(
         )
         raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
 
-    cleanup_done = False
+    plane.retain_stream(deployment)
+    cleanup_accounted = False
+    placement_released = False
+    concurrency_release: asyncio.Task[None] | None = None
     request_outcome = "cancelled_streamed"
+    meter = UsageMeter(forward_usage_frame=client_wants_usage_frame)
+    #: Whether a host accepted the request. Usage is only trusted from an accepted stream, which
+    #: is the same rule the non-streaming path applies with ``response.is_success``.
+    upstream_ok = False
 
     async def cleanup_stream() -> None:
-        """Release request/account state once, including pre-iterator disconnects."""
-        nonlocal cleanup_done
-        if cleanup_done:
-            return
-        cleanup_done = True
-        plane.metrics.request_finished(
-            deployment=deployment_label,
-            account=account_label,
-            outcome=request_outcome,
-            duration_seconds=time.perf_counter() - started,
-        )
-        await plane.concurrency.release(principal.account_id)
+        """Account once and release both leases, even if disconnect cancellation interrupts.
+
+        Accounting and placement release are synchronous phases and therefore complete before the
+        only cancellable operation. Concurrency release runs in one shielded task: if generator
+        cleanup is cancelled while it waits on the limiter lock, the response wrapper can await
+        the same task without duplicating usage, metrics, or decrementing the limiter twice.
+        """
+        nonlocal cleanup_accounted, placement_released, concurrency_release
+        if not cleanup_accounted:
+            # Only from a stream the host accepted, which is the rule the non-streaming path
+            # applies with response.is_success. The meter itself withholds usage it cannot vouch
+            # for, so this is the one condition left to check.
+            usage = meter.usage if upstream_ok else None
+            if usage is not None:
+                # Real numbers for a request the host accepted. Recorded even if the client later
+                # disconnected, as long as the count is a total and not a running subtotal: the
+                # work was done and measured.
+                plane.record_usage(principal, deployment, usage.as_payload(), streamed=True)
+            # Every accepted stream reports here, lost count or not. A zero-token row is
+            # indistinguishable from a real answer that cost nothing, so a loss is counted instead.
+            plane.metrics.stream_finished(
+                deployment=deployment_label,
+                account=account_label,
+                unmetered_reason=meter.unmetered_reason if upstream_ok else None,
+            )
+            plane.metrics.request_finished(
+                deployment=deployment_label,
+                account=account_label,
+                outcome=request_outcome,
+                duration_seconds=time.perf_counter() - started,
+                input_tokens=usage.input_tokens if usage else 0,
+                output_tokens=usage.output_tokens if usage else 0,
+            )
+            cleanup_accounted = True
+
+        # Synchronous and deliberately before the limiter await. Withdrawal must not remain held
+        # merely because disconnect cancellation arrived while asyncio.Lock was contended.
+        if not placement_released:
+            plane.release_stream(deployment)
+            placement_released = True
+
+        if concurrency_release is None:
+            concurrency_release = asyncio.create_task(
+                plane.concurrency.release(principal.account_id)
+            )
+        await asyncio.shield(concurrency_release)
 
     async def stream() -> AsyncIterator[bytes]:
-        nonlocal request_outcome
+        nonlocal request_outcome, upstream_ok
         tried: set[str] = set()
         backend = pool.select(session_key=session_key)
         max_attempts = min(plane.settings.backend_max_attempts, len(pool))
@@ -567,9 +730,18 @@ async def _proxy(
                 if backend is None:
                     break
                 _acquire_backend(plane, pool, backend, deployment_label)
-                sent_any = False
+                # Received, not forwarded. A byte that arrived proves this host began work on a
+                # non-idempotent completion, whether or not the gateway passed it on, so it is
+                # what decides that a retry would replay real work (ADR 0011).
+                received_any = False
                 retry = False
                 attempt_outcome = "cancelled"
+                # Per attempt, like the meter: a previous attempt's acceptance says nothing
+                # about this one.
+                upstream_ok = False
+                # A retried attempt is a different upstream stream; nothing from the last one
+                # may bleed into its framing or its usage.
+                meter.reset()
                 try:
                     async with plane.client.stream(
                         "POST",
@@ -580,9 +752,18 @@ async def _proxy(
                     ) as upstream:
                         health_failed = upstream.status_code >= 500
                         upstream_error = not upstream.is_success
+                        upstream_ok = upstream.is_success
                         async for chunk in upstream.aiter_bytes():
-                            sent_any = True
-                            yield chunk
+                            if chunk:
+                                received_any = True
+                            forward = meter.feed(chunk)
+                            if forward:
+                                yield forward
+                        # The upstream body was read to its end, so a running subtotal is now
+                        # this stream's total.
+                        trailing = meter.finish(complete=True)
+                        if trailing:
+                            yield trailing
                     if health_failed:
                         _record_backend_failure(plane, pool, backend, deployment_label)
                     else:
@@ -598,7 +779,7 @@ async def _proxy(
                     _record_backend_failure(plane, pool, backend, deployment_label)
                     attempt_outcome = "transport_error"
                     if (
-                        not sent_any
+                        not received_any
                         and _safe_to_retry_transport_failure(exc)
                         and attempt + 1 < max_attempts
                     ):
@@ -606,6 +787,12 @@ async def _proxy(
                         retry = True
                     else:
                         request_outcome = "upstream_error_streamed"
+                        # Whatever was framed but not yet emitted still belongs to the client,
+                        # exactly as it did under the plain byte relay. Not complete: the body
+                        # stopped mid-stream, so anything counted so far is a subtotal.
+                        trailing = meter.finish(complete=False)
+                        if trailing:
+                            yield trailing
                         yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
                         return
                 finally:
@@ -626,9 +813,7 @@ async def _proxy(
         finally:
             await cleanup_stream()
 
-    # M6 will parse the terminal usage event; M2 preserves the existing zero-token
-    # streamed record rather than inventing usage.
-    plane.record_usage(principal, deployment, {}, streamed=True)
+    # Usage is recorded in cleanup_stream, once the stream has actually reported it.
     return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream)
 
 

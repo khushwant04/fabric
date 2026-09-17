@@ -117,6 +117,8 @@ class UpstreamStub:
         self.requests: list[dict[str, Any]] = []
         self.status = 200
         self.fail = False
+        #: A host that ignores stream_options, so the gateway cannot meter the stream.
+        self.report_stream_usage = True
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content or b"{}")
@@ -131,8 +133,22 @@ class UpstreamStub:
             raise httpx.ConnectError("model host is down", request=request)
 
         if payload.get("stream"):
-            body = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'
-            return httpx.Response(self.status, content=body)
+            options = payload.get("stream_options") or {}
+            if options.get("include_usage"):
+                # A compliant host attaches usage to every chunk once asked, null on all but
+                # the terminal one.
+                frames = [b'data: {"choices":[{"delta":{"content":"hi"}}],"usage":null}\n\n']
+            else:
+                frames = [b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n']
+            if options.get("include_usage") and self.report_stream_usage:
+                # What an OpenAI-compatible host sends when asked: a terminal frame with no
+                # choices, carrying the token counts for the whole stream.
+                frames.append(
+                    b'data: {"choices":[],"usage":{"prompt_tokens":11,'
+                    b'"completion_tokens":7,"total_tokens":18}}\n\n'
+                )
+            frames.append(b"data: [DONE]\n\n")
+            return httpx.Response(self.status, content=b"".join(frames))
 
         return httpx.Response(
             self.status,
