@@ -41,6 +41,12 @@ from app.models import Deployment, DeploymentPlacement, InferenceStamp
 
 _GIB = 1024**3
 
+#: Maximum live placements one stamp supports. Equal to the agent's bounded per-deployment
+#: claim list and the receiving schema's maxItems. Keeping every supported commitment
+#: individually observable is what guarantees a multi-GPU row-ahead wait clears after a
+#: heartbeat rather than becoming permanent because the deployment id was truncated.
+MAX_PLACEMENTS_PER_STAMP = 512
+
 #: How stale a heartbeat may be before automatic selection stops choosing a stamp.
 #:
 #: The agent's default poll is 15 seconds, so this is twenty missed beats: long enough that a
@@ -251,9 +257,17 @@ class StampCapacity:
     #: Whether the stamp measured claims at all. False makes the claim numbers zero, which
     #: is indistinguishable from an idle cluster without this flag.
     claims_measured: bool
-    #: Largest device count on one node, which bounds what a single replica can ask for.
-    #: Zero means the stamp did not say.
+    #: Largest device count on one node, which bounds what a single replica can ever ask
+    #: for. Zero means the stamp did not say.
     max_gpus_per_node: int
+    #: Largest number of *unclaimed* devices on one node, which bounds what a replica can be
+    #: scheduled for now. Two devices free across two nodes cannot host a pod needing two.
+    #: Zero means the stamp did not say.
+    max_free_gpus_per_node: int
+    #: Indexed by GPUs per replica minus one. Each entry says how many replicas of that width
+    #: fit into current per-node free capacity. This is stricter than total free plus the
+    #: largest node: free nodes [3,1] have four devices and only one 2-GPU slot.
+    available_gpu_slots: tuple[int, ...]
     #: Frame buffer and arithmetic of the weakest device reported. ``None`` means the stamp
     #: reported nothing usable, in which case the class requirement cannot be judged.
     weakest_memory_bytes: int | None
@@ -367,6 +381,15 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
         untracked_fabric_gpus=untracked,
         claims_measured=bool(capabilities.get("gpu_claims_measured")),
         max_gpus_per_node=_positive_int(capabilities.get("max_gpus_per_node")),
+        max_free_gpus_per_node=_positive_int(capabilities.get("max_free_gpus_per_node")),
+        available_gpu_slots=tuple(
+            max(0, _positive_int(value))
+            for value in (
+                capabilities.get("available_gpu_slots")
+                if isinstance(capabilities.get("available_gpu_slots"), list)
+                else []
+            )[:8]
+        ),
         weakest_memory_bytes=weakest_memory,
         weakest_capability=weakest_capability,
         region=stamp.region,
@@ -433,7 +456,8 @@ def check_fit(
         return Unfit("stamp_reports_no_gpus", {"allocatable_gpus": 0})
 
     if 0 < capacity.max_gpus_per_node < demand.gpus_per_replica:
-        # One replica cannot be split across nodes, so a stamp-wide total does not help.
+        # One replica cannot be split across nodes, so a stamp-wide total does not help. This
+        # bound is what the hardware can ever do, and no amount of draining changes it.
         return Unfit(
             "gpu_count_exceeds_largest_node",
             {"max_gpus_per_node": capacity.max_gpus_per_node},
@@ -461,6 +485,19 @@ def check_fit(
                 },
             )
 
+    if len(committed_gpus) >= MAX_PLACEMENTS_PER_STAMP:
+        # The subject is removed from committed_gpus before this function is called. A new
+        # placement therefore sees the full bound, while an update to one of the existing
+        # placements sees at most bound-1 and remains editable.
+        return Unfit(
+            "stamp_deployment_limit_reached",
+            {"max_placements_per_stamp": MAX_PLACEMENTS_PER_STAMP},
+        )
+
+    # Total capacity first: it carries owned-stamp occupancy diagnostics and is the simplest
+    # reason when the stamp does not have enough GPUs at all. Packing is only the deciding
+    # failure when the total is sufficient but distributed across nodes that cannot hold the
+    # requested replicas.
     free = capacity.free_gpus(committed_gpus)
     if free < demand.total_gpus:
         return Unfit(
@@ -475,6 +512,49 @@ def check_fit(
                 "foreign_requested_gpus": capacity.foreign_requested_gpus,
             },
         )
+
+    # Packing is unnecessary at width one: aggregate free GPUs is the exact slot count, and
+    # unlike the reported vector it already includes placement rows written since the last
+    # heartbeat. It also lets an existing one-GPU deployment grow into the devices its old
+    # pods will release.
+    if demand.gpus_per_replica == 1:
+        return None
+
+    # A row committed after the last heartbeat has not reached the physical packing snapshot.
+    # Its eventual node is unknown, so another multi-GPU admission could spend the same slot.
+    # Wait for one observation rather than return 201 for a pod that may remain Pending. This
+    # is bounded by the agent heartbeat and applies only to widths where node shape matters.
+    pending_observation = any(
+        committed > capacity.fabric_claims.get(deployment, 0)
+        for deployment, committed in committed_gpus.items()
+    )
+    if capacity.claims_measured and pending_observation:
+        return Unfit(
+            "capacity_commitments_pending_observation",
+            {"gpu_claims_measured": True},
+        )
+
+    width_index = demand.gpus_per_replica - 1
+    if capacity.claims_measured and width_index < len(capacity.available_gpu_slots):
+        available_replicas = capacity.available_gpu_slots[width_index]
+        if available_replicas < demand.replicas:
+            # Exact packing for equal-width GPU pods: each node contributes
+            # floor(free_devices / width) slots. A total plus the largest free node is not
+            # enough for several replicas (free nodes [3,1] have four devices and only one
+            # 2-GPU slot).
+            return Unfit(
+                "insufficient_per_node_gpu_slots",
+                {
+                    "available_replicas": available_replicas,
+                    "required_replicas": demand.replicas,
+                    "gpus_per_replica": demand.gpus_per_replica,
+                    "max_free_gpus_per_node": capacity.max_free_gpus_per_node,
+                },
+            )
+    # An empty vector is "packing unreported", not "zero slots". This is the
+    # control-plane-first upgrade path for a claim-aware agent from before slot reporting:
+    # aggregate admission remains available and the new safety check begins after the agent
+    # upgrades. A present vector may contain zero, which remains meaningful.
     return None
 
 
@@ -576,25 +656,39 @@ async def committed_gpus(
 
 
 def without_deployment(
-    capacity: StampCapacity, deployment_id: uuid.UUID
+    capacity: StampCapacity,
+    deployment_id: uuid.UUID,
+    *,
+    replaceable_gpus: int,
 ) -> StampCapacity:
-    """Drop one deployment's reported claim, so it is not charged for its own pods.
+    """Replace one deployment's ordinary claim while preserving its transient surge.
 
-    ``committed_gpus`` already excludes the deployment being decided about, because its new
-    demand replaces its old one. Its *reported* claim has to be dropped for the same reason:
-    left in, a two-replica deployment holding two devices on a four-device stamp could not be
-    grown to four, because its own running pods would be charged and then its new demand
-    charged again on top.
+    ``committed_gpus`` removes the deployment being decided about because its new demand
+    replaces its old one. Its reported claim needs the same treatment, or a two-replica
+    deployment holding two of four devices is charged for those pods and then charged again
+    for its new demand.
+
+    Only the part backed by its current commitment is replaceable. If it is mid-rollout and
+    reports four running GPUs for two committed, the extra two are a real transient surge and
+    stay charged as untracked capacity. Dropping the whole claim would admit a resize against
+    devices the active and candidate workloads are physically holding.
     """
     key = str(deployment_id).lower()
-    if key not in capacity.fabric_claims:
+    claimed = capacity.fabric_claims.get(key, 0)
+    if claimed == 0:
         return capacity
-    remaining = {
+
+    remaining_claims = {
         deployment: gpus
         for deployment, gpus in capacity.fabric_claims.items()
         if deployment != key
     }
-    return replace(capacity, fabric_claims=remaining)
+    surge = max(0, claimed - max(0, replaceable_gpus))
+    return replace(
+        capacity,
+        fabric_claims=remaining_claims,
+        untracked_fabric_gpus=capacity.untracked_fabric_gpus + surge,
+    )
 
 
 async def candidate_stamps(

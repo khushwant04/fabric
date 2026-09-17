@@ -449,9 +449,10 @@ func TestAFabricPodWithNoDeploymentLabelStillCounts(t *testing.T) {
 	}
 }
 
-func TestTheClaimListIsBounded(t *testing.T) {
-	// The capability report is a bounded document, and the control plane rejects one that
-	// exceeds its schema. Truncating keeps the largest claims and leaves the rest in the total.
+func TestMeasurementRetainsClaimsForAgentPrioritization(t *testing.T) {
+	// Hardware sees terminating and out-of-band pods too. It must retain them all in-process
+	// so the agent can put every live assignment first before applying the bounded wire cap;
+	// truncating here can permanently evict a supported commitment id.
 	items := make([]string, 0, MaxReportedClaims+10)
 	for index := 0; index < MaxReportedClaims+10; index++ {
 		items = append(items, fmt.Sprintf(`{"metadata":{"name":"p%d","labels":{
@@ -467,13 +468,93 @@ func TestTheClaimListIsBounded(t *testing.T) {
 
 	capacity, _ := Measure(context.Background(), cluster, nil)
 
-	if len(capacity.FabricClaims) != MaxReportedClaims {
-		t.Fatalf("claims = %d, want the cap of %d",
-			len(capacity.FabricClaims), MaxReportedClaims)
+	if len(capacity.FabricClaims) != MaxReportedClaims+10 {
+		t.Fatalf("claims = %d, want every measured claim", len(capacity.FabricClaims))
 	}
 	// The total still accounts for every device, so nothing goes missing.
 	if capacity.FabricRequestedGPUs != MaxReportedClaims+10 {
 		t.Fatalf("fabric total = %d, want %d",
 			capacity.FabricRequestedGPUs, MaxReportedClaims+10)
+	}
+}
+
+func TestLargestFreeNodeIsReportedSeparatelyFromLargestNode(t *testing.T) {
+	// Two half-used two-device nodes have two devices free in total and no node that can
+	// schedule a two-device replica. A stamp-wide free count plus the allocatable width
+	// would admit it and Kubernetes would leave it Pending forever.
+	cluster := &clusterStub{nodes: `{"items":[
+		{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
+		 "status":{"allocatable":{"nvidia.com/gpu":"2"}}},
+		{"metadata":{"name":"gpu-1","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
+		 "status":{"allocatable":{"nvidia.com/gpu":"2"}}}]}`,
+		pods: `{"items":[
+			{"metadata":{"name":"busy-0"},"spec":{"nodeName":"gpu-0","containers":[
+				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
+			{"metadata":{"name":"busy-1"},"spec":{"nodeName":"gpu-1","containers":[
+				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}]}`}
+
+	capacity, err := Measure(context.Background(), cluster, nil)
+	if err != nil {
+		t.Fatalf("measure: %v", err)
+	}
+	if capacity.MaxGPUsPerNode != 2 {
+		t.Fatalf("max allocatable per node = %d, want 2", capacity.MaxGPUsPerNode)
+	}
+	if capacity.MaxFreeGPUsPerNode != 1 {
+		t.Fatalf("max free per node = %d, want 1", capacity.MaxFreeGPUsPerNode)
+	}
+	if got := capacity.AvailableGPUSlots[1]; got != 0 {
+		t.Fatalf("2-GPU slots = %d, want 0", got)
+	}
+	if capacity.AllocatableGPUs-capacity.RequestedGPUs != 2 {
+		t.Fatalf("stamp-wide free = %d, want 2",
+			capacity.AllocatableGPUs-capacity.RequestedGPUs)
+	}
+}
+
+func TestNoFreeNodeIsReportedAsZero(t *testing.T) {
+	// Zero is not "unreported" when claims were measured; it means no new GPU pod fits.
+	cluster := &clusterStub{nodes: `{"items":[
+		{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
+		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`,
+		pods: `{"items":[
+			{"metadata":{"name":"busy"},"spec":{"nodeName":"gpu-0","containers":[
+				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}]}`}
+
+	capacity, err := Measure(context.Background(), cluster, nil)
+	if err != nil {
+		t.Fatalf("measure: %v", err)
+	}
+	if !capacity.PodsMeasured {
+		t.Fatal("claims were not marked measured")
+	}
+	if capacity.MaxFreeGPUsPerNode != 0 {
+		t.Fatalf("max free per node = %d, want 0", capacity.MaxFreeGPUsPerNode)
+	}
+}
+
+func TestSlotsAccountForSeveralReplicasNotOnlyTheLargestFreeNode(t *testing.T) {
+	// Free nodes [3,1] have four GPUs in total and a largest node of three, but can host only
+	// one 2-GPU pod. A total plus max-free check would admit two replicas and strand the second.
+	cluster := &clusterStub{nodes: `{"items":[
+		{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
+		 "status":{"allocatable":{"nvidia.com/gpu":"4"}}},
+		{"metadata":{"name":"gpu-1","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
+		 "status":{"allocatable":{"nvidia.com/gpu":"2"}}}]}`,
+		pods: `{"items":[
+			{"metadata":{"name":"busy-0"},"spec":{"nodeName":"gpu-0","containers":[
+				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
+			{"metadata":{"name":"busy-1"},"spec":{"nodeName":"gpu-1","containers":[
+				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}]}`}
+
+	capacity, err := Measure(context.Background(), cluster, nil)
+	if err != nil {
+		t.Fatalf("measure: %v", err)
+	}
+	if capacity.MaxFreeGPUsPerNode != 3 {
+		t.Fatalf("max free per node = %d, want 3", capacity.MaxFreeGPUsPerNode)
+	}
+	if got := capacity.AvailableGPUSlots[1]; got != 1 {
+		t.Fatalf("2-GPU slots = %d, want 1", got)
 	}
 }

@@ -27,11 +27,12 @@ const FabricManagedByLabel = "fabric-operator"
 // where neither diverges, and the two errors cancel into an overcommitment.
 const DeploymentIDLabel = "fabric.khushwant.dev/deployment-id"
 
-// MaxReportedClaims bounds the per-deployment list, because the capability report is a
-// bounded document by design. A stamp with more deployments than this reports the largest
-// claims individually and the remainder in the total, which the control plane charges as
-// untracked — conservative rather than lost.
-const MaxReportedClaims = 256
+// MaxReportedClaims bounds the per-deployment list sent to the control plane, because the
+// capability report is a bounded document by design. Hardware measurement itself retains all
+// claims so the agent can put every live assignment ahead of terminating or out-of-band pods
+// before applying this cap. It matches the control plane's supported placements-per-stamp
+// limit and the schema's maxItems.
+const MaxReportedClaims = 512
 
 // DeploymentClaim is the devices one deployment's model hosts are holding.
 type DeploymentClaim struct {
@@ -60,9 +61,18 @@ type Capacity struct {
 	GPUs []GPUGroup
 	// AllocatableGPUs is every schedulable GPU on the profiled nodes.
 	AllocatableGPUs int
-	// MaxGPUsPerNode bounds what a single replica can ask for. A stamp-wide total cannot
-	// answer whether one pod wanting four GPUs can be scheduled at all.
+	// MaxGPUsPerNode bounds what a single replica can ever ask for. A stamp-wide total
+	// cannot answer whether one pod wanting four GPUs can be scheduled at all.
 	MaxGPUsPerNode int
+	// MaxFreeGPUsPerNode bounds what a single replica can be scheduled for *now*. A stamp
+	// with two half-used two-device nodes has two devices free and no node that can take a
+	// two-device pod, and the allocatable bound above cannot tell the difference.
+	MaxFreeGPUsPerNode int
+	// AvailableGPUSlots is indexed by GPUs per replica minus one. Entry k-1 is how many
+	// k-device replicas fit into the currently free devices without splitting one replica
+	// across nodes. The largest free node plus a stamp-wide total is still insufficient for
+	// several replicas: free nodes [3,1] have four devices and can host only one 2-GPU pod.
+	AvailableGPUSlots []int
 	// RequestedGPUs is what scheduled pods have already claimed, all workloads included.
 	RequestedGPUs int
 	// FabricRequestedGPUs is the subset claimed by model hosts this platform created.
@@ -175,7 +185,7 @@ func MeasurePodGPURequests(
 		return PodClaims{}, fmt.Errorf("list gpu pods: %w", err)
 	}
 
-	claims := PodClaims{ByDeployment: map[string]int{}}
+	claims := PodClaims{ByDeployment: map[string]int{}, ByNode: map[string]int{}}
 	for _, item := range pods.Items {
 		if item.Spec.NodeName == "" || !onNodes[item.Spec.NodeName] {
 			continue
@@ -185,6 +195,9 @@ func MeasurePodGPURequests(
 			continue
 		}
 		claims.Total += count
+		// Per node as well as per deployment, because a replica is scheduled onto one node:
+		// two devices free across two nodes cannot host a pod that needs two.
+		claims.ByNode[item.Spec.NodeName] += count
 		if item.Metadata.Labels["app.kubernetes.io/managed-by"] != FabricManagedByLabel {
 			continue
 		}
@@ -203,6 +216,7 @@ type PodClaims struct {
 	Total        int
 	Fabric       int
 	ByDeployment map[string]int
+	ByNode       map[string]int
 }
 
 // largest returns the per-deployment claims ordered by size, capped so the report stays
@@ -218,7 +232,7 @@ func (c PodClaims) largest(limit int) []DeploymentClaim {
 		}
 		return claims[i].DeploymentID < claims[j].DeploymentID
 	})
-	if len(claims) > limit {
+	if limit > 0 && len(claims) > limit {
 		claims = claims[:limit]
 	}
 	return claims
@@ -254,13 +268,30 @@ func Measure(ctx context.Context, client Getter, selector map[string]string) (Ca
 
 	claims, podErr := MeasurePodGPURequests(ctx, client, onNodes)
 	if podErr != nil {
+		// Without claims there is no way to know how much of any node is free, so the
+		// schedulable width falls back to what the nodes advertise. It is the same bound
+		// the report carried before claims were measured at all.
+		capacity.MaxFreeGPUsPerNode = capacity.MaxGPUsPerNode
 		capacity.PodClaimsError = podErr.Error()
 		return capacity, nil
 	}
 	capacity.PodsMeasured = true
 	capacity.RequestedGPUs = claims.Total
 	capacity.FabricRequestedGPUs = claims.Fabric
-	capacity.FabricClaims = claims.largest(MaxReportedClaims)
+	// Keep all measured claims in-process. The agent knows which deployments are live and
+	// prioritizes them before applying the wire bound; truncating here would let a lingering
+	// terminating or out-of-band pod permanently evict a supported live commitment.
+	capacity.FabricClaims = claims.largest(0)
+	capacity.AvailableGPUSlots = make([]int, 8) // ResourceSpec.gpu_count is bounded at eight.
+	for _, profile := range profiles {
+		free := max(0, profile.Count-claims.ByNode[profile.Node])
+		if free > capacity.MaxFreeGPUsPerNode {
+			capacity.MaxFreeGPUsPerNode = free
+		}
+		for width := 1; width <= len(capacity.AvailableGPUSlots); width++ {
+			capacity.AvailableGPUSlots[width-1] += free / width
+		}
+	}
 	return capacity, nil
 }
 

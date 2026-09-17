@@ -1419,6 +1419,14 @@
             "title": "Allocatable Gpus",
             "type": "integer"
           },
+          "available_gpu_slots": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "title": "Available Gpu Slots",
+            "type": "array"
+          },
           "collector_version": {
             "anyOf": [
               {
@@ -1459,7 +1467,7 @@
             "items": {
               "$ref": "#/components/schemas/FabricGpuClaim"
             },
-            "maxItems": 256,
+            "maxItems": 512,
             "title": "Fabric Gpu Claims",
             "type": "array"
           },
@@ -1481,6 +1489,12 @@
             "maxItems": 64,
             "title": "Gpus",
             "type": "array"
+          },
+          "max_free_gpus_per_node": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Max Free Gpus Per Node",
+            "type": "integer"
           },
           "max_gpus_per_node": {
             "default": 0,

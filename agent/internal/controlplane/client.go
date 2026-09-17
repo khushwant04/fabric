@@ -91,6 +91,13 @@ type Capabilities struct {
 	// MaxGPUsPerNode is the largest device count on any one node. A stamp-wide total
 	// cannot say whether a single replica asking for four GPUs can be scheduled at all.
 	MaxGPUsPerNode int `json:"max_gpus_per_node"`
+	// MaxFreeGPUsPerNode is the largest number of *unclaimed* devices on any one node. A
+	// stamp with two half-used two-device nodes has two free and no node that can take a
+	// two-device pod, which the allocatable bound above cannot express.
+	MaxFreeGPUsPerNode int `json:"max_free_gpus_per_node"`
+	// AvailableGPUSlots is indexed by GPUs per replica minus one. Each entry is how many
+	// replicas of that width fit without splitting one across nodes.
+	AvailableGPUSlots []int `json:"available_gpu_slots"`
 	// FabricGPUClaims breaks FabricRequestedGPUs down by deployment. The control plane
 	// compares each deployment's running pods against what it committed for that
 	// deployment; a stamp-wide total cannot support that comparison, because one

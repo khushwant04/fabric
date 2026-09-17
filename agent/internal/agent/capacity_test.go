@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
 	"github.com/khushwant04/fabric/agent/internal/hardware"
+	"github.com/khushwant04/fabric/agent/internal/state"
 )
 
 // measuredT4Stamp is a plausible small stamp: three T4s across two nodes, one of them
@@ -26,6 +28,8 @@ func measuredT4Stamp() hardware.Capacity {
 		},
 		AllocatableGPUs:     3,
 		MaxGPUsPerNode:      2,
+		MaxFreeGPUsPerNode:  2,
+		AvailableGPUSlots:   []int{2, 1, 0, 0, 0, 0, 0, 0},
 		RequestedGPUs:       1,
 		FabricRequestedGPUs: 0,
 	}
@@ -74,6 +78,12 @@ func TestMeasuredCapacityIsWhatTheStampReports(t *testing.T) {
 	}
 	if reported.MaxGPUsPerNode != 2 {
 		t.Fatalf("max per node = %d, want 2", reported.MaxGPUsPerNode)
+	}
+	if reported.MaxFreeGPUsPerNode != 2 {
+		t.Fatalf("max free per node = %d, want 2", reported.MaxFreeGPUsPerNode)
+	}
+	if len(reported.AvailableGPUSlots) != 8 || reported.AvailableGPUSlots[1] != 1 {
+		t.Fatalf("available slots = %v, want one 2-GPU replica", reported.AvailableGPUSlots)
 	}
 	if reported.RequestedGPUs != 1 || reported.FabricRequestedGPUs != 0 {
 		t.Fatalf("claims not carried: %+v", reported)
@@ -292,6 +302,7 @@ func TestAnUnmeasuredClaimCountIsReportedAsSuch(t *testing.T) {
 	partial.PodsMeasured = false
 	partial.RequestedGPUs = 0
 	partial.FabricRequestedGPUs = 0
+	partial.AvailableGPUSlots = nil
 	partial.PodClaimsError = "pods is forbidden"
 	instance.config.Capacity = &countingSource{capacity: partial}
 
@@ -302,6 +313,12 @@ func TestAnUnmeasuredClaimCountIsReportedAsSuch(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
+	if stub.lastCapabilities.AvailableGPUSlots == nil {
+		t.Fatal("an unavailable packing measurement was reported as null rather than an empty list")
+	}
+	if len(stub.lastCapabilities.AvailableGPUSlots) != 0 {
+		t.Fatalf("unmeasured slots = %v, want an empty list", stub.lastCapabilities.AvailableGPUSlots)
+	}
 	if stub.lastCapabilities.GPUClaimsMeasured {
 		t.Fatal("an unmeasured claim count was reported as measured")
 	}
@@ -380,5 +397,55 @@ func TestClaimsAreNeverReportedAsNull(t *testing.T) {
 
 	if stub.lastCapabilities.FabricGPUClaims == nil {
 		t.Fatal("claims were reported as null")
+	}
+}
+
+func TestLiveClaimsWinTheBoundOverTerminatingAndOutOfBandPods(t *testing.T) {
+	// A terminating pod still holds a GPU and stays in the physical total, but it must not
+	// displace one of the 512 supported live commitment ids. If it did, the omitted live id
+	// would look row-ahead forever and every later multi-GPU admission would wait forever.
+	instance := New(Config{}, discardLogger())
+	instance.measured = hardware.Capacity{
+		Measured:            true,
+		PodsMeasured:        true,
+		AllocatableGPUs:     hardware.MaxReportedClaims + 1,
+		RequestedGPUs:       hardware.MaxReportedClaims + 1,
+		FabricRequestedGPUs: hardware.MaxReportedClaims + 1,
+		FabricClaims: []hardware.DeploymentClaim{
+			// Larger than every live claim, so measurement order alone would keep it first.
+			{DeploymentID: "terminating-or-out-of-band", GPUs: 1},
+		},
+	}
+	for index := 0; index < hardware.MaxReportedClaims; index++ {
+		id := fmt.Sprintf("live-%03d", index)
+		instance.known[id] = state.Deployment{DeploymentID: id}
+		instance.measured.FabricClaims = append(
+			instance.measured.FabricClaims,
+			hardware.DeploymentClaim{DeploymentID: id, GPUs: 1},
+		)
+	}
+
+	reported := instance.reportedCapabilities()
+
+	if len(reported.FabricGPUClaims) != hardware.MaxReportedClaims {
+		t.Fatalf("reported %d claims, want %d",
+			len(reported.FabricGPUClaims), hardware.MaxReportedClaims)
+	}
+	seen := make(map[string]bool, len(reported.FabricGPUClaims))
+	for _, claim := range reported.FabricGPUClaims {
+		seen[claim.DeploymentID] = true
+	}
+	for deploymentID := range instance.known {
+		if !seen[deploymentID] {
+			t.Fatalf("live claim %q was displaced", deploymentID)
+		}
+	}
+	if seen["terminating-or-out-of-band"] {
+		t.Fatal("unsupported claim displaced a live assignment")
+	}
+	// The omitted pod remains in the total and is charged as untracked by the receiver.
+	if reported.FabricRequestedGPUs != hardware.MaxReportedClaims+1 {
+		t.Fatalf("fabric total = %d, want %d",
+			reported.FabricRequestedGPUs, hardware.MaxReportedClaims+1)
 	}
 }

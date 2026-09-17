@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/agentcontract"
@@ -296,6 +297,9 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 	if capabilities.FabricGPUClaims == nil {
 		capabilities.FabricGPUClaims = []controlplane.GPUClaim{}
 	}
+	if capabilities.AvailableGPUSlots == nil {
+		capabilities.AvailableGPUSlots = []int{}
+	}
 	if !a.measured.Measured {
 		if capabilities.GPUs == nil {
 			capabilities.GPUs = []controlplane.GPU{}
@@ -315,18 +319,69 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 	capabilities.GPUs = gpus
 	capabilities.AllocatableGPUs = a.measured.AllocatableGPUs
 	capabilities.MaxGPUsPerNode = a.measured.MaxGPUsPerNode
+	capabilities.MaxFreeGPUsPerNode = a.measured.MaxFreeGPUsPerNode
+	capabilities.AvailableGPUSlots = append(
+		[]int{}, a.measured.AvailableGPUSlots...,
+	)
 	capabilities.RequestedGPUs = a.measured.RequestedGPUs
 	capabilities.FabricRequestedGPUs = a.measured.FabricRequestedGPUs
 	capabilities.GPUClaimsMeasured = a.measured.PodsMeasured
 
-	claims := make([]controlplane.GPUClaim, 0, len(a.measured.FabricClaims))
-	for _, claim := range a.measured.FabricClaims {
-		claims = append(claims, controlplane.GPUClaim{
-			DeploymentID: claim.DeploymentID, GPUs: claim.GPUs,
-		})
-	}
+	claims := a.reportedFabricClaims()
 	capabilities.FabricGPUClaims = claims
 	return capabilities
+}
+
+// reportedFabricClaims puts live control-plane assignments before every other measured
+// Fabric pod, then applies the bounded wire cap.
+//
+// The hardware layer sees terminating and out-of-band pods too. If it truncated before this
+// ordering, one of those could permanently displace a supported live deployment id, making a
+// multi-GPU observation wait impossible to clear. The agent's known map is the authoritative
+// set it is reconciling; after a deletion/replacement race it catches up on the same desired-
+// state pass, so a newly live id is prioritized on the next heartbeat.
+func (a *Agent) reportedFabricClaims() []controlplane.GPUClaim {
+	byID := make(map[string]int, len(a.measured.FabricClaims))
+	for _, claim := range a.measured.FabricClaims {
+		byID[claim.DeploymentID] += claim.GPUs
+	}
+
+	live := make([]string, 0, len(a.known))
+	for deploymentID := range a.known {
+		if byID[deploymentID] > 0 {
+			live = append(live, deploymentID)
+		}
+	}
+	sort.Strings(live)
+
+	claims := make([]controlplane.GPUClaim, 0, min(len(byID), hardware.MaxReportedClaims))
+	included := make(map[string]bool, len(live))
+	for _, deploymentID := range live {
+		claims = append(claims, controlplane.GPUClaim{
+			DeploymentID: deploymentID,
+			GPUs:         byID[deploymentID],
+		})
+		included[deploymentID] = true
+		if len(claims) == hardware.MaxReportedClaims {
+			return claims
+		}
+	}
+
+	// Measurement already orders the remainder by GPUs descending then id, preserving the
+	// most consequential unsupported claims when room remains.
+	for _, claim := range a.measured.FabricClaims {
+		if included[claim.DeploymentID] {
+			continue
+		}
+		claims = append(claims, controlplane.GPUClaim{
+			DeploymentID: claim.DeploymentID,
+			GPUs:         claim.GPUs,
+		})
+		if len(claims) == hardware.MaxReportedClaims {
+			break
+		}
+	}
+	return claims
 }
 
 // handOffTelemetryCredential writes the collector's credential if one is wanted.

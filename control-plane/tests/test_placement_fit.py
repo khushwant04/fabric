@@ -19,6 +19,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditEvent, InferenceStamp
+from app.services import deployments as deployment_service
 from app.services import placement as placement_service
 from tests.conftest import USING_POSTGRES
 from tests.helpers import (
@@ -925,7 +926,14 @@ async def test_a_deployment_is_not_charged_for_its_own_running_pods(
         client,
         stamp_id,
         enrolled["agent_credential"],
-        with_claims(default_capabilities(gpus=4), {deployment["id"]: 2}),
+        with_claims(
+            default_capabilities(
+                gpus=4,
+                max_free_gpus_per_node=2,
+                available_gpu_slots=[2, 1, 0, 0, 0, 0, 0, 0],
+            ),
+            {deployment["id"]: 2},
+        ),
     )
 
     grown = await client.patch(
@@ -1316,3 +1324,463 @@ async def test_an_admission_records_whether_claims_were_measured(
         )
     ).scalar_one()
     assert event.event_metadata["gpu_claims_measured"] is False
+
+
+
+# --- final packing, replay, and audit regressions -------------------------
+
+
+async def test_stamp_wide_free_gpus_do_not_hide_per_node_fragmentation(
+    client: AsyncClient,
+) -> None:
+    """Two free devices on two nodes cannot host one two-device replica.
+
+    Before max_free_gpus_per_node existed, the API returned 201 because the stamp-wide total
+    and the allocatable width both said two. Kubernetes then had no node that could schedule
+    the pod, which is the exact reconcile-time failure M4 moves to admission.
+    """
+    account_id, token = await onboard(client, "packing", "packing-account")
+    fragmented = default_capabilities(
+        gpus=4,
+        requested_gpus=2,
+        fabric_requested_gpus=0,
+        max_gpus_per_node=2,
+        max_free_gpus_per_node=1,
+        available_gpu_slots=[2, 0, 0, 0, 0, 0, 0, 0],
+    )
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=fragmented)
+    deployment = await create_deployment(
+        client,
+        account_id,
+        token,
+        resources={"gpu_count": 2, "gpu_class": "t4"},
+    )
+
+    refused = await place(
+        client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"]
+    )
+
+    assert refused.status_code == 409, refused.text
+    details = _error(refused)["details"]
+    assert details["reason"] == "insufficient_per_node_gpu_slots"
+    assert details["gpus_per_replica"] == 2
+    assert details["required_replicas"] == 1
+    assert details["available_replicas"] == 0
+    assert details["max_free_gpus_per_node"] == 1
+
+
+async def test_replaying_an_existing_placement_ignores_capacity_that_filled_later(
+    client: AsyncClient,
+) -> None:
+    """A replay advertises an existing assignment; it does not spend capacity again."""
+    account_id, token = await onboard(client, "replay-full", "replay-full-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=2)
+    )
+    stamp_id = enrolled["stamp"]["id"]
+    deployment = await create_deployment(client, account_id, token)
+    first = await place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+    assert first.status_code == 201, first.text
+
+    # Its host and a foreign workload now fill the stamp.
+    report = with_claims(
+        default_capabilities(gpus=2, max_free_gpus_per_node=0),
+        {deployment["id"]: 1},
+        foreign_gpus=1,
+    )
+    beat = await report_capabilities(
+        client, stamp_id, enrolled["agent_credential"], report
+    )
+    assert beat.status_code == 200, beat.text
+
+    replay = await place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["id"] == first.json()["id"]
+
+
+async def test_growth_with_only_revoked_placements_claims_no_capacity_check(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Skipping every revoked stamp verifies nothing, rather than vacuously proving fit."""
+    account_id, token = await onboard(client, "revoked-edit", "revoked-edit-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=8)
+    )
+    deployment = await create_deployment(client, account_id, token)
+    assert (
+        await place(
+            client,
+            account_id,
+            token,
+            deployment["id"],
+            stamp_id=enrolled["stamp"]["id"],
+        )
+    ).status_code == 201
+    revoked = await client.delete(
+        f"/v1/accounts/{account_id}/stamps/{enrolled['stamp']['id']}",
+        headers=bearer(token),
+    )
+    assert revoked.status_code in (200, 204), revoked.text
+
+    grown = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 8}},
+        headers=bearer(token),
+    )
+    assert grown.status_code == 200, grown.text
+
+    event = (
+        await db_session.execute(
+            select(AuditEvent).where(
+                AuditEvent.account_id == uuid.UUID(account_id),
+                AuditEvent.action == "deployment.updated",
+            )
+        )
+    ).scalar_one()
+    assert event.event_metadata["capacity_checked"] is False
+    assert "gpu_class_verified" not in event.event_metadata
+    assert "gpu_claims_measured" not in event.event_metadata
+
+
+async def test_growth_audit_records_whether_claims_were_measured(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """An edit admitted without pod claims is distinguishable from a measured decision."""
+    account_id, token = await onboard(client, "edit-claims", "edit-claims-account")
+    blind = default_capabilities(gpus=8)
+    blind["gpu_claims_measured"] = False
+    blind["max_free_gpus_per_node"] = 0
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=blind)
+    deployment = await create_deployment(client, account_id, token)
+    assert (
+        await place(
+            client,
+            account_id,
+            token,
+            deployment["id"],
+            stamp_id=enrolled["stamp"]["id"],
+        )
+    ).status_code == 201
+
+    grown = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 2}},
+        headers=bearer(token),
+    )
+    assert grown.status_code == 200, grown.text
+
+    event = (
+        await db_session.execute(
+            select(AuditEvent).where(
+                AuditEvent.account_id == uuid.UUID(account_id),
+                AuditEvent.action == "deployment.updated",
+            )
+        )
+    ).scalar_one()
+    assert event.event_metadata["capacity_checked"] is True
+    assert event.event_metadata["gpu_class_verified"] is True
+    assert event.event_metadata["gpu_claims_measured"] is False
+
+
+async def test_own_rollout_surge_is_not_erased_by_a_resize(
+    client: AsyncClient,
+) -> None:
+    """Only the deployment's ordinary allocation is replaceable; its candidate is real use."""
+    account_id, token = await onboard(client, "resize-surge", "resize-surge-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=8)
+    )
+    stamp_id = enrolled["stamp"]["id"]
+    deployment = await create_deployment(client, account_id, token, replicas=2)
+    assert (
+        await place(client, account_id, token, deployment["id"], stamp_id=stamp_id)
+    ).status_code == 201
+
+    # Active and candidate each hold two. The ordinary two can be replaced by the new spec;
+    # the extra two are a rollout surge and remain charged.
+    report = with_claims(
+        default_capabilities(gpus=8, max_free_gpus_per_node=4),
+        {deployment["id"]: 4},
+    )
+    beat = await report_capabilities(
+        client, stamp_id, enrolled["agent_credential"], report
+    )
+    assert beat.status_code == 200, beat.text
+
+    refused = await client.patch(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        json={"spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 7}},
+        headers=bearer(token),
+    )
+    assert refused.status_code == 409, refused.text
+    details = _error(refused)["details"]
+    assert details["reason"] == "insufficient_free_gpus"
+    assert details["used_gpus"] == 2
+    assert details["free_gpus"] == 6
+
+
+async def test_heartbeat_claim_bound_matches_the_supported_stamp_limit(
+    client: AsyncClient,
+) -> None:
+    """Every supported placement can be observed individually; an oversized report is bounded."""
+    account_id, token = await onboard(client, "claim-bound", "claim-bound-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=600)
+    )
+    supported = {
+        f"deployment-{index:03d}": 1
+        for index in range(placement_service.MAX_PLACEMENTS_PER_STAMP)
+    }
+    accepted = await report_capabilities(
+        client,
+        enrolled["stamp"]["id"],
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=600), supported),
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    oversized = {**supported, "deployment-over-limit": 1}
+    refused = await report_capabilities(
+        client,
+        enrolled["stamp"]["id"],
+        enrolled["agent_credential"],
+        with_claims(default_capabilities(gpus=600), oversized),
+    )
+    assert refused.status_code == 422, refused.text
+
+
+
+async def test_total_and_largest_free_node_do_not_overstate_replica_packing(
+    client: AsyncClient,
+) -> None:
+    """Free nodes [3,1] have four GPUs and only one slot for a two-GPU replica."""
+    account_id, token = await onboard(client, "packing-many", "packing-many-account")
+    fragmented = default_capabilities(
+        gpus=6,
+        requested_gpus=2,
+        max_gpus_per_node=4,
+        max_free_gpus_per_node=3,
+        # Width one: 4 replicas. Width two: floor(3/2)+floor(1/2) = 1.
+        available_gpu_slots=[4, 1, 1, 0, 0, 0, 0, 0],
+    )
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=fragmented)
+    deployment = await create_deployment(
+        client,
+        account_id,
+        token,
+        replicas=2,
+        resources={"gpu_count": 2, "gpu_class": "t4"},
+    )
+
+    refused = await place(
+        client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"]
+    )
+
+    assert refused.status_code == 409, refused.text
+    details = _error(refused)["details"]
+    assert details["reason"] == "insufficient_per_node_gpu_slots"
+    assert details["available_replicas"] == 1
+    assert details["required_replicas"] == 2
+
+
+
+async def test_multi_gpu_slots_cannot_be_reused_before_the_next_heartbeat(
+    client: AsyncClient,
+) -> None:
+    """Committed rows reserve a stale physical slot until the stamp observes their pods."""
+    account_id, token = await onboard(client, "slot-reserve", "slot-reserve-account")
+    # Free nodes [3,1]: four GPUs in total, exactly one 2-GPU slot.
+    report = default_capabilities(
+        gpus=4,
+        max_gpus_per_node=3,
+        max_free_gpus_per_node=3,
+        available_gpu_slots=[4, 1, 1, 0, 0, 0, 0, 0],
+    )
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=report)
+    stamp_id = enrolled["stamp"]["id"]
+    first = await create_deployment(
+        client,
+        account_id,
+        token,
+        name="first-wide",
+        resources={"gpu_count": 2, "gpu_class": "t4"},
+    )
+    second = await create_deployment(
+        client,
+        account_id,
+        token,
+        name="second-wide",
+        resources={"gpu_count": 2, "gpu_class": "t4"},
+    )
+
+    placed = await place(client, account_id, token, first["id"], stamp_id=stamp_id)
+    assert placed.status_code == 201, placed.text
+
+    # The first row is committed, but no heartbeat has reported its pod yet. Aggregate free is
+    # two, while the one physical 2-GPU slot in the old snapshot has already been promised.
+    refused = await place(client, account_id, token, second["id"], stamp_id=stamp_id)
+    assert refused.status_code == 409, refused.text
+    assert (
+        _error(refused)["details"]["reason"]
+        == "capacity_commitments_pending_observation"
+    )
+
+
+async def test_claim_aware_pre_slot_agents_remain_placeable(client: AsyncClient) -> None:
+    """An empty slot vector is unreported packing, not a report of zero capacity."""
+    account_id, token = await onboard(client, "pre-slot", "pre-slot-account")
+    legacy = default_capabilities(gpus=8)
+    legacy.pop("available_gpu_slots")
+    legacy.pop("max_free_gpus_per_node")
+    # This agent already measured claims, but predates the packing fields.
+    legacy["gpu_claims_measured"] = True
+    enrolled = await enroll_stamp(client, account_id, token, capabilities=legacy)
+    deployment = await create_deployment(
+        client,
+        account_id,
+        token,
+        resources={"gpu_count": 2, "gpu_class": "t4"},
+    )
+
+    placed = await place(
+        client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"]
+    )
+    assert placed.status_code == 201, placed.text
+
+
+@pytest.mark.skipif(
+    not USING_POSTGRES,
+    reason="same-placement serialization needs PostgreSQL row locks",
+)
+async def test_concurrent_replays_return_one_placement_instead_of_a_uniqueness_error(
+    client: AsyncClient,
+) -> None:
+    """The post-lock lookup closes the race between two first requests for one assignment."""
+    account_id, token = await onboard(client, "same-race", "same-race-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=8)
+    )
+    deployment = await create_deployment(client, account_id, token)
+
+    responses = await asyncio.gather(
+        *(
+            place(
+                client,
+                account_id,
+                token,
+                deployment["id"],
+                stamp_id=enrolled["stamp"]["id"],
+            )
+            for _ in range(4)
+        )
+    )
+
+    assert [response.status_code for response in responses] == [201, 201, 201, 201]
+    assert len({response.json()["id"] for response in responses}) == 1
+
+
+
+def test_stamp_limit_prevents_permanent_observation_waits() -> None:
+    """The next assignment is refused before a committed id can exceed the claim protocol."""
+    report = default_capabilities(gpus=600)
+    stamp = type(
+        "Stamp",
+        (),
+        {
+            "capabilities": report,
+            "region": "local",
+            "last_heartbeat_at": dt.datetime.now(tz=dt.UTC),
+        },
+    )()
+    capacity = placement_service.read_capacity(stamp)
+    committed = {
+        f"deployment-{index:03d}": 1
+        for index in range(placement_service.MAX_PLACEMENTS_PER_STAMP)
+    }
+    demand = placement_service.demand_of(
+        {
+            "replicas": 1,
+            "resources": {"gpu_count": 1, "gpu_class": "t4"},
+        }
+    )
+
+    unfit = placement_service.check_fit(
+        demand,
+        capacity,
+        committed_gpus=committed,
+        require_live=False,
+    )
+
+    assert unfit is not None
+    assert unfit.code == "stamp_deployment_limit_reached"
+    assert unfit.details["max_placements_per_stamp"] == 512
+
+
+@pytest.mark.skipif(
+    not USING_POSTGRES,
+    reason="deployment-row serialization needs PostgreSQL row locks",
+)
+async def test_first_placement_and_concurrent_growth_share_one_demand_snapshot(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Either placement sees the grown spec, or growth sees and validates the placement."""
+    account_id, token = await onboard(client, "place-grow-race", "place-grow-race-account")
+    enrolled = await enroll_stamp(
+        client, account_id, token, capabilities=default_capabilities(gpus=1)
+    )
+    deployment = await create_deployment(client, account_id, token)
+
+    entered_admission = asyncio.Event()
+    release_admission = asyncio.Event()
+    original = deployment_service._refuse_if_stamp_cannot_fit
+    paused = False
+
+    async def pause_first_admission(*args, **kwargs):
+        nonlocal paused
+        if not paused:
+            paused = True
+            entered_admission.set()
+            await release_admission.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        deployment_service,
+        "_refuse_if_stamp_cannot_fit",
+        pause_first_admission,
+    )
+
+    placing = asyncio.create_task(
+        place(
+            client,
+            account_id,
+            token,
+            deployment["id"],
+            stamp_id=enrolled["stamp"]["id"],
+        )
+    )
+    await asyncio.wait_for(entered_admission.wait(), timeout=5)
+
+    growing = asyncio.create_task(
+        client.patch(
+            f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+            json={"spec": {"runtime": {"release": "runtime-release-1"}, "replicas": 8}},
+            headers=bearer(token),
+        )
+    )
+    # Placement owns the deployment row while paused inside capacity admission, so growth
+    # cannot observe "no placement" and commit unchecked beside it.
+    await asyncio.sleep(0.1)
+    assert not growing.done()
+
+    release_admission.set()
+    placed, grown = await asyncio.gather(placing, growing)
+
+    assert placed.status_code == 201, placed.text
+    assert grown.status_code == 409, grown.text
+    assert _error(grown)["details"]["reason"] == "insufficient_free_gpus"
+
+    current = await client.get(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}",
+        headers=bearer(token),
+    )
+    assert current.json()["desired_spec"]["replicas"] == 1

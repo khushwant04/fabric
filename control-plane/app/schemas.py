@@ -453,7 +453,10 @@ class StampCapabilities(BaseModel):
     #: stamp-wide total cannot support that comparison, because one deployment running ahead
     #: of its rows and another lagging behind them are indistinguishable in a sum, and the two
     #: errors cancel into an overcommitment.
-    fabric_gpu_claims: list[FabricGpuClaim] = Field(default_factory=list, max_length=256)
+    #: The bound matches the control plane's supported placements-per-stamp limit and the
+    #: agent's report cap. The control plane refuses the next assignment at this count, so a
+    #: committed id is never permanently omitted from every heartbeat.
+    fabric_gpu_claims: list[FabricGpuClaim] = Field(default_factory=list, max_length=512)
     #: Whether the stamp read pod claims at all. Zero claimed GPUs is otherwise
     #: indistinguishable from an idle cluster, and placement decides on the difference, so an
     #: admission made without claim data is recorded rather than assumed. Defaults false,
@@ -462,6 +465,13 @@ class StampCapabilities(BaseModel):
     #: Largest device count on any one node. A stamp-wide total cannot say whether a single
     #: replica asking for four GPUs can be scheduled at all. Zero means unreported.
     max_gpus_per_node: int = Field(default=0, ge=0)
+    #: Largest number of *unclaimed* devices on any one node. Two devices free across two nodes
+    #: cannot host a pod that needs two, and the allocatable bound above cannot say so. Zero
+    #: means unreported.
+    max_free_gpus_per_node: int = Field(default=0, ge=0)
+    #: Indexed by GPUs per replica minus one. Each entry is how many replicas of that width fit
+    #: into current per-node free capacity without splitting one replica across nodes.
+    available_gpu_slots: list[int] = Field(default_factory=list, max_length=8)
     driver_version: str | None = Field(default=None, max_length=64)
     container_runtime_version: str | None = Field(default=None, max_length=64)
     agent_version: str | None = Field(default=None, max_length=64)

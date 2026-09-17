@@ -115,6 +115,8 @@ def default_capabilities(
     memory_bytes: int = T4_MEMORY_BYTES,
     compute_capability: str | None = "7.5",
     max_gpus_per_node: int | None = None,
+    max_free_gpus_per_node: int | None = None,
+    available_gpu_slots: list[int] | None = None,
 ) -> dict[str, Any]:
     """A capability report describing hardware that could really serve something.
 
@@ -122,6 +124,21 @@ def default_capabilities(
     ``memory_bytes: 1024`` would describe a stamp with one kibibyte of video memory and make
     every test assert against a refusal.
     """
+    max_node = gpus if max_gpus_per_node is None else max_gpus_per_node
+    max_free_node = max_node if max_free_gpus_per_node is None else max_free_gpus_per_node
+    if available_gpu_slots is None:
+        # A deterministic homogeneous-node approximation for fixtures that are not testing
+        # packing. Packing tests pass the exact vector explicitly.
+        nodes: list[int] = []
+        remaining = gpus
+        while remaining > 0 and max_node > 0:
+            node = min(remaining, max_node)
+            nodes.append(node)
+            remaining -= node
+        available_gpu_slots = [
+            sum(node // width for node in nodes) for width in range(1, 9)
+        ]
+
     return {
         "orchestrator": orchestrator,
         "region": region,
@@ -139,7 +156,9 @@ def default_capabilities(
         # A measuring agent says so; zero claimed devices is otherwise indistinguishable from
         # an idle cluster.
         "gpu_claims_measured": True,
-        "max_gpus_per_node": gpus if max_gpus_per_node is None else max_gpus_per_node,
+        "max_gpus_per_node": max_node,
+        "max_free_gpus_per_node": max_free_node,
+        "available_gpu_slots": available_gpu_slots,
     }
 
 

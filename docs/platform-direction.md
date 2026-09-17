@@ -156,6 +156,8 @@ Three further things the plan did not anticipate:
   workloads for one deployment, so trusting the rows hands out capacity that is physically
   occupied. Each deployment is charged at `max(committed, running)`, and the stamp reports what
   is running *per deployment* — over stamp-wide totals the two divergences cancel exactly.
+  Per-node free slots are reported too: aggregate free GPUs cannot tell whether several
+  multi-GPU replicas actually fit without splitting one across nodes.
 - **A class is a minimum, not a product.** Comparing exact compute capability would refuse an
   A100 for an `a10` request; matching product strings would make every new SKU an outage.
 - **One hole is admitted rather than closed.** A stamp that cannot describe its devices is placed
