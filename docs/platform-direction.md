@@ -190,9 +190,23 @@ which M1 and M2 make observable per backend for the first time.
 - **Rate and concurrency limits are per-process.** `limits.py` says so explicitly. The moment
   the data plane runs more than one replica, a customer's limit is whatever the limit is times
   the replica count.
-- **Streamed requests are metered at zero tokens** (`data-plane/fabric_data_plane/app.py`) —
-  vLLM will report them if asked for `stream_options.include_usage`. Streaming is the default
-  for chat clients, so most usage is currently uncounted.
+- ~~**Streamed requests are metered at zero tokens.**~~ **Fixed**
+  (ADR [0014](context/adrs/0014-streamed-usage-is-requested-and-metered.md)). The gateway now
+  asks the host for `stream_options.include_usage`, reads the reported counts, and records one
+  usage row when the stream ends. Because Fabric adds that request on the caller's behalf, it
+  also consumes the usage-only frame it caused, so a client that did not ask receives no frame
+  reporting token counts for as long as the stream is being framed — the exceptions are a frame
+  whose bytes were released at the 64 KiB withhold ceiling and one whose `data:` payload exceeds
+  the 1 MiB parse cap; both are relayed unparsed and attributed as `framing_lost`. It is *not*
+  byte-identical either: asking for usage makes a compliant host attach a `usage` key to
+  every ordinary chunk, and that key is forwarded, because stripping it would mean
+  re-serialising every frame and silently rewriting fields the gateway does not model. Nothing
+  is billed from a count that might be a running subtotal, so a stream cut short reports no
+  usage. Whatever is lost is counted on `fabric_dp_unmetered_streams_total`, labelled by
+  account and by reason, because a zero-token row is indistinguishable from a real answer that
+  cost nothing. A caller can deliberately create `incomplete_stream` loss by disconnecting
+  before the terminal report; the upstream is cancelled too, and existing per-account limits
+  plus alerting bound that accepted residual gap until partial usage can be represented.
 - **Usage buffer is in-memory.** A pod restart between request and drain loses those records.
 - **No agent or telemetry credential rotation.** The `credential_version` column exists; no
   handler does.

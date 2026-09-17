@@ -17,6 +17,8 @@ import threading
 import time
 from collections import defaultdict
 
+from fabric_data_plane.streaming import UNMETERED_REASONS
+
 #: Upper bounds in seconds. Chosen for a language model rather than a web service: the
 #: interesting range is hundreds of milliseconds to tens of seconds, and a bucket at 5ms
 #: would only ever count refusals.
@@ -48,7 +50,22 @@ class Metrics:
         self._backend_ejections: dict[tuple[str, str], int] = defaultdict(int)
         self._backend_available: dict[tuple[str, str], int] = {}
         self._active_backends: set[tuple[str, str]] = set()
+        # Streamed requests that ended without a usable token count, so no usage record was
+        # written. Counted rather than recorded as zero, because a zero-token row is
+        # indistinguishable from a real answer that cost nothing. Labelled by account, since
+        # lost usage is lost revenue belonging to somebody, and by reason, since the causes
+        # have different owners. Seeded to zero per identity so that the *first* loss is a
+        # change an alert can fire on rather than a series appearing from nowhere.
+        self._unmetered_streams: dict[tuple[str, str, str], int] = defaultdict(int)
+        self._active_deployments: set[tuple[str, str]] = set()
         self._started = time.time()
+
+    def activate_deployment(self, *, deployment: str, account: str) -> None:
+        """Declare a placement and publish zero loss counters before it serves traffic."""
+        with self._lock:
+            self._active_deployments.add((deployment, account))
+            for reason in UNMETERED_REASONS:
+                self._unmetered_streams.setdefault((deployment, account, reason), 0)
 
     def request_started(self, deployment: str) -> None:
         with self._lock:
@@ -110,8 +127,11 @@ class Metrics:
                 del self._backend_requests[key]
 
     def retire_deployment(self, deployment: str) -> None:
-        """Remove backend-labelled series when a placement is withdrawn."""
+        """Retire current membership while retaining process-lifetime counter history."""
         with self._lock:
+            self._active_deployments = {
+                key for key in self._active_deployments if key[0] != deployment
+            }
             self._active_backends = {
                 key for key in self._active_backends if key[0] != deployment
             }
@@ -159,6 +179,22 @@ class Metrics:
             if output_tokens:
                 self._tokens[(deployment, "output")] += output_tokens
 
+    def stream_finished(
+        self, *, deployment: str, account: str, unmetered_reason: str | None
+    ) -> None:
+        """Record one streamed request, and whether its token count was lost.
+
+        The zero baseline is published by ``activate_deployment`` when the registry first makes
+        the placement known, before traffic can finish. This method never creates a label: a
+        stream admitted before withdrawal retains membership through this call, while an
+        unretained late cleanup cannot add a new event after retirement.
+        """
+        with self._lock:
+            if (deployment, account) not in self._active_deployments:
+                return
+            if unmetered_reason is not None:
+                self._unmetered_streams[(deployment, account, unmetered_reason)] += 1
+
     def refused(self, *, deployment: str, account: str, reason: str) -> None:
         """Record a request rejected before it reached a model host."""
         with self._lock:
@@ -177,6 +213,7 @@ class Metrics:
             backend_in_flight = dict(self._backend_in_flight)
             backend_ejections = dict(self._backend_ejections)
             backend_available = dict(self._backend_available)
+            unmetered_streams = dict(self._unmetered_streams)
             uptime = time.time() - self._started
 
         lines: list[str] = []
@@ -240,6 +277,17 @@ class Metrics:
             lines.append(
                 f'fabric_dp_tokens_total{{deployment_id="{deployment}",'
                 f'direction="{direction}"}} {value}'
+            )
+
+        lines.append(
+            "# HELP fabric_dp_unmetered_streams_total "
+            "Streamed requests whose token count was lost, by reason."
+        )
+        lines.append("# TYPE fabric_dp_unmetered_streams_total counter")
+        for (deployment, account, reason), value in sorted(unmetered_streams.items()):
+            lines.append(
+                f'fabric_dp_unmetered_streams_total{{deployment_id="{deployment}",'
+                f'account_id="{account}",reason="{reason}"}} {value}'
             )
 
         lines.append("# HELP fabric_dp_request_duration_seconds End-to-end gateway latency.")
