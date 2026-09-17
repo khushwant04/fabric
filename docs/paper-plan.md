@@ -258,3 +258,183 @@ the hash scheme and the target guard.
 - Never generalize an RTX 4070 or A10 measurement to the T4; only the T4 gate is citable as
   production evidence.
 - Report the negative results. They are the most credible thing here.
+
+
+
+---
+
+## 7. Additional frontier directions (September 2026 scan)
+
+The important distinction is between **making the current patch safe**, **optimising a kernel**,
+and **creating a new paper contribution**. They are not the same work.
+
+### 7.1 Ranked portfolio
+
+| Rank | Direction | Novelty | Feasibility here | Likely end-to-end effect | Recommendation |
+|---:|---|:---:|:---:|:---:|---|
+| 0 | Protected packed dispatch, fallback, telemetry, tests, versioned artifacts | Low | High | Availability, not speed | **Mandatory before more tuning** |
+| 1 | T4/SM75 GDN **block megakernel** | High | Medium-low | Potentially material at batch 1 | **Best kernel-paper bet** |
+| 2 | Commodity-GPU GDN chunked-prefill kernel | Medium-high | Medium | TTFT/long-prompt gain | **Best lower-risk kernel project** |
+| 3 | SLO-aware kernel × batching × replica co-design | High | Medium-high | Throughput/latency frontier | **Best Fabric-specific paper extension** |
+| 4 | Warm-profile rollout: compile before readiness | Medium | High | Large cold-start/rollout gain | **Build with rollout paper** |
+| 5 | Graph-bucket-specific tile/profile dispatch | Low-medium | High | Small steady-state gain | Useful enabling work |
+| 6 | Mixed-precision recurrent state | Low now | Medium | Material only at high batch/large models | Reproduce as baseline, not novelty |
+| 7 | GDN speculative state / prefix checkpoints | Low now | Low | Potentially large | Do not enter without a new angle |
+
+### 7.2 Foundation: make the packed production patch admissible
+
+The live path patches vLLM's packed Qwen GDN operation directly. Unlike the older generic
+path, it currently bypasses the protected dispatcher: no complete CUDA/device/dtype/index
+contract, no fallback to the original operation on launch failure, no fallback counter, no
+packed unit test, and no packed result in the content-hashed artifact chain.
+
+Add a packed dispatcher that:
+
+1. validates CUDA device, dtype, FP32 state, index range/uniqueness, shape, strides, and aliasing;
+2. catches unsupported inputs and launch failures and calls the pinned original operation;
+3. exports selected-kernel, fallback-reason, and launch-failure metrics per deployment;
+4. requires output **and final-state** bit-exactness before a profile is promotable; and
+5. records `(GPU, dtype, graph bucket, block_v, warps, Triton, vLLM, source hash)` in the
+   versioned artifact and the deployment's applied status.
+
+This is not a speed contribution. It is what turns "we monkey-patched a fast kernel" into "we
+have an admission and rollback contract for substituting kernels in a managed service."
+
+### 7.3 Best kernel paper: a GDN block megakernel for commodity GPUs
+
+The current recurrence is already close to its irreducible memory traffic: at launch-model
+shape it reads and writes ~2.1 MB of FP32 state per sequence per layer, and state is over 99%
+of that operation's bytes. Another 2x on this launch still cannot move a 16 ms token much.
+The next boundary must therefore cross operators.
+
+Build a decode-specialized block path that incrementally expands fusion across:
+
+1. packed projection epilogues → Q/K/V/a/b layout;
+2. causal convolution → post-convolution preparation;
+3. Q/K normalization, gate derivation, GDN state update, and output;
+4. gated normalization/mixing; and, if profiling supports it,
+5. the output-projection boundary.
+
+The research question is not "can everything fit in one Triton kernel?" It is:
+
+> Which fusion partition minimises launch gaps and intermediate HBM traffic on an SM75 GPU
+> without destroying occupancy, graph capture, dynamic batching, or bit-exact fallback?
+
+Evaluate a partition search — operation per kernel, current fused recurrence, progressively
+fused regions, and one persistent/block-level candidate — inside the same CUDA graph. Report
+register pressure, spills, occupancy bound, intermediate bytes, launch count, full-token TPOT,
+and the batch where each partition stops winning. Require a stock-vLLM fallback for every
+unsupported shape.
+
+This aligns with the current megakernel frontier, but differentiates on an important gap:
+recent work focuses on modern datacenter accelerators, while Fabric's production target is a
+T4/SM75. Cross-operator fusion is a plausible route to a material batch-1 result; another
+recurrence tile sweep is not.
+
+### 7.4 Lower-risk kernel paper: chunked prefill on T4/SM75
+
+[FlashQLA](https://github.com/QwenLM/FlashQLA) now accelerates GDN chunked prefill through
+algebraic reformulation, selective fused kernels, warp specialization, and gate-driven
+intra-card context parallelism, but its documented hardware floor is SM90. That leaves a
+credible question for Fabric:
+
+> What is the right GDN prefill decomposition for bandwidth- and resource-constrained commodity
+> accelerators without Hopper's warpgroup and Tensor Memory Accelerator machinery?
+
+Implement a T4-oriented chunked-prefill path and compare it with pinned FLA and vLLM across
+64-token through long-prompt chunks, variable-length batches, and warm/cold autotuner states.
+The interesting result may be a **different decomposition**, not a port of FlashQLA. Measure
+TTFT, not only kernel latency.
+
+This also has an operational seam. Current [vLLM GDN documentation](https://docs.vllm.ai/en/v0.29.0/api/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn/)
+warms prefill autotuners before cache allocation because first-real-request tuning can otherwise
+run after memory is consumed and OOM. Fabric can make the selected profile a release artifact,
+compile it during candidate preparation, and refuse readiness until the profile is warm.
+
+### 7.5 Best systems/kernel co-design: optimise the SLO, not the kernel
+
+The same model can be faster at low batch with one kernel and reach better throughput at high
+batch with another. Replica count changes the batch each replica sees; routing changes state
+locality and queueing; graph buckets constrain legal kernel profiles. Therefore `kernel_mode`
+cannot be optimised independently.
+
+Add an offline-profiler/online-controller split:
+
+- **Offline:** produce a signed performance surface over `(GPU, profile, active batch, graph
+  bucket, prompt/decode mix)` with correctness and provenance gates.
+- **Online:** use queue depth, active batch, TTFT/TPOT SLO, request-rate forecast, and available
+  GPUs to jointly choose replica count, routing policy, admission limit, graph profile, and
+  kernel profile.
+- **Safety:** only choose among pre-admitted profiles; hysteresis and minimum dwell time prevent
+  oscillation; acknowledged drain changes profiles without truncating streams.
+- **Objective:** minimise GPU cost subject to p95 TTFT/TPOT and error constraints, rather than
+  maximise a microbenchmark speedup.
+
+This is uniquely suited to Fabric because the control plane, operator rollout, router metrics,
+and per-deployment kernel switch already exist. The paper comparison is independent choices
+versus joint control under stationary, bursty, and diurnal workloads. Report SLO violations,
+GPU-hours, reconfiguration count, and useful throughput.
+
+### 7.6 Warm-profile rollout
+
+The measured cold start is ~510 s and graph compilation dominates it. Candidate preparation
+should not mean only "the pod answered a health check." Define readiness as:
+
+1. model weights resident;
+2. all admitted Triton variants compiled;
+3. all promoted CUDA graph buckets captured;
+4. deterministic smoke inference passed; and
+5. profile identity reported in CR status.
+
+Then shift traffic through the existing acknowledged-drain protocol. This gives a new paper
+result: **zero-downtime is not enough; the first request after cutover must not pay compilation.**
+Compare ordinary readiness with profile-ready promotion on cold TTFT, p99 latency after cutover,
+rollout duration, and extra GPU-seconds.
+
+### 7.7 Useful but not headline work
+
+**Graph-bucket-specific dispatch.** Select `block_v`/warps before graph capture for each admitted
+batch bucket rather than one process-static environment setting. This is safe and feasible, but
+likely a low-single-digit or smaller full-model gain.
+
+**State-slot locality.** Compact or reorder active GDN state slots before execution and restore
+output order afterward. Test TLB/cache effects, but stop if the locality gain is smaller than the
+batching/sort overhead.
+
+**Weight quantisation.** Dense weight reads are the dominant batch-1 term, so quantised GEMMs are
+more likely to improve TPOT than recurrence work. However, plain weight quantisation is not a
+novel paper contribution; use it as a baseline or combine it with the fused block and a rigorous
+quality contract.
+
+### 7.8 Directions whose obvious version is already occupied
+
+Do not pitch these as Fabric's primary novelty:
+
+- **Uniform or simple mixed-precision state.** [DAMP](https://arxiv.org/abs/2608.27513) already
+  reports that uniform INT8/FP8 can damage reasoning, then uses decay/error-aware mixed precision
+  and reports reduced state storage, faster state updates, and up to 10.9% full-model TPOT gain
+  on much larger, high-batch models. Fabric can reproduce it on T4, but needs a different thesis.
+- **Basic speculative rollback for GDN.** [Bole](https://arxiv.org/abs/2608.01651), TreeWY, and
+  SpecLA already avoid per-proposal full-state snapshots using recurrence-aware factorisations and
+  state reconstruction. A simple shadow-state/commit implementation is now engineering, not
+  frontier novelty. vLLM also documents several [speculative decoding methods](https://docs.vllm.ai/en/latest/features/speculative_decoding/),
+  so integration alone is insufficient.
+- **Basic recurrent prefix caching.** Sparse checkpoints, application-directed checkpoints, and
+  decay-aware checkpoint compression are already active 2026 topics. A paper needs a new angle,
+  such as tenant-safe encrypted checkpoint reuse, correctness under model/profile upgrades, or
+  an SLO/cost policy that chooses checkpoint density.
+
+### 7.9 Recommended execution order
+
+1. **Packed safety foundation** — dispatcher, fallback, telemetry, tests, artifacts.
+2. **Full-token profile** — identify launch gaps and intermediate traffic; do not guess the
+   megakernel boundary.
+3. **Warm-profile rollout** — immediate value and strengthens the existing systems paper.
+4. **Choose one research branch:** T4 GDN block fusion for decode, or T4 chunked prefill for TTFT.
+5. **Only after measured profiles exist:** build the joint SLO controller.
+
+If resources permit one addition only, choose warm-profile rollout for the current paper. If the
+goal is a second kernel paper, choose the T4 GDN block-fusion study.
+
+*Internet-derived descriptions in this section were rephrased for compliance with licensing
+restrictions; links identify the original sources.*
