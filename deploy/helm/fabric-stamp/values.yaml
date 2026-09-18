@@ -180,6 +180,17 @@ dataPlane:
     # by how many sequences it decodes at once. With one GPU and a small max-num-seqs,
     # a value near that server's own concurrency is the useful setting.
     maxInFlightPerAccount: 0
+    # One private stamp-local authority makes both limits exact across gateway workers/pods.
+    # It does not call the central control plane and therefore preserves offline serving.
+    shared:
+      enabled: true
+      existingSecret: ""
+      existingSecretKey: token
+      # Used only when no existing Secret is supplied. Empty generates and retains a token.
+      token: ""
+      timeoutSeconds: 2
+      leaseSeconds: 900
+      renewSeconds: 30
 
   # Mutual TLS to the model host. Unset means plain HTTP, which is what a single-pod
   # stamp uses: the host is reachable only inside the pod's network namespace or through

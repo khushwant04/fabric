@@ -63,6 +63,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "fabric-stamp.limitSecretName" -}}
+{{- if .Values.dataPlane.limits.shared.existingSecret -}}
+{{- .Values.dataPlane.limits.shared.existingSecret -}}
+{{- else -}}
+{{- printf "%s-limit-coordinator" (include "fabric-stamp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Fail early on values that would otherwise produce a pod that cannot work. */}}
 {{- define "fabric-stamp.validate" -}}
 {{- if not .Values.controlPlane.url -}}
@@ -76,6 +84,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- if and (not .Values.enrollment.token) (not .Values.enrollment.existingSecret) -}}
 {{- fail "enrollment.token or enrollment.existingSecret is required for the first install" -}}
+{{- end -}}
+{{- if and .Values.dataPlane.limits.shared.enabled .Values.dataPlane.limits.shared.existingSecret .Values.dataPlane.limits.shared.token -}}
+{{- fail "dataPlane.limits.shared.existingSecret and token are mutually exclusive" -}}
+{{- end -}}
+{{- if and .Values.dataPlane.limits.shared.enabled (not .Values.dataPlane.limits.shared.existingSecretKey) -}}
+{{- fail "dataPlane.limits.shared.existingSecretKey is required" -}}
+{{- end -}}
+{{- if and .Values.dataPlane.limits.shared.enabled (ge (float64 .Values.dataPlane.limits.shared.renewSeconds) (divf (float64 .Values.dataPlane.limits.shared.leaseSeconds) 2.0)) -}}
+{{- fail "dataPlane.limits.shared.renewSeconds must be less than half leaseSeconds" -}}
 {{- end -}}
 {{- if and .Values.stamp.measureCapacity (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
 {{- fail "stamp.measureCapacity needs a dedicated ServiceAccount: without serviceAccount.create or serviceAccount.name the cluster-wide node and pod read would be bound to the namespace's default account, which every other pod there can mount. Set serviceAccount.name, or stamp.measureCapacity=false to report stamp.gpus instead." -}}

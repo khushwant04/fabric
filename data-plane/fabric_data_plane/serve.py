@@ -1,10 +1,8 @@
-"""Process entrypoint serving both listeners.
+"""Process entrypoint serving the public and private listeners.
 
-The inference and administrative APIs are separate ASGI applications on separate
-ports so that only the inference port is ever published, but they must share one
-process: the usage buffer lives in memory, and a second process would drain a
-buffer that never saw the requests. Running them as two containers would silently
-report nothing.
+Inference, administration, rollout status, and optional shared-limit coordination are separate ASGI
+applications on separate ports. They share one DataPlane object: usage accounting and local
+lifecycle state have one owner, while only inference is ever publicly exposed.
 
     python -m fabric_data_plane.serve
 """
@@ -20,6 +18,7 @@ from fabric_data_plane.app import (
     build_plane,
     create_admin_app,
     create_inference_app,
+    create_limit_coordinator_app,
     create_router_status_app,
 )
 from fabric_data_plane.config import Settings
@@ -65,6 +64,16 @@ async def serve(settings: Settings | None = None) -> None:
             log_level=resolved.log_level.lower(),
         )
     )
+    limit_coordinator = None
+    if plane.limit_store is not None:
+        limit_coordinator = uvicorn.Server(
+            uvicorn.Config(
+                create_limit_coordinator_app(plane),
+                host=resolved.limit_coordinator_host,
+                port=resolved.limit_coordinator_port,
+                log_level=resolved.log_level.lower(),
+            )
+        )
 
     # Warm the verification keys before readiness is polled, and keep retrying: a
     # readiness check that requires keys can never pass if keys are only fetched
@@ -72,13 +81,19 @@ async def serve(settings: Settings | None = None) -> None:
     warmer = asyncio.create_task(_warm_keys(plane, resolved))
 
     logger.info(
-        "serving inference on %s:%s, administration on %s:%s, and router status on %s:%s",
+        "serving inference on %s:%s, administration on %s:%s, router status on %s:%s%s",
         resolved.host,
         resolved.port,
         resolved.admin_host,
         resolved.admin_port,
         resolved.router_status_host,
         resolved.router_status_port,
+        (
+            f", and shared limits on {resolved.limit_coordinator_host}:"
+            f"{resolved.limit_coordinator_port}"
+            if limit_coordinator is not None
+            else ""
+        ),
     )
 
     # If either listener stops, the other is torn down: a data plane serving
@@ -88,9 +103,12 @@ async def serve(settings: Settings | None = None) -> None:
         inference_task = group.create_task(inference.serve())
         admin_task = group.create_task(admin.serve())
         router_status_task = group.create_task(router_status.serve())
+        tasks = {inference_task, admin_task, router_status_task}
+        if limit_coordinator is not None:
+            tasks.add(group.create_task(limit_coordinator.serve()))
 
         done, _pending = await asyncio.wait(
-            {inference_task, admin_task, router_status_task},
+            tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in done:
@@ -100,6 +118,8 @@ async def serve(settings: Settings | None = None) -> None:
         inference.should_exit = True
         admin.should_exit = True
         router_status.should_exit = True
+        if limit_coordinator is not None:
+            limit_coordinator.should_exit = True
         warmer.cancel()
 
 

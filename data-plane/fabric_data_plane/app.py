@@ -1,11 +1,12 @@
 """Inference ingress.
 
-Two applications are built, because AR-DP03 requires the control and
-administrative listeners to be isolated from the inference listener. They are
-served on different ports and share no routes:
+Separate applications keep public inference isolated from administration, rollout status, and
+stamp-local limit coordination. They are served on different ports and share no routes:
 
-* ``create_inference_app()`` — OpenAI-compatible, authenticated, public.
-* ``create_admin_app()``     — health, readiness, key and usage state, internal.
+* ``create_inference_app()`` — OpenAI-compatible, authenticated, public;
+* ``create_admin_app()`` — health, readiness, key and usage state, pod-local;
+* ``create_router_status_app()`` — rollout acknowledgement, operator-only;
+* ``create_limit_coordinator_app()`` — shared account admission, gateway-only.
 
 A request on the inference path performs no control-plane call: keys come from
 the local cache and deployments from local configuration (AR-DP02, AR-ID04).
@@ -45,6 +46,15 @@ from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.pool import Backend, BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
+from fabric_data_plane.shared_limits import (
+    LimitCoordinatorStore,
+    LimitCoordinatorUnavailable,
+    LocalLimitManager,
+    SharedLimitManager,
+)
+from fabric_data_plane.shared_limits import (
+    authorized as limit_authorized,
+)
 from fabric_data_plane.streaming import UsageMeter, streaming_upstream_payload
 from fabric_data_plane.usage import (
     UsageBuffer,
@@ -118,16 +128,36 @@ class DataPlane:
         # label of a captured request that can still reach its host.
         self._admitted_streams: dict[uuid.UUID, int] = {}
         self._pools_lock = threading.Lock()
-        self.rate_limiter = RateLimiter(
-            RateLimit(
-                requests_per_minute=settings.rate_limit_requests_per_minute,
-                # A burst of zero with a rate set would refuse everything, so it falls
-                # back to a quarter minute's allowance rather than deadlocking.
-                burst=settings.rate_limit_burst
-                or max(1, settings.rate_limit_requests_per_minute // 4),
-            )
+        rate_limit = RateLimit(
+            requests_per_minute=settings.rate_limit_requests_per_minute,
+            # A burst of zero with a rate set would refuse everything, so it falls
+            # back to a quarter minute's allowance rather than deadlocking.
+            burst=settings.rate_limit_burst
+            or max(1, settings.rate_limit_requests_per_minute // 4),
         )
+        self.rate_limiter = RateLimiter(rate_limit)
         self.concurrency = ConcurrencyLimiter(settings.max_in_flight_per_account)
+        self.limit_store = (
+            LimitCoordinatorStore(
+                path=settings.limit_coordinator_store_path,
+                rate=rate_limit,
+                maximum=settings.max_in_flight_per_account,
+                lease_seconds=settings.limit_lease_seconds,
+            )
+            if settings.limit_coordinator_store_path
+            else None
+        )
+        if settings.limit_coordinator_url:
+            self.limits = SharedLimitManager(
+                base_url=settings.limit_coordinator_url,
+                token=settings.limit_coordinator_token or "",
+                timeout=settings.limit_coordinator_timeout_seconds,
+                renew_seconds=settings.limit_renew_seconds,
+                rate_enabled=rate_limit.enabled,
+                concurrency_enabled=settings.max_in_flight_per_account > 0,
+            )
+        else:
+            self.limits = LocalLimitManager(self.rate_limiter, self.concurrency)
         # Publish zero-valued placement counters before the first request can finish. A counter
         # first observed at one hides that first event from Prometheus rate()/increase().
         self.reconcile_pools()
@@ -518,35 +548,33 @@ async def _proxy(
             "This stamp cannot durably record usage",
         )
 
-    # Checked after authorization so an unauthenticated or unauthorized caller cannot
-    # consume another account's allowance, and before proxying so a refused request
-    # never reaches the GPU.
-    wait = plane.rate_limiter.check(principal.account_id)
-    if wait is not None:
-        # Counted here because a refused request reaches no model host, so it appears in
-        # no engine metric: from the engine's side this traffic never happened.
-        plane.metrics.refused(
-            deployment=str(deployment.deployment_id),
-            account=str(principal.account_id),
-            reason="rate_limited",
-        )
-        raise TooManyRequests(
-            "rate_limited",
-            "This account has exceeded its request rate on this stamp",
-            retry_after=max(1, math.ceil(wait)),
-        )
+    # Checked after authorization so an unauthenticated or unauthorized caller cannot consume
+    # another account's allowance, and before proxying so a refused request never reaches the GPU.
+    # In production this is one atomic stamp-local coordinator decision shared by every gateway.
+    try:
+        admission = await plane.limits.acquire(principal.account_id)
+    except LimitCoordinatorUnavailable as exc:
+        raise UpstreamUnavailable(
+            "limit_coordinator_unavailable",
+            "This stamp cannot make a shared admission decision",
+        ) from exc
 
-    if not await plane.concurrency.acquire(principal.account_id):
+    if not admission.allowed:
+        reason = admission.reason or "limit_rejected"
         plane.metrics.refused(
             deployment=str(deployment.deployment_id),
             account=str(principal.account_id),
-            reason="too_many_in_flight",
+            reason=reason,
         )
+        if reason == "rate_limited":
+            raise TooManyRequests(
+                "rate_limited",
+                "This account has exceeded its request rate on this stamp",
+                retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
+            )
         raise TooManyRequests(
             "too_many_in_flight",
             "This account has too many requests in flight on this stamp",
-            # A slot frees when a request finishes rather than on a clock, so a second
-            # is the honest minimum rather than a computed estimate.
             retry_after=1,
         )
 
@@ -674,10 +702,10 @@ async def _proxy(
                     outcome="cancelled",
                     duration_seconds=time.perf_counter() - started,
                 )
-            await plane.concurrency.release(principal.account_id)
+            await plane.limits.release(admission)
 
     if not pool.has_available():
-        await plane.concurrency.release(principal.account_id)
+        await plane.limits.release(admission)
         plane.metrics.request_finished(
             deployment=deployment_label,
             account=account_label,
@@ -743,7 +771,7 @@ async def _proxy(
 
         if concurrency_release is None:
             concurrency_release = asyncio.create_task(
-                plane.concurrency.release(principal.account_id)
+                plane.limits.release(admission)
             )
         await asyncio.shield(concurrency_release)
         if cleanup_error is not None:
@@ -902,7 +930,8 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
         # "unavailable" would send traffic to a data plane that rejects everything.
         keys = plane.keys.snapshot()
         spool = plane.usage.snapshot()
-        ready = keys["keys_held"] > 0 and spool["healthy"]
+        limits = await plane.limits.snapshot()
+        ready = keys["keys_held"] > 0 and spool["healthy"] and limits["healthy"]
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
@@ -910,6 +939,7 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
             "keys_held": keys["keys_held"],
             "deployments": len(plane.registry),
             "usage_spool_healthy": spool["healthy"],
+            "limit_coordinator_healthy": limits["healthy"],
         }
 
     @router.get("/admin/keys", summary="Verification key cache state")
@@ -929,10 +959,7 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
 
     @router.get("/admin/limits", summary="Rate limit and concurrency state")
     async def limit_state() -> dict[str, Any]:
-        return {
-            "rate_limit": plane.rate_limiter.snapshot(),
-            "concurrency": plane.concurrency.snapshot(),
-        }
+        return await plane.limits.snapshot()
 
     @router.get("/admin/usage", summary="Local durable usage spool state")
     async def usage_state() -> dict[str, Any]:
@@ -999,6 +1026,107 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
             "deleted": result.deleted,
             "already_acknowledged": result.already_acknowledged,
         }
+
+    return router
+
+
+def build_limit_coordinator_router(
+    store: LimitCoordinatorStore,
+    token: str,
+) -> APIRouter:
+    """Private stamp-local authority for atomic cross-replica admission."""
+    router = APIRouter(tags=["limits"])
+
+    def require_token(authorization: str | None) -> None:
+        if not limit_authorized(authorization, token):
+            raise ApiError(401, "invalid_limit_credential", "Invalid limit coordinator token")
+
+    @router.get("/healthz", summary="Limit coordinator liveness")
+    async def limit_health(response: Response) -> dict[str, Any]:
+        if not store.healthy:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "ok" if store.healthy else "unavailable"}
+
+    @router.post("/limits/admit", summary="Atomically apply shared account limits")
+    async def limit_admit(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_token(authorization)
+        payload = await _read_json(request)
+        try:
+            account_id = uuid.UUID(str(payload.get("account_id")))
+            request_id = uuid.UUID(str(payload.get("request_id")))
+        except ValueError as exc:
+            raise BadRequest(
+                "invalid_limit_identity", "account_id and request_id must be UUIDs"
+            ) from exc
+        try:
+            decision = await store.acquire(account_id, request_id)
+        except ValueError as exc:
+            raise BadRequest(
+                "invalid_limit_request", "request_id was already used incompatibly"
+            ) from exc
+        except LimitCoordinatorUnavailable as exc:
+            raise UpstreamUnavailable(
+                "limit_coordinator_unavailable", "Shared limit state is unavailable"
+            ) from exc
+        return {
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "retry_after": decision.retry_after,
+            "lease_id": str(decision.lease_id) if decision.lease_id else None,
+        }
+
+    @router.post("/limits/renew", summary="Renew one shared concurrency lease")
+    async def limit_renew(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_token(authorization)
+        payload = await _read_json(request)
+        try:
+            lease_id = uuid.UUID(str(payload.get("lease_id")))
+        except ValueError as exc:
+            raise BadRequest("invalid_limit_lease", "lease_id must be a UUID") from exc
+        try:
+            renewed = await store.renew(lease_id)
+        except LimitCoordinatorUnavailable as exc:
+            raise UpstreamUnavailable(
+                "limit_coordinator_unavailable", "Shared limit state is unavailable"
+            ) from exc
+        return {"lease_id": str(lease_id), "renewed": renewed}
+
+    @router.post("/limits/release", summary="Release one shared concurrency lease")
+    async def limit_release(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_token(authorization)
+        payload = await _read_json(request)
+        try:
+            lease_id = uuid.UUID(str(payload.get("lease_id")))
+        except ValueError as exc:
+            raise BadRequest("invalid_limit_lease", "lease_id must be a UUID") from exc
+        try:
+            released = await store.release(lease_id)
+        except LimitCoordinatorUnavailable as exc:
+            raise UpstreamUnavailable(
+                "limit_coordinator_unavailable", "Shared limit state is unavailable"
+            ) from exc
+        return {"lease_id": str(lease_id), "released": released}
+
+    @router.get("/limits/state", summary="Authoritative shared limit state")
+    async def shared_limit_state(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_token(authorization)
+        try:
+            return await store.snapshot()
+        except LimitCoordinatorUnavailable as exc:
+            raise UpstreamUnavailable(
+                "limit_coordinator_unavailable", "Shared limit state is unavailable"
+            ) from exc
 
     return router
 
@@ -1074,7 +1202,12 @@ def _probe_router(plane: DataPlane) -> APIRouter:
     async def readyz(response: Response) -> dict[str, str]:
         # Without verification keys every request would be rejected, so the pod
         # must not be sent traffic.
-        if plane.keys.snapshot()["keys_held"] == 0 or not plane.usage.healthy:
+        limits = await plane.limits.snapshot()
+        if (
+            plane.keys.snapshot()["keys_held"] == 0
+            or not plane.usage.healthy
+            or not limits["healthy"]
+        ):
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {"status": "unavailable"}
         return {"status": "ready"}
@@ -1094,6 +1227,21 @@ def create_inference_app(plane: DataPlane | None = None) -> FastAPI:
     app.add_exception_handler(ApiError, api_error_handler)
     app.include_router(build_inference_router(resolved))
     app.include_router(_probe_router(resolved))
+    return app
+
+
+def create_limit_coordinator_app(plane: DataPlane | None = None) -> FastAPI:
+    """Private stamp-local shared-limit authority."""
+    resolved = plane or build_plane()
+    if resolved.limit_store is None:
+        raise ValueError("limit coordinator store path is not configured")
+    token = resolved.settings.limit_coordinator_token
+    if not token:
+        raise ValueError("limit coordinator token is not configured")
+    app = FastAPI(title="Fabric Limit Coordinator", version="0.1.0")
+    app.state.plane = resolved
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(build_limit_coordinator_router(resolved.limit_store, token))
     return app
 
 

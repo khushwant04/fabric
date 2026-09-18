@@ -1,0 +1,22 @@
+{{- include "fabric-stamp.validate" . -}}
+{{- if .Values.dataPlane.limits.shared.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-limits
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+spec:
+  # Readiness itself checks coordinator health. Publishing this private endpoint before pod
+  # readiness avoids a circular dependency while all customer traffic remains gated.
+  publishNotReadyAddresses: true
+  type: ClusterIP
+  selector:
+    {{- include "fabric-stamp.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: stamp
+  ports:
+    - name: limits
+      port: 8083
+      targetPort: limits
+      protocol: TCP
+{{- end }}

@@ -159,6 +159,23 @@ spec:
               value: {{ .Values.dataPlane.limits.burst | quote }}
             - name: FABRIC_DP_MAX_IN_FLIGHT_PER_ACCOUNT
               value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | quote }}
+            {{- if .Values.dataPlane.limits.shared.enabled }}
+            - name: FABRIC_DP_LIMIT_COORDINATOR_URL
+              value: http://{{ include "fabric-stamp.fullname" . }}-limits:8083
+            - name: FABRIC_DP_LIMIT_COORDINATOR_STORE_PATH
+              value: /var/lib/fabric-usage/private/limits.db
+            - name: FABRIC_DP_LIMIT_COORDINATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fabric-stamp.limitSecretName" . }}
+                  key: {{ .Values.dataPlane.limits.shared.existingSecretKey }}
+            - name: FABRIC_DP_LIMIT_COORDINATOR_TIMEOUT_SECONDS
+              value: {{ .Values.dataPlane.limits.shared.timeoutSeconds | quote }}
+            - name: FABRIC_DP_LIMIT_LEASE_SECONDS
+              value: {{ .Values.dataPlane.limits.shared.leaseSeconds | quote }}
+            - name: FABRIC_DP_LIMIT_RENEW_SECONDS
+              value: {{ .Values.dataPlane.limits.shared.renewSeconds | quote }}
+            {{- end }}
             {{- if .Values.dataPlane.upstreamTls.clientSecret }}
             - name: FABRIC_DP_UPSTREAM_CLIENT_CERT
               value: /etc/fabric/upstream-tls/tls.crt
@@ -182,6 +199,12 @@ spec:
             - name: router-status
               containerPort: 8082
               protocol: TCP
+            {{- if .Values.dataPlane.limits.shared.enabled }}
+            # Private stamp-local authority; published only through the dedicated limits Service.
+            - name: limits
+              containerPort: 8083
+              protocol: TCP
+            {{- end }}
           # Probes target the inference port: the administrative listener binds to
           # localhost, so the kubelet cannot reach it from the pod's address, and
           # widening that bind would expose the usage drain to the cluster.
