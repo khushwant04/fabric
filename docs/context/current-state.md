@@ -363,10 +363,11 @@ Verified against the real control plane: a token issued by `POST /v1/token` with
 `audience=fabric-inference` is accepted with the matching account, and a
 control-audience token from the same issuer is rejected as `wrong_audience`.
 
-Not implemented: mTLS or network policy to the model host beyond the optional
-client-certificate path, and telemetry export. Usage is buffered locally in a
-bounded queue with no exporter. Backend health is tracked per data-plane process,
-the same fleet-level approximation the limits made before the shared-limit backend.
+Current boundaries: mTLS to the model host is optional rather than mandatory, and backend health
+remains per gateway process (a fleet-level balancing approximation). Completed usage is durably
+spooled and exported asynchronously. Account rate/concurrency admission is no longer approximate:
+production stamps use one private, persistent coordinator shared by all gateway execution contexts,
+with no central control-plane request dependency.
 
 ### Cluster agent
 

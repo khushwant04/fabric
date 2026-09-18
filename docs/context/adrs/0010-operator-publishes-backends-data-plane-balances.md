@@ -34,7 +34,7 @@ This feature establishes the pool primitive and per-backend health with a single
 ### Negative
 
 - The data plane must learn the endpoint set, which means the operator has to resolve pod endpoints and keep the published list current as pods come and go; a stale list points at a departed pod until the next reconcile.
-- Balancing state (health, in-flight counts) is per data-plane process, so with more than one data-plane replica each balances over its own view. That is acceptable for the same reason the limits were per-process before ADR 0009: it is a fleet-level approximation, corrected when it matters, not a correctness bug for a single-pod stamp.
+- Balancing health and backend in-flight state remain per gateway process, so several gateway replicas may spread load imperfectly. That is a fleet-level approximation rather than an admission-correctness boundary; account rate and concurrency caps are coordinated exactly once per stamp by ADR 0016.
 
 ## Alternatives considered
 

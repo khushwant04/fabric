@@ -25,6 +25,25 @@ spec:
               kubernetes.io/metadata.name: {{ . }}
         {{- end }}
       {{- end }}
+    {{- if .Values.dataPlane.limits.shared.enabled }}
+    # Atomic account admission is private to gateway replicas carrying this stamp's labels and
+    # coordinator token. It is never published by the inference Service or public ingress.
+    - ports:
+        - port: limits
+          protocol: TCP
+      from:
+        # Current coordinator-owning gateway pod.
+        - podSelector:
+            matchLabels:
+              {{- include "fabric-stamp.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: stamp
+        # Reserved caller identity for a future horizontally scaled gateway Deployment. It is a
+        # source only; the limits Service destination remains component=stamp.
+        - podSelector:
+            matchLabels:
+              {{- include "fabric-stamp.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: gateway
+    {{- end }}
     {{- if and .Values.operator.enabled .Values.operator.managedModelHost.image }}
     # Rollout acknowledgement exposes only loaded route revision and active backend
     # counts. It is reachable solely from the operator pod, never through public ingress.

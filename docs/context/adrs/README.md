@@ -20,6 +20,7 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0013](0013-placement-admits-only-what-a-stamp-can-hold.md) | Admit a placement only against measured stamp capacity; select a fitting stamp when none is named | Implemented |
 | [0014](0014-streamed-usage-is-requested-and-metered.md) | Request usage on streamed responses, consume the frame Fabric caused, and record one row from what was reported | Implemented |
 | [0015](0015-usage-is-spooled-until-central-acknowledgement.md) | Persist usage locally, lease it to the collector, and delete only after central resolution is acknowledged | Implemented |
+| [0016](0016-limits-are-coordinated-once-per-stamp.md) | Coordinate rate and concurrency admission once per stamp with renewable crash-recovery leases | Implemented shared primitive; horizontal gateway packaging remains separate |
 
 ## ADR status vocabulary
 

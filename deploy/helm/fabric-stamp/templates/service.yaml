@@ -17,5 +17,6 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: inference
       protocol: TCP
-  # The administrative port is deliberately absent: it drains usage and exposes
-  # internal state, and only the collector in the same pod may reach it.
+  # The administrative port is deliberately absent: it leases usage and exposes
+  # internal state, and only the collector in the same pod may reach it. The shared-limit
+  # authority has its own private Service and is likewise absent here.

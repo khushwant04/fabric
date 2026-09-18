@@ -187,9 +187,12 @@ which M1 and M2 make observable per backend for the first time.
 
 ### M6 — Operability debts that will bite a real tenant
 
-- **Rate and concurrency limits are per-process.** `limits.py` says so explicitly. The moment
-  the data plane runs more than one replica, a customer's limit is whatever the limit is times
-  the replica count.
+- ~~**Rate and concurrency limits are per-process.**~~ **Fixed**
+  (ADR [0016](context/adrs/0016-limits-are-coordinated-once-per-stamp.md)). Production stamps
+  route every gateway admission through one private, durable stamp-local coordinator. Atomic token
+  buckets and renewable concurrency leases now hold across gateway workers and pods without
+  putting the central control plane on the request path. Coordinator failure fails new work closed;
+  local process mode remains available only for development and known singleton deployments.
 - ~~**Streamed requests are metered at zero tokens.**~~ **Fixed**
   (ADR [0014](context/adrs/0014-streamed-usage-is-requested-and-metered.md)). The gateway now
   asks the host for `stream_options.include_usage`, reads the reported counts, and records one

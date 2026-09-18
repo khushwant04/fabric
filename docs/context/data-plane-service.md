@@ -32,10 +32,13 @@ is the limit that actually protects the GPU, since a model server's cost is set 
 many sequences it decodes at once. Both are per account, because the scarce resource is
 the device. A refused request answers 429 with `Retry-After` and never reaches the host.
 
-Both default to disabled and are declared in the chart: the data plane cannot know a
-host's capacity, and a guess would either waste the GPU or pretend to protect it. State
-is per process, so with replicas each pod holds a fraction of the limit; that is recorded
-rather than hidden, and the model host behind them remains the real bound.
+Both default to disabled and are declared in the chart: the data plane cannot know a host's
+capacity, and a guess would either waste the GPU or pretend to protect it. Production stamps enable
+a private stamp-local coordinator by default. Every gateway worker/pod uses its atomic token
+buckets and renewable concurrency leases, so adding replicas does not multiply the allowance. The
+coordinator has a retained local store and no central credential or request-path dependency on the
+control plane. Its outage fails new work closed. Unset coordinator configuration selects explicit
+`mode: process` for local development and a known singleton only.
 
 Connections to the model host can use mutual TLS. A client certificate proves which data
 plane is calling and a pinned authority proves which host answered; either alone leaves
@@ -66,7 +69,7 @@ manages it.
 | Customer-facing model alias in replies | Implemented |
 | Separate administrative listener | Implemented |
 | Durable bounded usage spool with lease/ack export | Implemented |
-| Telemetry export, rate limiting, optional mTLS to the host | Implemented |
+| Telemetry export, shared stamp-level rate/concurrency limits, optional mTLS to the host | Implemented |
 | Token-based quotas | Not implemented |
 
 ## Authorization model
@@ -99,6 +102,11 @@ Copy [`data-plane/.env.example`](../../data-plane/.env.example) to `.env`:
 | `FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS` | Model host timeout, bounding long generations |
 | `FABRIC_DP_USAGE_BUFFER_SIZE` | Maximum records retained in the bounded local spool |
 | `FABRIC_DP_USAGE_SPOOL_PATH` | SQLite spool file; unset uses memory for local development |
+| `FABRIC_DP_LIMIT_COORDINATOR_URL` | Private stamp-local shared admission service; unset uses process mode |
+| `FABRIC_DP_LIMIT_COORDINATOR_TOKEN` | Dedicated bearer token for coordinator calls |
+| `FABRIC_DP_LIMIT_COORDINATOR_STORE_PATH` | Coordinator-owned SQLite state; only the authority sets it |
+| `FABRIC_DP_LIMIT_LEASE_SECONDS` | Crash-recovery lifetime for concurrency leases |
+| `FABRIC_DP_LIMIT_RENEW_SECONDS` | Renewal interval, less than half the lease lifetime |
 
 Deployments are described by [`data-plane/deployments.example.json`](../../data-plane/deployments.example.json).
 A populated file names real accounts and model releases and is gitignored.

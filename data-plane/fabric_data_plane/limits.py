@@ -17,11 +17,10 @@ Two mechanisms, because they protect against different things:
 Both are per account rather than per deployment. The scarce resource is the device, and
 an account with several deployments on one stamp shares it either way.
 
-State is per process and deliberately not shared. A stamp runs one data plane per pod,
-so a cluster-wide limit would need coordination that buys little: the pods behind one
-Service each hold a fraction of the limit, and the model host behind them is the real
-bound. This is documented rather than hidden, since it means a limit is approximate when
-replicas are scaled.
+This module contains the in-process primitives. Production requests use the stamp-local shared
+manager from ``shared_limits.py`` (ADR 0016), so every gateway execution context spends from one
+account allowance. These primitives remain the explicit local-development/known-singleton backend
+and are also reused inside that manager to preserve the same token-bucket semantics.
 """
 
 from __future__ import annotations

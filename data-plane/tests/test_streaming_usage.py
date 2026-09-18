@@ -1465,8 +1465,10 @@ async def test_cleanup_cancellation_while_limiter_lock_is_contended_releases_onc
 
     from fabric_data_plane.app import _proxy
     from fabric_data_plane.limits import ConcurrencyLimiter
+    from fabric_data_plane.shared_limits import LocalLimitManager
 
     plane.concurrency = ConcurrencyLimiter(1)
+    plane.limits = LocalLimitManager(plane.rate_limiter, plane.concurrency)
     body = json.dumps({"model": "launch-model", "stream": True}).encode()
     scope = {
         "type": "http",

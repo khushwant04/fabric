@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import functools
 import pathlib
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Audience the data plane accepts. Control tokens must never authorize inference.
@@ -104,6 +105,28 @@ class Settings(BaseSettings):
     #: a model server's cost is set by how many sequences it decodes at once. Zero
     #: disables it.
     max_in_flight_per_account: int = Field(default=0, ge=0)
+
+    #: Private stamp-local coordinator used when limits must span gateway replicas. Unset keeps
+    #: the in-process backend for local development and the current singleton topology.
+    limit_coordinator_url: str | None = None
+    limit_coordinator_token: str | None = None
+    limit_coordinator_timeout_seconds: float = Field(default=2.0, gt=0)
+    #: Setting a store path makes this process the coordinator authority and enables the private
+    #: listener. Other gateway replicas set only URL/token and never mount the store.
+    limit_coordinator_store_path: str | None = None
+    limit_coordinator_host: str = "0.0.0.0"  # noqa: S104 - private service only
+    limit_coordinator_port: int = Field(default=8083, ge=1, le=65535)
+    limit_lease_seconds: float = Field(default=900.0, gt=0)
+    limit_renew_seconds: float = Field(default=30.0, gt=0)
+
+    @model_validator(mode="after")
+    def _shared_limit_configuration(self) -> Self:
+        if self.limit_renew_seconds >= self.limit_lease_seconds / 2:
+            raise ValueError("limit_renew_seconds must be less than half limit_lease_seconds")
+        shared_enabled = bool(self.limit_coordinator_url or self.limit_coordinator_store_path)
+        if shared_enabled and not self.limit_coordinator_token:
+            raise ValueError("limit_coordinator_token is required for shared limits")
+        return self
 
     #: Consecutive connection failures to one backend before it is ejected from the pool.
     #: A deployment may be served by several model-host replicas (ADR 0010); a backend
