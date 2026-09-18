@@ -47,7 +47,7 @@ and the claims those measurements do not support.
 |                     STAMP (Kubernetes)                       |
 |  AGENT ----> renders data-plane config, publishes CRD        |
 |  OPERATOR -> reconciles CRD into host + Service, rollout     |
-|  COLLECTOR-> drains usage, forwards write-only telemetry     |
+|  COLLECTOR-> leases durable usage, forwards write-only telemetry |
 +--------------------------------------------------------------+
 ```
 

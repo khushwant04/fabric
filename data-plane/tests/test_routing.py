@@ -184,6 +184,50 @@ async def test_usage_is_buffered_with_verified_ownership(
     assert record.streamed is False
 
 
+async def test_spool_failure_gates_future_inference_before_model_work(
+    client, admin_client, plane, signing_key: SigningKey, upstream: UpstreamStub
+) -> None:
+    plane.usage.close()  # deterministic stand-in for a runtime I/O failure
+
+    first = await client.post(
+        "/v1/chat/completions", json=chat(), headers=auth(signing_key.issue())
+    )
+    assert first.status_code == 503
+    assert first.json()["error"]["code"] == "usage_spool_unavailable"
+    assert len(upstream.requests) == 1  # the first write failure is discovered after completion
+    assert plane.usage.healthy is False
+    assert (await client.get("/readyz")).status_code == 503
+    assert (await admin_client.get("/readyz")).status_code == 503
+
+    second = await client.post(
+        "/v1/chat/completions", json=chat(), headers=auth(signing_key.issue())
+    )
+    assert second.status_code == 503
+    assert len(upstream.requests) == 1, "known spool failure repeated expensive model work"
+
+
+async def test_stream_spool_failure_still_releases_all_serving_leases(
+    client, plane, signing_key: SigningKey
+) -> None:
+    from fabric_data_plane.limits import ConcurrencyLimiter
+
+    plane.concurrency = ConcurrencyLimiter(1)
+    plane.usage.close()
+
+    with pytest.raises((BaseExceptionGroup, RuntimeError)):
+        await client.post(
+            "/v1/chat/completions",
+            json=chat(stream=True),
+            headers=auth(signing_key.issue()),
+        )
+
+    deployment = plane.registry.resolve("launch-model", account_id=ACCOUNT_A)
+    pool = plane.pool_for(deployment)
+    assert plane.concurrency.snapshot()["in_flight"] == 0
+    assert not plane._admitted_streams
+    assert sum(pool.health.in_flight().values()) == 0
+
+
 async def test_refused_requests_are_not_recorded_as_usage(
     client, signing_key: SigningKey, plane
 ) -> None:
@@ -216,9 +260,9 @@ async def test_usage_buffer_is_bounded_and_reports_drops(plane) -> None:
     assert state["buffered"] == 2
     assert state["recorded"] == 5
     assert state["dropped"] == 3
-    # The data plane is drained, never pushing, so a growing buffer means no
-    # collector is running rather than a broken exporter.
-    assert state["export_mode"] == "drain"
+    # Records leave only through a collector lease plus acknowledgement.
+    assert state["export_mode"] == "lease_ack"
+    assert state["durable"] is False
 
 
 async def test_admin_listener_carries_no_inference_routes(admin_app, inference_app) -> None:
@@ -261,10 +305,10 @@ async def test_both_openai_paths_are_served(
     assert upstream.requests[-1]["url"].endswith(path)
 
 
-async def test_draining_usage_returns_records_and_empties_the_buffer(
+async def test_usage_is_leased_until_the_collector_acknowledges_it(
     client, admin_client, signing_key: SigningKey
 ) -> None:
-    """A collector takes records once; a second drain must not replay them."""
+    """Reading is non-destructive; only acknowledgement removes a stable lease."""
     reply = await client.post(
         "/v1/chat/completions", json=chat(), headers=auth(signing_key.issue())
     )
@@ -274,15 +318,58 @@ async def test_draining_usage_returns_records_and_empties_the_buffer(
     assert first.status_code == 200, first.text
     body = first.json()
     assert body["count"] == 1
+    assert body["lease_id"]
     record = body["records"][0]
-    # Ownership on an exported record comes from the verified token and the local
-    # registry, so a collector never decides who is billed.
+    # Ownership on an exported record comes from the verified token and local registry.
     assert record["account_id"] == str(ACCOUNT_A)
     assert record["deployment_id"] == str(DEPLOYMENT_A)
     assert record["record_id"]
 
-    second = await admin_client.post("/admin/usage/drain")
-    assert second.json() == {"records": [], "count": 0}
+    replay = (await admin_client.post("/admin/usage/drain")).json()
+    assert replay == body
+
+    mismatch = await admin_client.post(
+        "/admin/usage/ack",
+        json={"lease_id": body["lease_id"], "expected_count": body["count"] + 1},
+    )
+    assert mismatch.status_code == 409
+    assert (await admin_client.post("/admin/usage/drain")).json() == body
+
+    acknowledged = await admin_client.post(
+        "/admin/usage/ack",
+        json={"lease_id": body["lease_id"], "expected_count": body["count"]},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["acknowledged"] == 1
+    assert acknowledged.json()["deleted"] == 1
+    assert acknowledged.json()["already_acknowledged"] is False
+    assert (await admin_client.post("/admin/usage/drain")).json() == {
+        "lease_id": None,
+        "records": [],
+        "count": 0,
+    }
+    # Lost ack responses are safe to retry.
+    repeated = await admin_client.post(
+        "/admin/usage/ack",
+        json={"lease_id": body["lease_id"], "expected_count": body["count"]},
+    )
+    repeated_body = repeated.json()
+    assert repeated_body["acknowledged"] == 1
+    assert repeated_body["deleted"] == 0
+    assert repeated_body["already_acknowledged"] is True
+
+
+async def test_usage_lease_inputs_are_bounded_and_validated(admin_client) -> None:
+    too_large = await admin_client.post("/admin/usage/drain?limit=501")
+    assert too_large.status_code == 400
+    assert too_large.json()["error"]["code"] == "invalid_usage_lease_limit"
+
+    missing = await admin_client.post("/admin/usage/ack", json={})
+    assert missing.status_code == 400
+    malformed = await admin_client.post(
+        "/admin/usage/ack", json={"lease_id": "not-a-uuid"}
+    )
+    assert malformed.status_code == 400
 
 
 async def test_each_call_is_independently_deduplicable(
@@ -295,11 +382,12 @@ async def test_each_call_is_independently_deduplicable(
     assert len({record["record_id"] for record in records}) == 2
 
 
-async def test_the_inference_listener_cannot_drain_usage(
-    client, signing_key: SigningKey
+@pytest.mark.parametrize("path", ["/admin/usage/drain", "/admin/usage/ack"])
+async def test_the_inference_listener_cannot_manage_usage(
+    client, signing_key: SigningKey, path: str
 ) -> None:
-    """Draining is administrative: a caller on the inference path cannot take usage."""
-    response = await client.post("/admin/usage/drain", headers=auth(signing_key.issue()))
+    """Lease/ack are administrative: inference callers cannot read or delete usage."""
+    response = await client.post(path, headers=auth(signing_key.issue()))
     assert response.status_code == 404
 
 

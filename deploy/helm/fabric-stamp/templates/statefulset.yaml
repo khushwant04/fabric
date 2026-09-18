@@ -128,9 +128,8 @@ spec:
         - name: data-plane
           image: "{{ .Values.image.dataPlane.repository }}:{{ .Values.image.dataPlane.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.dataPlane.pullPolicy }}
-          # Both listeners in one process: the usage buffer is in memory, so a
-          # separate administrative process would drain a buffer that never saw a
-          # request and report no usage at all.
+          # Both listeners share one DataPlane object and SQLite connection. The spool is durable,
+          # while one owner keeps request accounting and lease serialization simple.
           command: ["python", "-m", "fabric_data_plane.serve"]
           # FABRIC_DP_, not FABRIC_: the data plane and the control plane use
           # distinct prefixes so that running both on one host cannot cross
@@ -150,6 +149,8 @@ spec:
               value: /etc/fabric/config/deployments.json
             - name: FABRIC_DP_USAGE_BUFFER_SIZE
               value: {{ .Values.dataPlane.usageBufferSize | quote }}
+            - name: FABRIC_DP_USAGE_SPOOL_PATH
+              value: /var/lib/fabric-usage/private/usage.db
             - name: FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS
               value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
             - name: FABRIC_DP_RATE_LIMIT_REQUESTS_PER_MINUTE
@@ -211,6 +212,10 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            # Usage has a separate volume from agent credentials. The data plane can persist
+            # records, but still cannot read the agent or telemetry export credential.
+            - name: usage-spool
+              mountPath: /var/lib/fabric-usage
         {{- if .Values.collector.enabled }}
         # ------------------------------------------------------------------
         # Collector: drains the local administrative listener, forwards usage.
@@ -258,6 +263,13 @@ spec:
         {{- end }}
         - name: tmp
           emptyDir: {}
+        - name: usage-spool
+          {{- if .Values.usageSpool.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "fabric-stamp.usageSpoolClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
         {{- if .Values.operator.enabled }}
         # Projected from the ConfigMap the operator renders. A ConfigMap mount is a
         # file, so the data plane's configuration source is unchanged and it keeps

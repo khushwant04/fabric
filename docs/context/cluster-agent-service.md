@@ -1,6 +1,6 @@
 # Cluster Agent and Usage Collector
 
-**Status:** Implemented (initial version) — [`agent/`](../../agent/) ships two Go binaries: `fabric-agent` enrolls a stamp, pulls desired state, renders the data plane's local configuration, and reports status; `fabric-collector` drains the data plane's usage buffer and forwards it to the control plane.
+**Status:** Implemented — [`agent/`](../../agent/) ships two Go binaries: `fabric-agent` enrolls a stamp, pulls desired state, publishes local intent, and reports status; `fabric-collector` leases usage from the data plane's durable spool and forwards it to the control plane.
 **Design reference:** [ADR 0007](adrs/0007-cluster-agent-and-central-telemetry.md), [ADR 0008](adrs/0008-account-scoped-tenancy-and-stamp-credentials.md), [Operator and Deployment](operator-deployment.md).
 **Not included yet:** runtime and GPU metrics collection. With the operator enabled the agent declares `FabricModelDeployment` resources and forwards the operator's verdict; without it, status reports what the agent itself applied.
 
@@ -17,7 +17,7 @@
 | Withdraws deleted assignments | Implemented |
 | Status writes with observed generation | Implemented |
 | Stops on a permanent rejection, retries transient ones | Implemented |
-| Creating Kubernetes CRs, telemetry export, Helm bundle | Not implemented |
+| Creating Kubernetes CRs, telemetry export, Helm bundle | Implemented |
 
 ## Direction of travel
 

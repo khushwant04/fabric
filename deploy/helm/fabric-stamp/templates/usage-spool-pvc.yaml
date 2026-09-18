@@ -1,0 +1,21 @@
+{{- include "fabric-stamp.validate" . -}}
+{{- if and .Values.usageSpool.enabled (not .Values.usageSpool.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "fabric-stamp.usageSpoolClaimName" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+  annotations:
+    # Usage awaiting central acknowledgement must survive a Helm uninstall/reinstall. An
+    # operator deletes this claim explicitly only after confirming the spool is empty.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.usageSpool.accessMode }}]
+  {{- with .Values.usageSpool.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.usageSpool.size }}
+{{- end }}

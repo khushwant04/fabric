@@ -55,6 +55,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "fabric-stamp.usageSpoolClaimName" -}}
+{{- if .Values.usageSpool.existingClaim -}}
+{{- .Values.usageSpool.existingClaim -}}
+{{- else -}}
+{{- printf "%s-usage-spool" (include "fabric-stamp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Fail early on values that would otherwise produce a pod that cannot work. */}}
 {{- define "fabric-stamp.validate" -}}
 {{- if not .Values.controlPlane.url -}}
