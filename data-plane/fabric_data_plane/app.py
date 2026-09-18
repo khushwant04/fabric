@@ -46,7 +46,12 @@ from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.pool import Backend, BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.streaming import UsageMeter, streaming_upstream_payload
-from fabric_data_plane.usage import UsageBuffer, UsageRecord
+from fabric_data_plane.usage import (
+    UsageBuffer,
+    UsageLeaseMismatch,
+    UsageRecord,
+    UsageSpoolUnavailable,
+)
 
 logger = logging.getLogger("fabric.data_plane")
 
@@ -90,7 +95,10 @@ class DataPlane:
         self.keys = keys
         self.registry = registry
         self.client = client
-        self.usage = UsageBuffer(settings.usage_buffer_size)
+        self.usage = UsageBuffer(
+            settings.usage_buffer_size,
+            path=settings.usage_spool_path,
+        )
         self.metrics = Metrics()
         # One pool per deployment, memoised so per-backend health survives across the
         # requests that deployment serves rather than resetting each call. Keyed by
@@ -369,16 +377,23 @@ class DataPlane:
         self, principal: InferencePrincipal, deployment: Deployment, payload: Any, streamed: bool
     ) -> None:
         usage = payload.get("usage") if isinstance(payload, dict) else None
-        self.usage.record(
-            UsageRecord(
-                account_id=principal.account_id,
-                deployment_id=deployment.deployment_id,
-                input_tokens=int((usage or {}).get("prompt_tokens", 0) or 0),
-                output_tokens=int((usage or {}).get("completion_tokens", 0) or 0),
-                streamed=streamed,
-                occurred_at=dt.datetime.now(tz=dt.UTC),
+        try:
+            self.usage.record(
+                UsageRecord(
+                    account_id=principal.account_id,
+                    deployment_id=deployment.deployment_id,
+                    input_tokens=int((usage or {}).get("prompt_tokens", 0) or 0),
+                    output_tokens=int((usage or {}).get("completion_tokens", 0) or 0),
+                    streamed=streamed,
+                    occurred_at=dt.datetime.now(tz=dt.UTC),
+                )
             )
-        )
+        except UsageSpoolUnavailable as exc:
+            logger.exception("durable usage spool failed after inference completed")
+            raise UpstreamUnavailable(
+                "usage_spool_unavailable",
+                "This stamp could not durably record completed usage",
+            ) from exc
 
 
 async def _read_json(request: Request) -> dict[str, Any]:
@@ -493,6 +508,15 @@ async def _proxy(
     # this request names the removed deployment and resolution itself will fail.
     plane.reconcile_pools()
     deployment = plane.registry.resolve(model, account_id=principal.account_id)
+
+    # A failed durable spool is known before another expensive model invocation. The request that
+    # first discovers an I/O fault may already have completed upstream, but every later request
+    # fails here rather than repeatedly spending GPU work that cannot be accounted for.
+    if not plane.usage.healthy:
+        raise UpstreamUnavailable(
+            "usage_spool_unavailable",
+            "This stamp cannot durably record usage",
+        )
 
     # Checked after authorization so an unauthenticated or unauthorized caller cannot
     # consume another account's allowance, and before proxying so a refused request
@@ -664,6 +688,7 @@ async def _proxy(
 
     plane.retain_stream(deployment)
     cleanup_accounted = False
+    cleanup_error: UpstreamUnavailable | None = None
     placement_released = False
     concurrency_release: asyncio.Task[None] | None = None
     request_outcome = "cancelled_streamed"
@@ -680,17 +705,19 @@ async def _proxy(
         cleanup is cancelled while it waits on the limiter lock, the response wrapper can await
         the same task without duplicating usage, metrics, or decrementing the limiter twice.
         """
-        nonlocal cleanup_accounted, placement_released, concurrency_release
+        nonlocal cleanup_accounted, cleanup_error, placement_released, concurrency_release
         if not cleanup_accounted:
             # Only from a stream the host accepted, which is the rule the non-streaming path
             # applies with response.is_success. The meter itself withholds usage it cannot vouch
             # for, so this is the one condition left to check.
             usage = meter.usage if upstream_ok else None
             if usage is not None:
-                # Real numbers for a request the host accepted. Recorded even if the client later
-                # disconnected, as long as the count is a total and not a running subtotal: the
-                # work was done and measured.
-                plane.record_usage(principal, deployment, usage.as_payload(), streamed=True)
+                # Real numbers for a request the host accepted. A persistence fault is retained
+                # as the cleanup result, but cannot skip request/placement/concurrency release.
+                try:
+                    plane.record_usage(principal, deployment, usage.as_payload(), streamed=True)
+                except UpstreamUnavailable as exc:
+                    cleanup_error = exc
             # Every accepted stream reports here, lost count or not. A zero-token row is
             # indistinguishable from a real answer that cost nothing, so a loss is counted instead.
             plane.metrics.stream_finished(
@@ -719,6 +746,8 @@ async def _proxy(
                 plane.concurrency.release(principal.account_id)
             )
         await asyncio.shield(concurrency_release)
+        if cleanup_error is not None:
+            raise cleanup_error
 
     async def stream() -> AsyncIterator[bytes]:
         nonlocal request_outcome, upstream_ok
@@ -872,13 +901,15 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
         # say so: a probe reads the code, not the body, so returning 200 with
         # "unavailable" would send traffic to a data plane that rejects everything.
         keys = plane.keys.snapshot()
-        ready = keys["keys_held"] > 0
+        spool = plane.usage.snapshot()
+        ready = keys["keys_held"] > 0 and spool["healthy"]
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": "ready" if ready else "unavailable",
             "keys_held": keys["keys_held"],
             "deployments": len(plane.registry),
+            "usage_spool_healthy": spool["healthy"],
         }
 
     @router.get("/admin/keys", summary="Verification key cache state")
@@ -903,26 +934,70 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
             "concurrency": plane.concurrency.snapshot(),
         }
 
-    @router.get("/admin/usage", summary="Local usage buffer state")
+    @router.get("/admin/usage", summary="Local durable usage spool state")
     async def usage_state() -> dict[str, Any]:
         return plane.usage.snapshot()
 
-    @router.post("/admin/usage/drain", summary="Remove and return buffered usage")
-    async def drain_usage() -> dict[str, Any]:
-        """Hand buffered records to a collector.
+    @router.post("/admin/usage/drain", summary="Lease buffered usage for forwarding")
+    async def drain_usage(limit: int = 500) -> dict[str, Any]:
+        """Lease a stable batch without removing it from the durable spool.
 
-        Draining is destructive, so it is a POST on the administrative listener
-        rather than a GET on the inference listener: only the collector should be
-        able to take records, and taking them must not look like a cacheable read.
-
-        The data plane does not export usage itself. It never holds the telemetry
-        credential, which belongs to a collector-only Secret, so the credential
-        classes stay separate even though the usage data originates here.
+        The historical route name is retained for rolling compatibility, but this is no longer
+        destructive. A collector that restarts or loses a response receives the same lease and
+        safely replays the same record IDs. Records leave only through the acknowledgement route.
         """
-        records = plane.usage.drain()
+        if limit < 1 or limit > 500:
+            raise BadRequest("invalid_usage_lease_limit", "limit must be between 1 and 500")
+        try:
+            lease = plane.usage.lease(limit)
+        except UsageSpoolUnavailable as exc:
+            raise UpstreamUnavailable(
+                "usage_spool_unavailable", "The durable usage spool cannot be leased"
+            ) from exc
         return {
-            "records": [record.as_dict() for record in records],
-            "count": len(records),
+            "lease_id": str(lease.lease_id) if lease.lease_id else None,
+            "records": [record.as_dict() for record in lease.records],
+            "count": len(lease.records),
+        }
+
+    @router.post("/admin/usage/ack", summary="Acknowledge a resolved usage lease")
+    async def acknowledge_usage(request: Request) -> dict[str, Any]:
+        """Delete a lease only after the control plane resolved every record in it."""
+        payload = await _read_json(request)
+        raw_lease_id = payload.get("lease_id")
+        expected_count = payload.get("expected_count")
+        try:
+            lease_id = uuid.UUID(raw_lease_id) if isinstance(raw_lease_id, str) else None
+        except ValueError as exc:
+            raise BadRequest("invalid_usage_lease", "lease_id must be a UUID") from exc
+        if lease_id is None:
+            raise BadRequest("invalid_usage_lease", "lease_id must be a UUID")
+        if (
+            isinstance(expected_count, bool)
+            or not isinstance(expected_count, int)
+            or expected_count < 1
+            or expected_count > 500
+        ):
+            raise BadRequest(
+                "invalid_usage_lease_count", "expected_count must be between 1 and 500"
+            )
+        try:
+            result = plane.usage.acknowledge(lease_id, expected_count)
+        except UsageLeaseMismatch as exc:
+            raise ApiError(
+                409,
+                "usage_lease_mismatch",
+                "The acknowledgement does not match the outstanding usage lease",
+            ) from exc
+        except UsageSpoolUnavailable as exc:
+            raise UpstreamUnavailable(
+                "usage_spool_unavailable", "The durable usage lease cannot be acknowledged"
+            ) from exc
+        return {
+            "lease_id": str(lease_id),
+            "acknowledged": result.acknowledged,
+            "deleted": result.deleted,
+            "already_acknowledged": result.already_acknowledged,
         }
 
     return router
@@ -981,8 +1056,8 @@ def _probe_router(plane: DataPlane) -> APIRouter:
 
     These exist here as well as on the administrative listener because the
     administrative listener binds to localhost only, so a Kubernetes kubelet
-    probing the pod's address cannot reach it. Binding that listener wider to make
-    probes work would expose a destructive usage drain to the whole cluster, so the
+    probing the pod's address cannot reach it. Binding that listener wider would expose
+    usage leasing, acknowledgement, and internal state to the whole cluster, so the
     probes come to the public listener instead.
 
     They are unauthenticated, which is what a probe requires, and therefore report
@@ -999,7 +1074,7 @@ def _probe_router(plane: DataPlane) -> APIRouter:
     async def readyz(response: Response) -> dict[str, str]:
         # Without verification keys every request would be rejected, so the pod
         # must not be sent traffic.
-        if plane.keys.snapshot()["keys_held"] == 0:
+        if plane.keys.snapshot()["keys_held"] == 0 or not plane.usage.healthy:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {"status": "unavailable"}
         return {"status": "ready"}

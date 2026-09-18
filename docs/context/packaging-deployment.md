@@ -278,7 +278,7 @@ reports enrolment; the agent will not ask for it again.
 
 Only the inference port is published. The Service does not expose the
 administrative port, and the default NetworkPolicy admits ingress to the inference
-port alone, so nothing in the cluster can drain usage or read internal state.
+port alone, so nothing outside the pod can lease, acknowledge, or inspect usage state.
 
 The ServiceAccount is created with no Role or RoleBinding and with token mounting
 disabled: the agent creates no Kubernetes resources, so it needs no API access at

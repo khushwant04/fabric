@@ -278,20 +278,20 @@ or TLS, and any model host.
 
 ### Usage collector
 
-`agent/cmd/fabric-collector` drains the data plane's administrative listener and
-forwards records to the control plane. It is a separate process from the agent so the
-two credentials live in separate Secrets: the agent writes the write-only telemetry
-credential to its own 0600 file, and the collector reads only that. A test asserts the
-agent credential never lands there, and the end-to-end run confirms the telemetry
-credential cannot read desired state.
+`agent/cmd/fabric-collector` leases records from the data plane's localhost administrative
+listener and forwards them to the control plane. It is a separate process from the agent so the
+two credentials live in separate Secrets: the agent writes the write-only telemetry credential
+to its own 0600 file, and the collector reads only that. A test asserts the agent credential never
+lands there, and the end-to-end run confirms the telemetry credential cannot read desired state.
 
-Draining is destructive, so a failed forward would lose records. Drained records stay
-in a bounded pending queue and are retried on the next pass; when the queue overflows
-the oldest are dropped and counted, because an outage must not grow memory without
-limit. A permanent rejection stops the collector rather than retrying a backlog that
-can never be accepted. Per-record rejections are permanent by nature — an unplaced
-deployment or an out-of-window timestamp — so they are logged and discarded rather
-than resent forever. 10 Go tests cover this.
+Completed usage is already durable in the data plane's bounded SQLite spool on a dedicated PVC.
+A lease is non-destructive and survives both process restarts. The collector acknowledges it only
+after central ingestion resolves every record as accepted, duplicate, or permanently rejected.
+Transient failures and lost acknowledgements replay the same stable record IDs; central
+namespaced deduplication prevents double counting. The spool drops oldest unleased records on
+overflow and reports the loss, but never evicts a lease that may already be processing centrally.
+A permanent credential rejection stops the collector without acknowledging, so rotation or repair
+can resume the same backlog.
 
 GPU and runtime metrics are collected alongside usage. The collector samples devices with
 `nvidia-smi` and scrapes an allowlist of the model host's own series, on a separate

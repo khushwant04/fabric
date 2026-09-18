@@ -50,7 +50,7 @@ func main() {
 		metricsInterval = flag.Duration("metrics-interval", 30*time.Second,
 			"how often to sample GPU and runtime metrics")
 		capacity = flag.Int("queue-capacity", 10000,
-			"Maximum records held while the control plane is unreachable")
+			"Maximum records from new leases per pass; an existing stable lease is always resolved whole")
 		timeout        = flag.Duration("timeout", 30*time.Second, "Per-request timeout")
 		credentialWait = flag.Duration("credential-wait", 5*time.Minute,
 			"How long to wait for the credential file to appear before giving up")
@@ -100,9 +100,9 @@ func main() {
 			logger.Fatalf("collect: %v", err)
 		}
 		logger.Printf(
-			"drained=%d accepted=%d duplicates=%d rejected=%d pending=%d dropped=%d",
+			"leased=%d accepted=%d duplicates=%d rejected=%d acknowledged=%d pending=%d",
 			stats.Drained, stats.Accepted, stats.Duplicates,
-			stats.Rejected, stats.Pending, stats.Dropped,
+			stats.Rejected, stats.Acknowledged, stats.Pending,
 		)
 		return
 	}

@@ -197,6 +197,7 @@ dataPlane:
 
   replicas: 1
   logLevel: INFO
+  # Records retained in the durable spool before collector acknowledgement.
   usageBufferSize: 10000
   upstreamTimeoutSeconds: 300
   resources:
@@ -232,6 +233,17 @@ service:
   type: ClusterIP
   port: 80
   annotations: {}
+
+# Usage has its own claim, separate from agent credentials and collector credentials. The data
+# plane writes records but holds no export credential; the collector leases/acknowledges them only
+# through localhost. The retained claim survives uninstall so unacknowledged usage is not erased
+# by a chart operation. Set enabled=false only for disposable development stamps.
+usageSpool:
+  enabled: true
+  existingClaim: ""
+  size: 256Mi
+  storageClass: ""
+  accessMode: ReadWriteOnce
 
 # The agent's credentials must survive a restart: enrollment tokens are single use,
 # so a stamp that loses them needs operator intervention to rejoin.

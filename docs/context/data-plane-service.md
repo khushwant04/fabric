@@ -10,20 +10,19 @@ modification time or size changes. A read that fails keeps the last good set rat
 than emptying it, and a missing file is treated as a fault rather than as "nothing is
 placed here", which the agent expresses by writing an empty list.
 
-Both listeners run in one process (`fabric_data_plane.serve`). The usage buffer is in
-memory, so an administrative listener in another process would drain a buffer that
-never saw a request and report no usage at all. Health probes exist on both
-listeners: the administrative one binds to localhost, so a Kubernetes kubelet
-probing the pod address can only reach the public one. Readiness requires verification
-keys and answers 503 without them, because a probe reads the status code and a data
-plane with no keys rejects every request. Keys are fetched at startup and retried, so
-readiness does not wait for traffic that will not arrive.
+Both listeners run in one process (`fabric_data_plane.serve`) and share one DataPlane object and
+SQLite connection. Completed usage is committed to a bounded local spool before request cleanup
+returns. Health probes exist on both listeners: the administrative one binds to localhost, so a
+Kubernetes kubelet probing the pod address can only reach the public one. Readiness requires
+verification keys and answers 503 without them, because a probe reads the status code and a data
+plane with no keys rejects every request. Keys are fetched at startup and retried, so readiness
+does not wait for traffic that will not arrive.
 
-Usage is buffered locally and taken by a collector through
-`POST /admin/usage/drain` on the administrative listener. The data plane never pushes
-usage and never holds the telemetry credential, which keeps the inference path free of
-any export credential. Each record is given a stable identifier at record time so a
-retried forward is deduplicated centrally.
+Usage is leased non-destructively through `POST /admin/usage/drain` on the administrative listener
+(the route name is retained for compatibility) and removed only by `POST /admin/usage/ack` after
+central resolution. A data-plane or collector restart receives the same lease and record IDs, so a
+replayed forward is deduplicated centrally. The data plane never pushes usage and never holds the
+telemetry credential, which keeps the inference path free of any export credential.
 
 Per-account limits are enforced before a request reaches the model host. A rate limit
 bounds how often an account may ask, using a token bucket so a burst allowance is
@@ -66,8 +65,9 @@ manages it.
 | OpenAI-compatible chat and text completions, streaming | Implemented |
 | Customer-facing model alias in replies | Implemented |
 | Separate administrative listener | Implemented |
-| Local bounded usage buffer | Implemented |
-| Telemetry export, quotas, rate limiting, mTLS to the host | Not implemented |
+| Durable bounded usage spool with lease/ack export | Implemented |
+| Telemetry export, rate limiting, optional mTLS to the host | Implemented |
+| Token-based quotas | Not implemented |
 
 ## Authorization model
 
@@ -97,7 +97,8 @@ Copy [`data-plane/.env.example`](../../data-plane/.env.example) to `.env`:
 | `FABRIC_DP_DEPLOYMENTS_FILE` | Local deployment configuration |
 | `FABRIC_DP_LEEWAY_SECONDS` | Clock skew allowance on time claims |
 | `FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS` | Model host timeout, bounding long generations |
-| `FABRIC_DP_USAGE_BUFFER_SIZE` | Bounded local usage buffer |
+| `FABRIC_DP_USAGE_BUFFER_SIZE` | Maximum records retained in the bounded local spool |
+| `FABRIC_DP_USAGE_SPOOL_PATH` | SQLite spool file; unset uses memory for local development |
 
 Deployments are described by [`data-plane/deployments.example.json`](../../data-plane/deployments.example.json).
 A populated file names real accounts and model releases and is gitignored.

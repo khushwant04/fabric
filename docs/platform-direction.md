@@ -207,7 +207,12 @@ which M1 and M2 make observable per backend for the first time.
   cost nothing. A caller can deliberately create `incomplete_stream` loss by disconnecting
   before the terminal report; the upstream is cancelled too, and existing per-account limits
   plus alerting bound that accepted residual gap until partial usage can be represented.
-- **Usage buffer is in-memory.** A pod restart between request and drain loses those records.
+- ~~**Usage buffer is in-memory.**~~ **Fixed**
+  (ADR [0015](context/adrs/0015-usage-is-spooled-until-central-acknowledgement.md)). Completed
+  usage is committed to a bounded SQLite spool on its own retained PVC. The collector leases a
+  stable batch and acknowledges it only after central ingestion resolves every record; crashes and
+  lost acknowledgements replay the same record IDs and are deduplicated centrally. Overflow still
+  drops oldest unleased records and reports the loss rather than growing without bound.
 - **No agent or telemetry credential rotation.** The `credential_version` column exists; no
   handler does.
 

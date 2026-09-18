@@ -141,7 +141,7 @@ have made impossible to state.
 |                     STAMP (Kubernetes)                       |
 |  AGENT ----> renders data-plane config, publishes CRD        |
 |  OPERATOR -> reconciles CRD into host + Service, rollout     |
-|  COLLECTOR-> drains usage, forwards under a write-only cred  |
+|  COLLECTOR-> leases durable usage, forwards write-only       |
 +--------------------------------------------------------------+
 ```
 

@@ -83,8 +83,8 @@ forget the stamp's rollout budget.
   that the data plane loaded it or that streams finished.
 - **Use a fixed drain sleep:** rejected because stream duration is not bounded by a fixed grace
   period.
-- **Expose the existing admin listener:** rejected because it can destructively drain usage and is
-  intentionally localhost-only.
+- **Expose the existing admin listener:** rejected because it leases and acknowledges usage and
+  exposes internal state; it is intentionally localhost-only.
 - **Fall back to Recreate without spare capacity:** rejected because it contradicts the milestone's
   availability guarantee; preserving the old release and reporting insufficient capacity is honest.
 

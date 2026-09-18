@@ -21,9 +21,13 @@ The enrollment token is single use. Once the agent reports enrolment, delete it:
 WARNING: persistence is disabled. A restart loses the stamp's credentials, and the
 enrollment token cannot be reused, so the stamp will need a new token to rejoin.
 {{- end }}
+{{- if not .Values.usageSpool.enabled }}
+WARNING: usageSpool.enabled is false. Unacknowledged usage survives a container restart only
+while this pod exists; pod deletion or rescheduling loses the local spool.
+{{- end }}
 {{- if not .Values.collector.enabled }}
-NOTE: the collector is disabled, so usage accumulates in the data plane's buffer and
-is dropped when the buffer fills. Nothing will be reported centrally.
+NOTE: the collector is disabled, so usage accumulates in the bounded data-plane spool and
+oldest unleased records are dropped when it fills. Nothing will be reported centrally.
 {{- end }}
 
 No Kubernetes resources are created for placed deployments: there is no operator

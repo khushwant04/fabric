@@ -71,9 +71,12 @@ class Settings(BaseSettings):
     #: Upstream request timeout for the model host.
     upstream_timeout_seconds: float = 300.0
 
-    #: Bounded local usage buffer. Telemetry export does not exist yet, so the
-    #: buffer drops oldest records rather than growing without limit.
+    #: Maximum records retained in the local usage spool. On overflow, the oldest
+    #: unleased records are dropped; an outstanding collector lease is never deleted.
     usage_buffer_size: int = Field(default=10_000, ge=1)
+    #: SQLite spool location. Unset uses an in-memory database for local development;
+    #: production mounts a dedicated retained volume and sets this path explicitly.
+    usage_spool_path: str | None = None
 
     #: Requests per minute per account. Zero disables the limit, which is the default:
     #: the data plane cannot know a model host's capacity, so the operator declares it
