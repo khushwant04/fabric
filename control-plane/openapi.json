@@ -303,6 +303,7 @@
         "type": "object"
       },
       "DeploymentSpec": {
+        "additionalProperties": false,
         "properties": {
           "limits_policy_ref": {
             "anyOf": [
@@ -547,6 +548,16 @@
             "format": "uuid",
             "title": "Stamp Id",
             "type": "string"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerificationConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1207,6 +1218,7 @@
         "type": "object"
       },
       "ResourceSpec": {
+        "additionalProperties": false,
         "properties": {
           "gpu_class": {
             "default": "t4",
@@ -1265,7 +1277,36 @@
         "type": "object"
       },
       "RuntimeSpec": {
+        "additionalProperties": false,
         "properties": {
+          "execution": {
+            "anyOf": [
+              {
+                "enum": [
+                  "eager",
+                  "cuda_graph"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution"
+          },
+          "gpu_memory_utilization": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1.0,
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Utilization"
+          },
           "kernel_mode": {
             "default": "auto",
             "enum": [
@@ -1275,6 +1316,32 @@
             ],
             "title": "Kernel Mode",
             "type": "string"
+          },
+          "max_model_len": {
+            "anyOf": [
+              {
+                "maximum": 1048576.0,
+                "minimum": 64.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Model Len"
+          },
+          "max_num_seqs": {
+            "anyOf": [
+              {
+                "maximum": 1024.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Num Seqs"
           },
           "release": {
             "maxLength": 200,
@@ -2196,6 +2263,25 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerificationConfig": {
+        "description": "How a stamp must verify the tokens this control plane mints.\n\nReported from the control plane's own signing configuration rather than\nconfigured per stamp, so it cannot drift from the identity that actually signs:\nthe issuer here is the one written into every token, and the JWKS URL is where\nthe matching public keys are published.\n\nStamps were previously told this by a Helm value per cluster, which meant a fleet\ncould hold several different answers and a cluster set to the wrong issuer rejected\nevery request with the same code a forged token gets.",
+        "properties": {
+          "jwks_url": {
+            "title": "Jwks Url",
+            "type": "string"
+          },
+          "jwt_issuer": {
+            "title": "Jwt Issuer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jwt_issuer",
+          "jwks_url"
+        ],
+        "title": "VerificationConfig",
         "type": "object"
       }
     }

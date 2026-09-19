@@ -14,12 +14,15 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import jwt
 
 from fabric_data_plane.config import Settings
+
+if TYPE_CHECKING:
+    from fabric_data_plane.verification import VerificationPolicy
 
 
 class SigningKeyUnavailableError(RuntimeError):
@@ -29,8 +32,18 @@ class SigningKeyUnavailableError(RuntimeError):
 class KeyCache:
     """Holds Fabric's public keys and refreshes them lazily."""
 
-    def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        *,
+        policy: VerificationPolicy | None = None,
+    ) -> None:
         self._settings = settings
+        # The policy decides which key source is in force, because the control plane can
+        # report one that differs from this stamp's install. Absent, the configured URL is
+        # the only answer, which is what every existing caller expects.
+        self._policy = policy
         self._client = client
         self._lock = threading.Lock()
         self._keys: dict[str, Any] = {}
@@ -46,6 +59,40 @@ class KeyCache:
     # -- state -------------------------------------------------------------
 
     @property
+    def policy(self) -> VerificationPolicy | None:
+        """The policy deciding the key source, so callers can share one instance."""
+        return self._policy
+
+    @property
+    def source(self) -> str:
+        """The URL keys are fetched from right now.
+
+        Read per fetch rather than captured at construction: the control plane can report
+        a key source that differs from this stamp's install, and the point of adopting it
+        is that the next refresh goes to the new place.
+        """
+        if self._policy is not None:
+            url = self._policy.jwks_url
+            if url:
+                return url
+        return self._settings.jwks_url
+
+    def refresh_source(self, source: str) -> bool:
+        """Fetch and install keys from an explicit candidate source.
+
+        Used before a verification policy transition is published. A failed fetch leaves
+        both the active policy and its current keys untouched, so an unavailable new
+        control plane cannot create a mixed new-issuer/old-key generation.
+        """
+        return self._fetch(source)
+
+    def invalidate_source(self) -> bool:
+        """Mark active keys stale and refresh them from the active policy source."""
+        with self._lock:
+            self._fetched_at = None
+        return self._fetch()
+
+    @property
     def key_ids(self) -> list[str]:
         with self._lock:
             return sorted(self._keys)
@@ -57,6 +104,8 @@ class KeyCache:
             return {
                 "key_ids": sorted(self._keys),
                 "keys_held": len(self._keys),
+                # Which URL these came from, which is not necessarily the configured one.
+                "source": self.source,
                 "age_seconds": age,
                 "refreshes": self._refreshes,
                 "fetch_failures": self._fetch_failures,
@@ -84,14 +133,14 @@ class KeyCache:
                 self._keys = parsed
                 self._fetched_at = time.monotonic()
 
-    def _fetch(self) -> bool:
+    def _fetch(self, source: str | None = None) -> bool:
         """Try to refresh. Returns whether new keys were installed."""
         client = self._client
         owned = client is None
         if owned:
             client = httpx.Client(timeout=self._settings.jwks_timeout_seconds)
         try:
-            response = client.get(self._settings.jwks_url)
+            response = client.get(source or self.source)
             response.raise_for_status()
             document = response.json()
         except Exception as exc:  # noqa: BLE001 - an outage must not drop cached keys

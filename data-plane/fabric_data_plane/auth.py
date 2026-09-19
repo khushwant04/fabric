@@ -48,8 +48,21 @@ def extract_bearer_token(authorization: str | None) -> str:
     return value.strip()
 
 
-def verify_inference_token(token: str, *, settings: Settings, keys: KeyCache) -> InferencePrincipal:
-    """Validate a Fabric inference JWT locally and return its principal."""
+def verify_inference_token(
+    token: str,
+    *,
+    settings: Settings,
+    keys: KeyCache,
+    issuer: str | None = None,
+) -> InferencePrincipal:
+    """Validate a Fabric inference JWT locally and return its principal.
+
+    ``issuer`` overrides the configured one when the control plane has reported its own
+    signing identity. It is passed in rather than read from ``settings`` because the
+    authoritative value can change while this process runs, and a token must be checked
+    against what is in force on the request, not what the install supplied at boot.
+    """
+    expected_issuer = issuer or settings.jwt_issuer
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError as exc:
@@ -69,7 +82,7 @@ def verify_inference_token(token: str, *, settings: Settings, keys: KeyCache) ->
             key,
             algorithms=list(ALGORITHMS),
             audience=INFERENCE_AUDIENCE,
-            issuer=settings.jwt_issuer,
+            issuer=expected_issuer,
             leeway=settings.leeway_seconds,
             options={"require": ["exp", "iat", "nbf", "sub", "aud", "iss"]},
         )

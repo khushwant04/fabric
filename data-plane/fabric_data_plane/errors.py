@@ -56,6 +56,11 @@ class NotFound(ApiError):
         super().__init__(404, code, message, details or None)
 
 
+class PayloadTooLarge(ApiError):
+    def __init__(self, code: str, message: str, **details: Any) -> None:
+        super().__init__(413, code, message, details or None)
+
+
 class TooManyRequests(ApiError):
     """The caller exceeded its share of this stamp.
 

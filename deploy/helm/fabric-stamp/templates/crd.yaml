@@ -121,6 +121,56 @@ spec:
                     means the count the operator was configured with.
                   minimum: 1
                   maximum: 8
+                maxModelLen:
+                  type: integer
+                  description: |
+                    Context bound to serve this model with. A property of the model rather
+                    than the stamp: one stamp-wide value has to suit the largest model
+                    present, which caps the others and can make a short-context model
+                    unservable. Absent means the operator's configured value.
+                  minimum: 64
+                  maximum: 1048576
+                maxNumSeqs:
+                  type: integer
+                  description: |
+                    How many sequences the server decodes concurrently. Absent means the
+                    operator's configured value.
+                  minimum: 1
+                  maximum: 1024
+                gpuMemoryUtilization:
+                  type: string
+                  description: |
+                    Fraction of total device memory the server may use, as a decimal
+                    string so it reaches the server exactly as declared. The operator
+                    lowers it when it would leave a small device without enough absolute
+                    headroom. Absent means the operator's configured value.
+                  pattern: '^0\.[0-9]+$'
+                execution:
+                  type: string
+                  description: |
+                    "eager" skips CUDA graph capture, returning that memory to the KV
+                    cache at some per-token latency; "cuda_graph" captures them. A mode
+                    rather than a boolean so that absent, meaning the operator's
+                    configured behaviour, stays distinct from explicitly not capturing.
+                  enum: [eager, cuda_graph]
+                jwtIssuer:
+                  type: string
+                  description: |
+                    Issuer the data plane must require on every inference token, as the
+                    control plane reports its own signing identity. Stamp-wide rather than
+                    per-deployment; it appears on each resource because the operator reads
+                    stamp state from nowhere else, and is written once at the top of the
+                    rendered configuration. Absent leaves the data plane on its locally
+                    configured value.
+                  maxLength: 400
+                jwksUrl:
+                  type: string
+                  description: |
+                    Where the data plane fetches the control plane's public signing keys.
+                    Carried and applied together with jwtIssuer: an issuer with no key
+                    source cannot verify anything, so a partial value is ignored rather
+                    than half-applied.
+                  maxLength: 400
                 generation:
                   type: integer
                   description: Control-plane generation this declaration came from.

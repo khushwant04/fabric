@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from fabric_data_plane.auth import (
     STRIPPED_REQUEST_HEADERS,
@@ -14,7 +16,14 @@ from fabric_data_plane.auth import (
 from fabric_data_plane.config import Settings
 from fabric_data_plane.errors import Forbidden, Unauthorized
 from fabric_data_plane.keys import KeyCache
-from tests.conftest import ACCOUNT_A, ControlPlaneStub, SigningKey, make_settings
+from tests.conftest import (
+    ACCOUNT_A,
+    ISSUER,
+    JWKS_URL,
+    ControlPlaneStub,
+    SigningKey,
+    make_settings,
+)
 
 
 def verify(token: str, plane) -> object:
@@ -185,3 +194,46 @@ def test_client_ownership_headers_are_not_forwarded() -> None:
     assert forwarded["Content-Type"] == "application/json"
     assert forwarded["Accept"] == "application/json"
     assert "Host" not in forwarded
+
+
+
+def test_blank_verification_settings_are_refused_at_startup() -> None:
+    """An empty issuer is not a skipped check, it is a check nothing can pass.
+
+    ``jwt.decode`` enforces whatever issuer it is given, so a blank one rejects every
+    token with the same generic code a forged token gets. A gateway that passes readiness
+    and then refuses all traffic is materially harder to diagnose than one that refuses to
+    start, which is why this is a configuration error rather than a runtime behaviour.
+    """
+    for field in ("jwt_issuer", "jwks_url"):
+        for blank in ("", "   "):
+            with pytest.raises(ValidationError):
+                make_settings(**{field: blank})
+
+
+async def test_the_enforced_verification_contract_is_readable(admin_client) -> None:
+    """A stamp can be asked what it actually enforces, rather than what a chart intended.
+
+    A gateway configured with the wrong issuer rejects everything with ``invalid_token``,
+    which looks identical to a bad caller. Reading the contract is how the two are told
+    apart without shell access to the pod.
+    """
+    response = await admin_client.get("/admin/verification")
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+    assert body["issuer"] == ISSUER
+    assert body["jwks_url"] == JWKS_URL
+    # Constants in code rather than settings, reported so they need not be looked up.
+    assert body["audience"] == "fabric-inference"
+    assert body["required_scope"] == "inference:invoke"
+    # Whether a cold start during a control-plane outage could verify at all.
+    assert body["jwks_file_seeded"] is False
+
+
+async def test_the_verification_contract_never_exposes_key_material(admin_client) -> None:
+    """It describes what is enforced, not what is held: no secrets, no key bytes."""
+    body = (await admin_client.get("/admin/verification")).json()
+    serialised = json.dumps(body).lower()
+    for forbidden in ("private", "-----begin", "secret", '"d"', '"p"', '"q"'):
+        assert forbidden not in serialised, f"{forbidden} leaked into the contract"

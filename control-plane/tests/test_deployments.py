@@ -258,3 +258,94 @@ async def test_a_newly_placed_deployment_reaches_a_stamp_that_acknowledged_more(
         f"new placement at {second_generation} sits at or below {first_generation}, "
         "so a stamp acknowledging the first would never receive the second"
     )
+
+
+
+async def test_runtime_settings_are_stored_and_reach_desired_state(
+    client: AsyncClient,
+) -> None:
+    """Serving settings belong to the model, not to the stamp.
+
+    Before these existed every deployment on a stamp shared one Helm-configured context
+    length, so one number had to suit the largest model present: the smaller ones were
+    capped below what they could do, and a model whose decoder is shorter than that value
+    could not be served at all.
+    """
+    account_id, token = await onboard(client, "runtime-user", "runtime-account")
+    created = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "short-context",
+            "model_alias": "transcriber",
+            "spec": {
+                "runtime": {
+                    "release": "runtime-release-1",
+                    "max_model_len": 448,
+                    "max_num_seqs": 16,
+                    "gpu_memory_utilization": 0.85,
+                    "execution": "cuda_graph",
+                }
+            },
+        },
+        headers=bearer(token),
+    )
+    assert created.status_code == 201, created.text
+    runtime = created.json()["desired_spec"]["runtime"]
+    assert runtime["max_model_len"] == 448
+    assert runtime["max_num_seqs"] == 16
+    assert runtime["gpu_memory_utilization"] == 0.85
+    assert runtime["execution"] == "cuda_graph"
+
+    # The agent reads these out of desired state, so they have to survive the trip.
+    deployment_id = created.json()["id"]
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id = enrolled["stamp"]["id"]
+    placed = await client.post(
+        f"/v1/accounts/{account_id}/deployments/{deployment_id}/placements",
+        json={"stamp_id": stamp_id},
+        headers=bearer(token),
+    )
+    assert placed.status_code == 201, placed.text
+
+    desired = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state",
+        headers=bearer(enrolled["agent_credential"]),
+    )
+    assert desired.status_code == 200, desired.text
+    assignment = desired.json()["deployments"][0]
+    assert assignment["spec"]["runtime"]["max_model_len"] == 448
+    assert assignment["spec"]["runtime"]["execution"] == "cuda_graph"
+
+
+async def test_runtime_settings_are_optional(client: AsyncClient) -> None:
+    """A deployment created before these fields existed must be unchanged."""
+    account_id, token = await onboard(client, "plain-user", "plain-account")
+    created = await create_deployment(client, account_id, token)
+    runtime = created["desired_spec"]["runtime"]
+    for field in ("max_model_len", "max_num_seqs", "gpu_memory_utilization", "execution"):
+        assert runtime[field] is None, f"{field} should default to unset"
+
+
+async def test_unusable_runtime_settings_are_refused(client: AsyncClient) -> None:
+    """Rejected centrally, because the agent deliberately does not re-reject values.
+
+    A fraction of one or more asks for memory the runtime itself needs, and a dtype is not
+    accepted here at all: it is a property of the device rather than of the model, and the
+    operator derives it from the profiled hardware so that a host cannot be asked for a
+    precision the GPU does not implement.
+    """
+    account_id, token = await onboard(client, "bad-runtime", "bad-runtime-account")
+    for runtime in (
+        {"release": "r1", "gpu_memory_utilization": 1.0},
+        {"release": "r1", "gpu_memory_utilization": 0.0},
+        {"release": "r1", "max_model_len": 0},
+        {"release": "r1", "max_num_seqs": 0},
+        {"release": "r1", "execution": "graphs-please"},
+        {"release": "r1", "dtype": "bfloat16"},
+    ):
+        response = await client.post(
+            f"/v1/accounts/{account_id}/deployments",
+            json={"name": "rejected", "model_alias": "m", "spec": {"runtime": runtime}},
+            headers=bearer(token),
+        )
+        assert response.status_code == 422, (runtime, response.text)

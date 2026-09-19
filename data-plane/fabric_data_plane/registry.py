@@ -30,6 +30,7 @@ from fabric_data_plane.pool import (
     BackendHealth,
     BackendPool,
 )
+from fabric_data_plane.verification import Verification, verification_from_payload
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,18 @@ class Deployment:
 class DeploymentRegistry:
     """Immutable view of the deployments assigned to this stamp."""
 
-    def __init__(self, deployments: list[Deployment], *, revision: str = "") -> None:
+    def __init__(
+        self,
+        deployments: list[Deployment],
+        *,
+        revision: str = "",
+        verification: Verification | None = None,
+    ) -> None:
         self.revision = revision
+        # Stamp-wide rather than per-deployment: one control plane mints every token this
+        # stamp serves. None means the document did not carry one, which the policy reads
+        # as "keep what is in force".
+        self.verification = verification
         self._by_id: dict[uuid.UUID, Deployment] = {}
         self._by_alias: dict[str, Deployment] = {}
         for deployment in deployments:
@@ -114,7 +125,11 @@ class DeploymentRegistry:
         deployments = [
             cls._deployment_from_entry(entry) for entry in payload.get("deployments", [])
         ]
-        return cls(deployments, revision=str(payload.get("revision") or ""))
+        return cls(
+            deployments,
+            revision=str(payload.get("revision") or ""),
+            verification=verification_from_payload(payload),
+        )
 
     @staticmethod
     def _deployment_from_entry(entry: dict[str, Any]) -> Deployment:
@@ -198,6 +213,10 @@ class DeploymentRegistry:
 
     def config_revision(self) -> str:
         return self.revision
+
+    def reported_verification(self) -> Verification | None:
+        """The stamp-wide verification contract this document carried, if any."""
+        return self.verification
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         """Deployments this account may list."""
@@ -304,6 +323,9 @@ class ReloadingRegistry:
 
     def config_revision(self) -> str:
         return self._current().revision
+
+    def reported_verification(self) -> Verification | None:
+        return self._current().reported_verification()
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         return self._current().for_account(account_id)

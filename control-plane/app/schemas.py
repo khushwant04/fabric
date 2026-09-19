@@ -187,6 +187,11 @@ class ApiKeyCreatedResponse(BaseModel):
 
 
 class RuntimeSpec(BaseModel):
+    #: Unknown settings are refused rather than stored and ignored. A spec that quietly
+    #: dropped an unsupported key would let somebody set a serving option, see it persisted
+    #: in the deployment, and never find out it changed nothing.
+    model_config = ConfigDict(extra="forbid")
+
     release: str = Field(min_length=1, max_length=200)
     kernel_mode: Literal["auto", "fabric", "standard"] = "auto"
     #: How the data plane balances requests across this deployment's backends (M2,
@@ -199,9 +204,34 @@ class RuntimeSpec(BaseModel):
     strategy: Literal[
         "least_in_flight", "round_robin", "session_affinity", "weighted"
     ] = "least_in_flight"
+    #: Serving settings that belong to the model rather than to the stamp. Before these
+    #: existed every deployment on a stamp shared one Helm-configured value, which meant
+    #: one context length had to suit the largest model and a short-context model could
+    #: not be served at all. Each is optional: unset keeps the stamp's configured default,
+    #: so a deployment created before these existed is unchanged.
+    #:
+    #: ``dtype`` is deliberately *not* here. It is a property of the device rather than of
+    #: the model — the operator profiles the GPU and rewrites an unsupported request,
+    #: because a host asked for bfloat16 on compute capability 7.5 exits before serving.
+    #: Accepting it per deployment would offer a way around that guard and buy nothing:
+    #: every host on one stamp runs on the same GPU class.
+    max_model_len: int | None = Field(default=None, ge=64, le=1_048_576)
+    max_num_seqs: int | None = Field(default=None, ge=1, le=1024)
+    #: Fraction of *total* device memory the server may use. Strictly below one: anything
+    #: else resident on the device is not counted, so asking for all of it fails at
+    #: startup. The operator lowers it further when the fraction would leave a small
+    #: device without enough absolute headroom.
+    gpu_memory_utilization: float | None = Field(default=None, gt=0.0, lt=1.0)
+    #: ``eager`` disables CUDA graph capture, returning that memory to the KV cache at
+    #: some per-token latency; ``cuda_graph`` captures them. Expressed as a mode rather
+    #: than a boolean so that "use the stamp's default" stays distinguishable from
+    #: "explicitly do not capture graphs".
+    execution: Literal["eager", "cuda_graph"] | None = None
 
 
 class ResourceSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     #: Devices one replica needs. This reaches the model-host container's ``nvidia.com/gpu``
     #: limit, and placement admits the deployment against ``replicas x gpu_count``
     #: (ADR 0013).
@@ -215,6 +245,8 @@ class ResourceSpec(BaseModel):
 
 
 class DeploymentSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     runtime: RuntimeSpec
     replicas: int = Field(default=1, ge=1, le=32)
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
@@ -546,10 +578,31 @@ class DesiredDeployment(BaseModel):
     deleted: bool = False
 
 
+class VerificationConfig(BaseModel):
+    """How a stamp must verify the tokens this control plane mints.
+
+    Reported from the control plane's own signing configuration rather than
+    configured per stamp, so it cannot drift from the identity that actually signs:
+    the issuer here is the one written into every token, and the JWKS URL is where
+    the matching public keys are published.
+
+    Stamps were previously told this by a Helm value per cluster, which meant a fleet
+    could hold several different answers and a cluster set to the wrong issuer rejected
+    every request with the same code a forged token gets.
+    """
+
+    jwt_issuer: str
+    jwks_url: str
+
+
 class DesiredStateResponse(BaseModel):
     stamp_id: uuid.UUID
     max_generation: int
     deployments: list[DesiredDeployment]
+    #: Stamp-wide rather than per-deployment, and sent on every pass rather than only
+    #: when it changes: an agent that restarts, or one enrolled after a change, has to
+    #: converge without depending on having seen an earlier response.
+    verification: VerificationConfig | None = None
 
 
 class StatusCondition(BaseModel):

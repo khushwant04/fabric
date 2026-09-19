@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import pathlib
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -85,6 +86,13 @@ class Settings(BaseSettings):
                 "FABRIC_CREDENTIAL_PEPPER must be set to a real secret outside "
                 "local/test environments"
             )
+        if self.app_env not in DEVELOPMENT_ENVIRONMENTS:
+            issuer = urlparse(self.jwt_issuer)
+            if issuer.scheme != "https" or not issuer.hostname:
+                raise ValueError(
+                    "FABRIC_JWT_ISSUER must be an absolute HTTPS URL outside "
+                    "local/test environments"
+                )
         return self
 
     @property

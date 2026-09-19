@@ -34,10 +34,16 @@ from fabric_data_plane.auth import (
     forwardable_headers,
     verify_inference_token,
 )
-from fabric_data_plane.config import Settings, get_settings
+from fabric_data_plane.config import (
+    INFERENCE_AUDIENCE,
+    INFERENCE_SCOPE,
+    Settings,
+    get_settings,
+)
 from fabric_data_plane.errors import (
     ApiError,
     BadRequest,
+    PayloadTooLarge,
     TooManyRequests,
     UpstreamUnavailable,
     api_error_handler,
@@ -62,12 +68,15 @@ from fabric_data_plane.usage import (
     UsageRecord,
     UsageSpoolUnavailable,
 )
+from fabric_data_plane.verification import VerificationPolicy
 
 logger = logging.getLogger("fabric.data_plane")
 
 #: Upstream paths this ingress proxies, keyed by the route it exposes.
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 COMPLETIONS_PATH = "/v1/completions"
+TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
+TRANSLATIONS_PATH = "/v1/audio/translations"
 
 
 class _CleanupStreamingResponse(StreamingResponse):
@@ -100,11 +109,22 @@ class DataPlane:
         # reads, so anything with resolve/for_account/__len__ serves.
         registry: Any,
         client: httpx.AsyncClient,
+        policy: VerificationPolicy | None = None,
     ) -> None:
         self.settings = settings
         self.keys = keys
         self.registry = registry
         self.client = client
+        # One policy decides both what issuer a token is checked against and where keys
+        # come from, so it is shared with the key cache rather than duplicated: two
+        # copies could adopt at different moments and verify tokens with the wrong keys.
+        self.verification = (
+            policy or getattr(keys, "policy", None) or VerificationPolicy(settings)
+        )
+        # Issuer and key material form one verification generation. Authentication and
+        # desired-state adoption share this lock so a request observes either the old
+        # pair or the fully prepared new pair, never half of each.
+        self._verification_lock = threading.RLock()
         self.usage = UsageBuffer(
             settings.usage_buffer_size,
             path=settings.usage_spool_path,
@@ -164,10 +184,43 @@ class DataPlane:
 
     def authenticate(self, authorization: str | None) -> InferencePrincipal:
         token = extract_bearer_token(authorization)
-        return verify_inference_token(token, settings=self.settings, keys=self.keys)
+        with self._verification_lock:
+            return verify_inference_token(
+                token,
+                settings=self.settings,
+                keys=self.keys,
+                issuer=self.verification.jwt_issuer,
+            )
+
+    def _adopt_verification(self) -> None:
+        """Prepare and atomically activate the contract the agent last wrote."""
+        reported = getattr(self.registry, "reported_verification", None)
+        if not callable(reported):
+            return
+        candidate = reported()
+        with self._verification_lock:
+            if candidate is None:
+                return
+            current = self.verification.effective
+            if candidate == current:
+                self.verification.apply(candidate)
+                return
+            if not candidate.complete:
+                self.verification.apply(candidate)
+                return
+            if candidate.jwks_url != current.jwks_url:
+                refresh = getattr(self.keys, "refresh_source", None)
+                # A custom cache that cannot prepare an explicit source must not cause the
+                # issuer to move while retaining keys from the old generation.
+                if not callable(refresh) or not refresh(candidate.jwks_url):
+                    return
+            # New-source keys are installed while authentication is excluded; publish the
+            # issuer before releasing the lock, making the transition one generation.
+            self.verification.apply(candidate)
 
     def reconcile_pools(self) -> None:
         """Activate current placements and retire state for placements no longer present."""
+        self._adopt_verification()
         deployments = getattr(self.registry, "deployments", None)
         if callable(deployments):
             # One immutable snapshot supplies both ids and account labels. Separate registry
@@ -874,6 +927,240 @@ async def _proxy(
     return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream)
 
 
+#: Form fields never taken from the caller. ``model`` is replaced with the deployment's
+#: release so a caller cannot reach another model by naming it, and ``file`` is re-sent as
+#: the upload rather than as a text field.
+_TRANSCRIPTION_RESERVED_FIELDS = frozenset({"model", "file"})
+
+
+async def _proxy_transcription(
+    plane: DataPlane,
+    request: Request,
+    upstream_path: str,
+) -> Response:
+    """Authenticate, authorize, then forward a multipart audio request.
+
+    Deliberately separate from :func:`_proxy` rather than generalising it. Four things
+    differ: the body is multipart rather than JSON, the model arrives as a form field,
+    the reply may be plain text rather than an object, and there is no streaming
+    variant. Folding all four into the JSON path would complicate the route every
+    completion takes, which is the hotter and more heavily tested one.
+
+    What is *not* different is the order: authenticate, resolve ownership, refuse if
+    usage cannot be recorded, admit against the account's limits, and only then spend
+    GPU time. A refused request never reaches a host.
+    """
+    started = time.perf_counter()
+    principal = plane.authenticate(request.headers.get("authorization"))
+
+    try:
+        form = await request.form()
+    except Exception as exc:  # starlette raises assorted parse errors
+        raise BadRequest(
+            "invalid_multipart", "Request body is not valid multipart/form-data"
+        ) from exc
+
+    try:
+        model = form.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise BadRequest("model_required", "A model must be specified")
+        model = model.strip()
+
+        upload = form.get("file")
+        if not hasattr(upload, "read"):
+            raise BadRequest("file_required", "An audio file must be supplied as 'file'")
+        audio = await upload.read(plane.settings.max_audio_upload_bytes + 1)
+        if not audio:
+            raise BadRequest("file_empty", "The supplied audio file is empty")
+        if len(audio) > plane.settings.max_audio_upload_bytes:
+            raise PayloadTooLarge(
+                "audio_too_large",
+                "The supplied audio file exceeds the configured size limit",
+                max_bytes=plane.settings.max_audio_upload_bytes,
+            )
+
+        # Refused rather than silently downgraded: a caller that asked for incremental
+        # transcription and received one final object would have no way to tell.
+        stream_field = form.get("stream")
+        if isinstance(stream_field, str) and stream_field.strip().lower() in ("1", "true"):
+            raise BadRequest(
+                "stream_unsupported",
+                "This endpoint does not stream; omit 'stream' to receive one response",
+            )
+
+        extra_fields = {
+            name: value
+            for name, value in form.multi_items()
+            if isinstance(value, str) and name not in _TRANSCRIPTION_RESERVED_FIELDS
+        }
+        filename = getattr(upload, "filename", None) or "audio"
+        content_type = getattr(upload, "content_type", None) or "application/octet-stream"
+    finally:
+        # Starlette spools large uploads to disk; the temporary file is ours to close.
+        await form.close()
+
+    # Ownership comes from the verified token plus local configuration; the model name
+    # only selects a candidate.
+    plane.reconcile_pools()
+    deployment = plane.registry.resolve(model, account_id=principal.account_id)
+
+    if not plane.usage.healthy:
+        raise UpstreamUnavailable(
+            "usage_spool_unavailable",
+            "This stamp cannot durably record usage",
+        )
+
+    try:
+        admission = await plane.limits.acquire(principal.account_id)
+    except LimitCoordinatorUnavailable as exc:
+        raise UpstreamUnavailable(
+            "limit_coordinator_unavailable",
+            "This stamp cannot make a shared admission decision",
+        ) from exc
+
+    deployment_label = str(deployment.deployment_id)
+    account_label = str(principal.account_id)
+
+    if not admission.allowed:
+        reason = admission.reason or "limit_rejected"
+        plane.metrics.refused(
+            deployment=deployment_label, account=account_label, reason=reason
+        )
+        if reason == "rate_limited":
+            raise TooManyRequests(
+                "rate_limited",
+                "This account has exceeded its request rate on this stamp",
+                retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
+            )
+        raise TooManyRequests(
+            "too_many_in_flight",
+            "This account has too many requests in flight on this stamp",
+            retry_after=1,
+        )
+
+    headers = forwardable_headers(dict(request.headers))
+    # httpx generates its own multipart boundary, so the client's content-type would
+    # describe a boundary that is no longer in the body.
+    headers.pop("content-type", None)
+    headers.pop("Content-Type", None)
+
+    pool = plane.pool_for(deployment)
+    plane.metrics.request_started(deployment_label)
+    request_recorded = False
+    try:
+        tried: set[str] = set()
+        response: httpx.Response | None = None
+        max_attempts = min(plane.settings.backend_max_attempts, len(pool))
+        for _ in range(max_attempts):
+            backend = pool.select(exclude=tried, session_key=None)
+            if backend is None:
+                break
+
+            _acquire_backend(plane, pool, backend, deployment_label)
+            attempt_outcome = "cancelled"
+            retry = False
+            try:
+                response = await plane.client.post(
+                    f"{backend.url}{upstream_path}",
+                    data={**extra_fields, "model": deployment.upstream_model_name},
+                    files={"file": (filename, audio, content_type)},
+                    headers=headers,
+                    timeout=plane.settings.upstream_timeout_seconds,
+                )
+            except httpx.HTTPError as exc:
+                logger.warning("backend %s failed: %s", backend.backend_id, exc)
+                _record_backend_failure(plane, pool, backend, deployment_label)
+                attempt_outcome = "transport_error"
+                # Transcription is as non-idempotent as completion: the first host may
+                # already be decoding, so only a failed connection is replayed.
+                if _safe_to_retry_transport_failure(exc):
+                    tried.add(backend.backend_id)
+                    response = None
+                    retry = True
+                else:
+                    plane.metrics.request_finished(
+                        deployment=deployment_label,
+                        account=account_label,
+                        outcome="upstream_unavailable",
+                        duration_seconds=time.perf_counter() - started,
+                    )
+                    request_recorded = True
+                    raise UpstreamUnavailable(
+                        "upstream_unavailable",
+                        "The model host connection failed after the request may have started",
+                    ) from exc
+            else:
+                if response.status_code >= 500:
+                    _record_backend_failure(plane, pool, backend, deployment_label)
+                else:
+                    pool.health.record_success(backend)
+                    _sync_backend_health(plane, pool, deployment_label)
+                attempt_outcome = "ok" if response.is_success else "upstream_error"
+            finally:
+                _release_backend(
+                    plane, pool, backend, deployment_label, attempt_outcome
+                )
+
+            if retry:
+                continue
+            break
+
+        if response is None:
+            plane.metrics.request_finished(
+                deployment=deployment_label,
+                account=account_label,
+                outcome="upstream_unavailable",
+                duration_seconds=time.perf_counter() - started,
+            )
+            request_recorded = True
+            raise UpstreamUnavailable(
+                "upstream_unavailable", "No healthy model host is available"
+            )
+
+        # ``response_format=text`` and the subtitle formats reply with a media type that
+        # is not JSON at all, so the body is only interpreted when it claims to be JSON.
+        upstream_media = response.headers.get("content-type", "")
+        body: Any = None
+        if "json" in upstream_media.lower():
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+
+        usage = body.get("usage") if isinstance(body, dict) else None
+        if response.is_success and isinstance(body, dict):
+            plane.record_usage(principal, deployment, body, streamed=False)
+            # The caller's alias, never the internal release. Only set when the host
+            # reported a model, so a reply that carries none is not given one.
+            if "model" in body:
+                body = {**body, "model": deployment.model_alias}
+        plane.metrics.request_finished(
+            deployment=deployment_label,
+            account=account_label,
+            outcome="ok" if response.is_success else "upstream_error",
+            duration_seconds=time.perf_counter() - started,
+            input_tokens=int((usage or {}).get("prompt_tokens") or 0),
+            output_tokens=int((usage or {}).get("completion_tokens") or 0),
+        )
+        request_recorded = True
+        if body is not None:
+            return JSONResponse(status_code=response.status_code, content=body)
+        return Response(
+            status_code=response.status_code,
+            content=response.content,
+            media_type=upstream_media or "text/plain",
+        )
+    finally:
+        if not request_recorded:
+            plane.metrics.request_finished(
+                deployment=deployment_label,
+                account=account_label,
+                outcome="cancelled",
+                duration_seconds=time.perf_counter() - started,
+            )
+        await plane.limits.release(admission)
+
+
 def build_inference_router(plane: DataPlane) -> APIRouter:
     router = APIRouter(tags=["inference"])
 
@@ -912,6 +1199,14 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
     async def completions(request: Request):
         return await _proxy(plane, request, COMPLETIONS_PATH)
 
+    @router.post(TRANSCRIPTIONS_PATH, summary="Transcribe audio to text")
+    async def transcriptions(request: Request):
+        return await _proxy_transcription(plane, request, TRANSCRIPTIONS_PATH)
+
+    @router.post(TRANSLATIONS_PATH, summary="Translate audio to English text")
+    async def translations(request: Request):
+        return await _proxy_transcription(plane, request, TRANSLATIONS_PATH)
+
     return router
 
 
@@ -945,6 +1240,32 @@ def build_admin_router(plane: DataPlane) -> APIRouter:
     @router.get("/admin/keys", summary="Verification key cache state")
     async def key_state() -> dict[str, Any]:
         return plane.keys.snapshot()
+
+    @router.get("/admin/verification", summary="What this gateway enforces on tokens")
+    async def verification_state() -> dict[str, Any]:
+        """The verification contract this process actually applies.
+
+        Reported rather than assumed from the chart: a gateway is configured at startup
+        from its environment, so the only authority on what it enforces is the process
+        itself. A stamp whose issuer does not match the control plane that mints its
+        tokens rejects everything with a generic code, and reading this is how that is
+        told apart from a genuinely bad caller.
+        """
+        settings = plane.settings
+        return {
+            # From the policy, not the settings: the control plane's own identity wins
+            # over the install's, so reading settings here would report a value this
+            # process may no longer be enforcing.
+            **plane.verification.snapshot(),
+            # Constants rather than settings, reported so an operator does not have to
+            # read the source to know what a token must carry.
+            "audience": INFERENCE_AUDIENCE,
+            "required_scope": INFERENCE_SCOPE,
+            "leeway_seconds": settings.leeway_seconds,
+            "jwks_refresh_seconds": settings.jwks_refresh_seconds,
+            # Whether a cold start during a control-plane outage can verify at all.
+            "jwks_file_seeded": bool(settings.load_jwks_file()),
+        }
 
     @router.get("/admin/upstream", summary="How the model host is reached")
     async def upstream_state() -> dict[str, Any]:
@@ -1170,9 +1491,16 @@ def build_plane(settings: Settings | None = None, keys: Any = None) -> DataPlane
             "yes" if "cert" in tls else "no",
             "yes" if "verify" in tls else "no",
         )
+    # Built here so the key cache and the request path share one, seeded from this
+    # install's values and replaced by the control plane's on the first desired-state pass.
+    policy = VerificationPolicy(resolved)
+    # A caller-supplied cache keeps its own policy if it has one, so an injected cache is
+    # never quietly pointed at a key source it was not built for.
+    cache = keys if keys is not None else KeyCache(resolved, policy=policy)
     return DataPlane(
         settings=resolved,
-        keys=keys or KeyCache(resolved),
+        keys=cache,
+        policy=getattr(cache, "policy", None) or policy,
         # Follows the file the agent rewrites rather than reading it once.
         registry=ReloadingRegistry(resolved.deployments_file),
         client=httpx.AsyncClient(**tls),

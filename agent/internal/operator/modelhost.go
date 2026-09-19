@@ -290,6 +290,31 @@ func (m ModelHost) hostArgs() []string {
 	return append(args, m.ExtraArgs...)
 }
 
+// clampedMemory lowers a memory fraction that would leave the smallest profiled device
+// without enough absolute headroom for the CUDA context.
+//
+// Reconcile runs on an interval, so the adjustment is logged only when it changes rather
+// than on every pass: a warning repeated every fifteen seconds buries the one time the
+// value actually moved.
+func (r *Reconciler) clampedMemory(item ModelDeployment, configured string) string {
+	adjusted, change := clampMemoryUtilization(configured, r.smallestMemoryMiB)
+	if change == nil {
+		return adjusted
+	}
+	key := item.Spec.DeploymentID
+	summary := change.From + ">" + change.To
+	if r.clampWarned[key] != summary {
+		if r.clampWarned == nil {
+			r.clampWarned = map[string]string{}
+		}
+		r.clampWarned[key] = summary
+		r.options.Log.Warn("host setting adjusted for this hardware",
+			"deployment_id", key, "setting", change.Setting,
+			"requested", change.From, "applied", change.To, "reason", change.Reason)
+	}
+	return adjusted
+}
+
 // desiredHost builds the primary workload for a deployment, named by hostName.
 func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 	return r.desiredHostNamed(item, hostName(item))
@@ -308,6 +333,20 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 	// placement against (ADR 0013). Falls back to the stamp's configured count for a
 	// declaration that predates the field.
 	host.GPUs = item.Spec.DesiredGPUs(r.options.ModelHost.GPUs)
+	// Serving settings the deployment asked for, each falling back to the stamp's value.
+	// These are properties of the model: one stamp-wide context length has to suit the
+	// largest model present, which caps the smaller ones and can leave a short-context
+	// model unservable.
+	host.MaxModelLen = item.Spec.DesiredMaxModelLen(r.options.ModelHost.MaxModelLen)
+	host.MaxNumSeqs = item.Spec.DesiredMaxNumSeqs(r.options.ModelHost.MaxNumSeqs)
+	host.EnforceEager = item.Spec.DesiredEnforceEager(r.options.ModelHost.EnforceEager)
+	// Clamped against the smallest device profiled, exactly as the stamp-wide value was.
+	// The stamp's own fraction was adjusted once at startup; a per-deployment fraction
+	// arrives afterwards, so without this it would be the one value that reaches the
+	// server unchecked and dies allocating instead of starting.
+	host.GPUMemoryUtilization = r.clampedMemory(
+		item, item.Spec.DesiredGPUMemoryUtilization(r.options.ModelHost.GPUMemoryUtilization),
+	)
 	release := releaseOf(item)
 	if release != "" {
 		// Runtime release is the immutable artifact/address the host loads and the name

@@ -131,6 +131,16 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			Replicas:      deployment.Replicas,
 			Strategy:      deployment.Strategy,
 			GPUCount:      deployment.GPUCount,
+			MaxModelLen:   deployment.MaxModelLen,
+			MaxNumSeqs:    deployment.MaxNumSeqs,
+			// Carried verbatim; the operator clamps it against the smallest device it
+			// profiled rather than trusting the declaration.
+			GPUMemoryUtilization: deployment.GPUMemoryUtilization,
+			Execution:            deployment.Execution,
+			// Stamp-wide, carried on each resource because the operator renders the data
+			// plane's configuration from these and reads stamp state from nowhere else.
+			JWTIssuer: deployment.Verification.JWTIssuer,
+			JWKSURL:   deployment.Verification.JWKSURL,
 		},
 	}
 }

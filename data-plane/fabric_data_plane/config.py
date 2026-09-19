@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     #: Upstream request timeout for the model host.
     upstream_timeout_seconds: float = 300.0
 
+    #: Maximum audio file bytes accepted by transcription and translation routes. The
+    #: multipart parser may spool uploads to disk, but forwarding requires bytes in memory,
+    #: so this limit bounds each request before it can exhaust the gateway.
+    max_audio_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
+
     #: Maximum records retained in the local usage spool. On overflow, the oldest
     #: unleased records are dropped; an outstanding collector lease is never deleted.
     usage_buffer_size: int = Field(default=10_000, ge=1)
@@ -151,6 +156,25 @@ class Settings(BaseSettings):
     @classmethod
     def _strip(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def _require_verification_configuration(self) -> Self:
+        """Refuse to start without an issuer and a key source.
+
+        Both are compared against every token, and an empty value is not an absent
+        check: ``jwt.decode`` enforces ``issuer=""``, which no real token carries, so a
+        blank issuer rejects one hundred percent of traffic with the same generic code a
+        genuinely bad token gets. A gateway that answers readiness and then refuses
+        everything is harder to diagnose than one that never starts, so this is a startup
+        failure rather than a runtime surprise.
+        """
+        for field, value in (("jwt_issuer", self.jwt_issuer), ("jwks_url", self.jwks_url)):
+            if not value:
+                raise ValueError(
+                    f"FABRIC_DP_{field.upper()} must be set: an empty value silently "
+                    "rejects every token rather than skipping the check"
+                )
+        return self
 
     def load_jwks_file(self) -> str | None:
         if not self.jwks_file:

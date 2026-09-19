@@ -75,26 +75,15 @@ func applyProfile(host ModelHost, profiles []GPUProfile) (ModelHost, []Adjustmen
 		return host, nil
 	}
 
-	// The weakest capability and the smallest frame buffer present, because a host may be
-	// scheduled onto any of them and a setting that only works on the best node is a
-	// setting that fails intermittently.
+	// The weakest capability present, because a host may be scheduled onto any of them and
+	// a setting that only works on the best node is a setting that fails intermittently.
 	weakest := profiles[0]
-	smallestMemory := profiles[0].MemoryMiB
 	for _, profile := range profiles[1:] {
 		if weakest.Capability.AtLeast(profile.Capability) {
 			weakest = profile
 		}
-		switch {
-		case profile.MemoryMiB <= 0:
-			// One node nobody could describe makes the whole pool undescribed for memory
-			// purposes, matching how the reported capacity treats it: a host may land on
-			// that node, and a setting derived from the nodes that *were* described would
-			// be a setting sized for hardware the pod may never see.
-			smallestMemory = 0
-		case smallestMemory > 0 && profile.MemoryMiB < smallestMemory:
-			smallestMemory = profile.MemoryMiB
-		}
 	}
+	smallest := smallestMemory(profiles)
 
 	var adjustments []Adjustment
 
@@ -111,12 +100,34 @@ func applyProfile(host ModelHost, profiles []GPUProfile) (ModelHost, []Adjustmen
 		host.DType = "float16"
 	}
 
-	if adjusted, change := clampMemoryUtilization(host.GPUMemoryUtilization, smallestMemory); change != nil {
+	if adjusted, change := clampMemoryUtilization(host.GPUMemoryUtilization, smallest); change != nil {
 		adjustments = append(adjustments, *change)
 		host.GPUMemoryUtilization = adjusted
 	}
 
 	return host, adjustments
+}
+
+// smallestMemory is the smallest frame buffer in the pool, or zero when the pool cannot be
+// described for memory purposes.
+//
+// One node nobody could describe makes the whole pool undescribed, matching how the
+// reported capacity treats it: a host may land on that node, and a setting derived from the
+// nodes that *were* described would be a setting sized for hardware the pod may never see.
+func smallestMemory(profiles []GPUProfile) int {
+	if len(profiles) == 0 {
+		return 0
+	}
+	smallest := profiles[0].MemoryMiB
+	for _, profile := range profiles[1:] {
+		switch {
+		case profile.MemoryMiB <= 0:
+			return 0
+		case smallest > 0 && profile.MemoryMiB < smallest:
+			smallest = profile.MemoryMiB
+		}
+	}
+	return smallest
 }
 
 // clampMemoryUtilization lowers a memory fraction that would leave the device with less
