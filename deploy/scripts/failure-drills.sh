@@ -148,7 +148,7 @@ PY
   if [ -n "${INFERENCE_TOKEN:-}" ]; then inference_canary; fi
   restore
   trap - EXIT
-  rm -rf "$work"
+  rm -rf "$MODEL_WORK"
   echo 'model-rollout: changed and restored generations both converged'
 }
 
