@@ -221,6 +221,13 @@ class DataPlane:
     def reconcile_pools(self) -> None:
         """Activate current placements and retire state for placements no longer present."""
         self._adopt_verification()
+        verification = self.verification.snapshot()
+        self.metrics.verification_state(
+            synced=verification["source"] == "synced",
+            matches_local=verification["matches_local"],
+            rejected_updates=verification["rejected_updates"],
+            corrected_drift=verification["corrected_drift"],
+        )
         deployments = getattr(self.registry, "deployments", None)
         if callable(deployments):
             # One immutable snapshot supplies both ids and account labels. Separate registry

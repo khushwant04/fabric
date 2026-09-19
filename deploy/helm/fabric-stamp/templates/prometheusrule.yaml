@@ -1,0 +1,69 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.rules.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.rules.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: fabric.verification
+      rules:
+        - alert: FabricVerificationNotSynced
+          expr: fabric_dp_verification_synced == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Fabric gateway has not adopted control-plane verification
+            description: The gateway is still enforcing install-time issuer and JWKS values.
+        - alert: FabricVerificationUpdateRejected
+          expr: increase(fabric_dp_verification_rejected_updates_total[10m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: Fabric gateway rejected a verification update
+            description: Inspect the private /admin/verification endpoint and agent logs.
+        - alert: FabricVerificationDriftCorrected
+          expr: increase(fabric_dp_verification_corrected_drift_total[15m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: Fabric corrected local token-verification drift
+            description: The gateway converged, but its install-time configuration should be repaired.
+    - name: fabric.serving
+      rules:
+        - alert: FabricDataPlaneMetricsAbsent
+          expr: (count(up{namespace="{{ .Release.Namespace }}",service="{{ include "fabric-stamp.fullname" . }}"}) or vector(0)) < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No Fabric data-plane metrics are being scraped
+            description: Check the stamp StatefulSet, ServiceMonitor, and Prometheus targets.
+        - alert: FabricBackendUnavailable
+          expr: min by (deployment_id) (fabric_dp_backend_available) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: A Fabric deployment has an unavailable backend
+            description: Inspect the model-host workload and operator rollout status.
+        - alert: FabricUnmeteredStream
+          expr: increase(fabric_dp_unmetered_streams_total[10m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: Fabric completed a stream without usage accounting
+            description: Billing-relevant stream usage was not recorded.
+        - alert: FabricStampContainerRestarting
+          expr: sum by (pod, container) (increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "fabric-stamp.fullname" . }}-.*"}[15m])) > 2
+          labels:
+            severity: warning
+          annotations:
+            summary: Fabric stamp container is repeatedly restarting
+            description: Inspect pod events and logs before the workload enters a crash loop.
+{{- end }}
