@@ -73,6 +73,9 @@ agent_restart() {
   echo "agent-restart: durable state recovered${stamp_id:+ (agent $stamp_id)}"
 }
 
+MODEL_WORK=""
+MODEL_URL=""
+
 model_rollout() {
   : "${CONTROL_TOKEN:?set a short-lived control-plane bearer token}"
   : "${ACCOUNT_ID:?set ACCOUNT_ID}"
@@ -81,14 +84,14 @@ model_rollout() {
     echo 'set ALLOW_MODEL_ROLLOUT=yes after confirming spare GPU capacity' >&2
     exit 2
   }
-  local url work generation observed restore_generation
-  url="$CP_URL/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID"
-  work=$(mktemp -d)
-  chmod 700 "$work"
+  local generation observed restore_generation
+  MODEL_URL="$CP_URL/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID"
+  MODEL_WORK=$(mktemp -d)
+  chmod 700 "$MODEL_WORK"
   wait_for_generation() {
     local wanted=$1 current=0
     for _ in $(seq 1 90); do
-      current=$(curl -fsS "$url/status" -H "authorization: Bearer $CONTROL_TOKEN" \
+      current=$(curl -fsS "$MODEL_URL/status" -H "authorization: Bearer $CONTROL_TOKEN" \
         | python3 -c 'import json,sys; rows=json.load(sys.stdin); print(max((x.get("observed_generation",0) for x in rows),default=0))')
       [ "$current" -ge "$wanted" ] && return 0
       sleep 10
@@ -97,40 +100,40 @@ model_rollout() {
     return 1
   }
   restore() {
-    [ -s "$work/original-request.json" ] || return 0
-    curl -fsS -X PATCH "$url" -H "authorization: Bearer $CONTROL_TOKEN" \
-      -H 'content-type: application/json' --data-binary @"$work/original-request.json" \
-      >"$work/restored.json"
-    restore_generation=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["generation"])' "$work/restored.json")
+    [ -s "$MODEL_WORK/original-request.json" ] || return 0
+    curl -fsS -X PATCH "$MODEL_URL" -H "authorization: Bearer $CONTROL_TOKEN" \
+      -H 'content-type: application/json' --data-binary @"$MODEL_WORK/original-request.json" \
+      >"$MODEL_WORK/restored.json"
+    restore_generation=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["generation"])' "$MODEL_WORK/restored.json")
     wait_for_generation "$restore_generation"
   }
   cleanup_on_exit() {
     status=$?
-    if [ -s "$work/original-request.json" ]; then
+    if [ -s "$MODEL_WORK/original-request.json" ]; then
       if ! restore; then
-        echo "CRITICAL: failed to restore deployment; diagnostics retained at $work" >&2
+        echo "CRITICAL: failed to restore deployment; diagnostics retained at $MODEL_WORK" >&2
         exit 1
       fi
     fi
-    rm -rf "$work"
+    rm -rf "$MODEL_WORK"
     return "$status"
   }
   trap cleanup_on_exit EXIT
-  curl -fsS "$url" -H "authorization: Bearer $CONTROL_TOKEN" >"$work/deployment.json"
-  python3 - "$work" <<'PY'
+  curl -fsS "$MODEL_URL" -H "authorization: Bearer $CONTROL_TOKEN" >"$MODEL_WORK/deployment.json"
+  python3 - "$MODEL_WORK" <<'PY'
 import json, pathlib, sys
 p=pathlib.Path(sys.argv[1])
 d=json.loads((p/'deployment.json').read_text())
-spec=d['spec']
+spec=d['desired_spec']
 (p/'original-spec.json').write_text(json.dumps(spec))
 (p/'original-request.json').write_text(json.dumps({'spec': spec}))
 runtime=spec['runtime']
 runtime['max_num_seqs']=2 if runtime.get('max_num_seqs') != 2 else 3
 (p/'changed-request.json').write_text(json.dumps({'spec': spec}))
 PY
-  curl -fsS -X PATCH "$url" -H "authorization: Bearer $CONTROL_TOKEN" \
-    -H 'content-type: application/json' --data-binary @"$work/changed-request.json" >"$work/changed.json"
-  generation=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["generation"])' "$work/changed.json")
+  curl -fsS -X PATCH "$MODEL_URL" -H "authorization: Bearer $CONTROL_TOKEN" \
+    -H 'content-type: application/json' --data-binary @"$MODEL_WORK/changed-request.json" >"$MODEL_WORK/changed.json"
+  generation=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["generation"])' "$MODEL_WORK/changed.json")
   wait_for_generation "$generation"
   if [ -n "${INFERENCE_TOKEN:-}" ]; then inference_canary; fi
   restore
