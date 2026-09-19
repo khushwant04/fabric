@@ -57,7 +57,7 @@ spec:
         # Agent: enrols, pulls desired state, renders the data plane's config.
         # ------------------------------------------------------------------
         - name: agent
-          image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag | default .Chart.AppVersion }}"
+          image: {{ include "fabric-stamp.agentImage" . | quote }}
           imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
           args:
             - --control-plane={{ .Values.controlPlane.url }}
@@ -126,7 +126,7 @@ spec:
         # Data plane: verifies tokens locally and proxies to the model host.
         # ------------------------------------------------------------------
         - name: data-plane
-          image: "{{ .Values.image.dataPlane.repository }}:{{ .Values.image.dataPlane.tag | default .Chart.AppVersion }}"
+          image: {{ include "fabric-stamp.dataPlaneImage" . | quote }}
           imagePullPolicy: {{ .Values.image.dataPlane.pullPolicy }}
           # Both listeners share one DataPlane object and SQLite connection. The spool is durable,
           # while one owner keeps request accounting and lease serialization simple.
@@ -244,7 +244,7 @@ spec:
         # Collector: drains the local administrative listener, forwards usage.
         # ------------------------------------------------------------------
         - name: collector
-          image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag | default .Chart.AppVersion }}"
+          image: {{ include "fabric-stamp.agentImage" . | quote }}
           imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
           command: ["/usr/local/bin/fabric-collector"]
           args:

@@ -12,10 +12,13 @@ image:
   agent:
     repository: fabric/agent
     tag: ""            # defaults to .Chart.AppVersion
+    # Preferred in production. Workloads use repository@digest when set.
+    digest: ""
     pullPolicy: IfNotPresent
   dataPlane:
     repository: fabric/data-plane
     tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -239,6 +242,11 @@ istio:
 monitoring:
   enabled: false
   interval: 15s
+  rules:
+    # Requires Prometheus Operator's PrometheusRule CRD.
+    enabled: false
+    # Labels used by kube-prometheus-stack to select rules. Keep configurable for other stacks.
+    labels: {}
 
 service:
   type: ClusterIP

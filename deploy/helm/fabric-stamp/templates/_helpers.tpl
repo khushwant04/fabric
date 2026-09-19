@@ -71,6 +71,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/* Render an exact manifest digest when supplied; tags remain for local development. */}}
+{{- define "fabric-stamp.agentImage" -}}
+{{- if .Values.image.agent.digest -}}
+{{- printf "%s@%s" .Values.image.agent.repository .Values.image.agent.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.agent.repository (.Values.image.agent.tag | default .Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "fabric-stamp.dataPlaneImage" -}}
+{{- if .Values.image.dataPlane.digest -}}
+{{- printf "%s@%s" .Values.image.dataPlane.repository .Values.image.dataPlane.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.dataPlane.repository (.Values.image.dataPlane.tag | default .Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Fail early on values that would otherwise produce a pod that cannot work. */}}
 {{- define "fabric-stamp.validate" -}}
 {{- if not .Values.controlPlane.url -}}

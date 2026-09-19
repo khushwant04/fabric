@@ -79,6 +79,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
       key: {{ .Values.credentialPepperExistingSecretKey }}
 {{- end -}}
 
+{{/* Production workloads may pin the exact image manifest while local installs use tags. */}}
+{{- define "fabric-control-plane.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "fabric-control-plane.validate" -}}
 {{- if not (or .Values.database.url .Values.database.existingSecret) -}}
 {{- fail "database.url or database.existingSecret is required" -}}

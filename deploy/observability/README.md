@@ -46,3 +46,33 @@ kubectl -n fabric-observability create configmap fabric-dashboard \
   --from-file=fabric-inference.json=deploy/observability/dashboards/fabric-inference.json
 kubectl -n fabric-observability label configmap fabric-dashboard grafana_dashboard=1
 ```
+
+
+## Verification and serving alerts
+
+The stamp chart can install a `PrometheusRule` beside its existing ServiceMonitors:
+
+```bash
+helm upgrade st deploy/helm/fabric-stamp -n fabric-stamp --reuse-values \
+  --set monitoring.enabled=true \
+  --set monitoring.rules.enabled=true
+```
+
+The data plane exports only bounded verification posture metrics—synced, local-match,
+rejected-update count, and corrected-drift count. Issuer and JWKS URLs are deliberately
+not labels. The rules alert when authoritative verification is not synced, an update is
+rejected, drift is corrected, a backend remains unavailable, stream usage is lost, data
+plane metrics disappear, or stamp containers repeatedly restart.
+
+`/admin/verification` remains bound to pod-local port 8081 and is not added to a Service.
+Use it only for diagnosis through `kubectl exec` or a temporary port-forward; Prometheus
+scrapes the safe aggregate metrics from the existing inference listener.
+
+Check rule and target health after installation:
+
+```bash
+kubectl get prometheusrule -n fabric-stamp
+kubectl get servicemonitor -n fabric-stamp
+kubectl exec -n fabric-stamp st-fabric-stamp-0 -c data-plane -- \
+  python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/metrics').read().decode())"
+```

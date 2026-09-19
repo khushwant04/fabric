@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [control-plane, data-plane]
+    defaults:
+      run:
+        working-directory: ${{ matrix.component }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test control plane
+        if: matrix.component == 'control-plane'
+        run: uv run --extra dev pytest -q
+      - name: Test data plane
+        if: matrix.component == 'data-plane'
+        run: uv run --with-editable . --with 'pytest==8.3.4' --with 'pytest-asyncio==0.24.0' pytest -q
+      - name: Lint
+        run: uv run --with 'ruff==0.8.4' ruff check .
+
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint charts
+        run: |
+          helm lint deploy/helm/fabric-control-plane \
+            --set database.url=sqlite+aiosqlite:///tmp/test.db \
+            --set signingKey.value=test --set credentialPepper=test \
+            --set jwt.issuer=https://control.example \
+            --set auth0.issuer=https://identity.example --set auth0.audience=fabric
+          helm lint deploy/helm/fabric-stamp \
+            --set controlPlane.url=https://control.example \
+            --set controlPlane.jwtIssuer=https://control.example \
+            --set enrollment.token=test --set modelHost.url=http://model-host.example
+      - name: Assert production rendering
+        run: bash deploy/scripts/test-production-chart.sh
+      - name: Assert shared limits and usage spool packaging
+        run: |
+          bash deploy/scripts/test-shared-limits-chart.sh
+          bash deploy/scripts/test-usage-spool-chart.sh

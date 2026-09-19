@@ -46,3 +46,23 @@ def test_in_flight_returns_to_zero() -> None:
     )
 
     assert 'fabric_dp_requests_in_flight{deployment_id="dep-1"} 0' in metrics.render()
+
+
+
+def test_verification_posture_is_exported_without_unbounded_labels() -> None:
+    metrics = Metrics()
+    metrics.verification_state(
+        synced=True,
+        matches_local=False,
+        rejected_updates=2,
+        corrected_drift=1,
+    )
+
+    rendered = metrics.render()
+    assert "fabric_dp_verification_synced 1" in rendered
+    assert "fabric_dp_verification_matches_local 0" in rendered
+    assert "fabric_dp_verification_rejected_updates_total 2" in rendered
+    assert "fabric_dp_verification_corrected_drift_total 1" in rendered
+    # Issuer and JWKS URLs are intentionally absent: arbitrary URLs make unsafe labels.
+    assert "issuer=" not in rendered
+    assert "jwks_url=" not in rendered

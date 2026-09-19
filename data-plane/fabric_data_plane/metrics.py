@@ -58,7 +58,28 @@ class Metrics:
         # change an alert can fire on rather than a series appearing from nowhere.
         self._unmetered_streams: dict[tuple[str, str, str], int] = defaultdict(int)
         self._active_deployments: set[tuple[str, str]] = set()
+        # Fleet-safe verification posture. Values are unlabelled to avoid putting issuer
+        # URLs or other operator-controlled strings into Prometheus cardinality.
+        self._verification_synced = 0
+        self._verification_matches_local = 1
+        self._verification_rejected_updates = 0
+        self._verification_corrected_drift = 0
         self._started = time.time()
+
+    def verification_state(
+        self,
+        *,
+        synced: bool,
+        matches_local: bool,
+        rejected_updates: int,
+        corrected_drift: int,
+    ) -> None:
+        """Publish the bounded verification posture used by fleet alerts."""
+        with self._lock:
+            self._verification_synced = int(synced)
+            self._verification_matches_local = int(matches_local)
+            self._verification_rejected_updates = rejected_updates
+            self._verification_corrected_drift = corrected_drift
 
     def activate_deployment(self, *, deployment: str, account: str) -> None:
         """Declare a placement and publish zero loss counters before it serves traffic."""
@@ -214,6 +235,10 @@ class Metrics:
             backend_ejections = dict(self._backend_ejections)
             backend_available = dict(self._backend_available)
             unmetered_streams = dict(self._unmetered_streams)
+            verification_synced = self._verification_synced
+            verification_matches_local = self._verification_matches_local
+            verification_rejected_updates = self._verification_rejected_updates
+            verification_corrected_drift = self._verification_corrected_drift
             uptime = time.time() - self._started
 
         lines: list[str] = []
@@ -310,6 +335,33 @@ class Metrics:
                 f'fabric_dp_request_duration_seconds_count{{deployment_id="{deployment}"}} '
                 f"{counts.get(deployment, 0)}"
             )
+
+        lines.append(
+            "# HELP fabric_dp_verification_synced Whether control-plane verification is active."
+        )
+        lines.append("# TYPE fabric_dp_verification_synced gauge")
+        lines.append(f"fabric_dp_verification_synced {verification_synced}")
+        lines.append(
+            "# HELP fabric_dp_verification_matches_local Whether synced and local values agree."
+        )
+        lines.append("# TYPE fabric_dp_verification_matches_local gauge")
+        lines.append(f"fabric_dp_verification_matches_local {verification_matches_local}")
+        lines.append(
+            "# HELP fabric_dp_verification_rejected_updates_total "
+            "Invalid verification updates refused."
+        )
+        lines.append("# TYPE fabric_dp_verification_rejected_updates_total counter")
+        lines.append(
+            f"fabric_dp_verification_rejected_updates_total {verification_rejected_updates}"
+        )
+        lines.append(
+            "# HELP fabric_dp_verification_corrected_drift_total "
+            "Local verification drifts corrected."
+        )
+        lines.append("# TYPE fabric_dp_verification_corrected_drift_total counter")
+        lines.append(
+            f"fabric_dp_verification_corrected_drift_total {verification_corrected_drift}"
+        )
 
         lines.append("# HELP fabric_dp_uptime_seconds Seconds since this process started.")
         lines.append("# TYPE fabric_dp_uptime_seconds gauge")

@@ -10,6 +10,8 @@ replicas: 2
 image:
   repository: fabric/control-plane
   tag: ""              # defaults to .Chart.AppVersion
+  # Preferred in production. When set, workloads use repository@digest and ignore tag.
+  digest: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

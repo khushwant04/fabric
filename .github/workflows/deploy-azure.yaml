@@ -1,0 +1,101 @@
+name: Deploy Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Full 40-character commit SHA from main to build and deploy
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fabric-azure-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-helm@v4
+      - name: Require an exact commit on main
+        id: source
+        shell: bash
+        env:
+          SELECTED_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'ref must be a full lowercase commit SHA, not a moving branch' >&2
+            exit 1
+          }
+          actual=$(git rev-parse HEAD)
+          [ "$actual" = "$SELECTED_SHA" ] || {
+            echo 'checked-out source does not match the approved SHA' >&2
+            exit 1
+          }
+          git fetch origin main
+          git merge-base --is-ancestor "$actual" origin/main || {
+            echo 'The selected commit is not on main.' >&2
+            exit 1
+          }
+          echo "sha=$actual" >>"$GITHUB_OUTPUT"
+      - name: Build immutable release images in ACR
+        id: images
+        shell: bash
+        env:
+          ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+        run: |
+          set -euo pipefail
+          : "${ACR_NAME:?set AZURE_ACR_NAME on the production environment}"
+          tag="git-${{ steps.source.outputs.sha }}"
+          for component in control-plane agent data-plane; do
+            az acr build --registry "$ACR_NAME" --platform linux/amd64 \
+              --file "deploy/images/${component}.Dockerfile" \
+              --image "fabric/${component}:${tag}" .
+          done
+          for component in control-plane agent data-plane; do
+            digest=$(az acr repository show-manifests --name "$ACR_NAME" \
+              --repository "fabric/${component}" \
+              --query "[?contains(tags, '${tag}')].digest | [0]" -o tsv)
+            test -n "$digest"
+            key=$(printf '%s' "$component" | tr '-' '_')
+            echo "${key}_digest=${digest}" >>"$GITHUB_OUTPUT"
+          done
+      - name: Connect to AKS
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AKS_CLUSTER: ${{ vars.AZURE_AKS_CLUSTER }}
+        run: |
+          : "${RESOURCE_GROUP:?set AZURE_RESOURCE_GROUP}"
+          : "${AKS_CLUSTER:?set AZURE_AKS_CLUSTER}"
+          az aks get-credentials --resource-group "$RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER" --overwrite-existing
+      - name: Deploy in guarded order
+        env:
+          CONTROL_PLANE_DIGEST: ${{ steps.images.outputs.control_plane_digest }}
+          AGENT_DIGEST: ${{ steps.images.outputs.agent_digest }}
+          DATA_PLANE_DIGEST: ${{ steps.images.outputs.data_plane_digest }}
+          CP_RELEASE: ${{ vars.FABRIC_CONTROL_PLANE_RELEASE }}
+          CP_NAMESPACE: ${{ vars.FABRIC_CONTROL_PLANE_NAMESPACE }}
+          STAMP_RELEASE: ${{ vars.FABRIC_STAMP_RELEASE }}
+          STAMP_NAMESPACE: ${{ vars.FABRIC_STAMP_NAMESPACE }}
+        run: bash deploy/scripts/deploy-azure.sh
+      - name: Record deployed images
+        if: always()
+        run: |
+          kubectl get deployments,statefulsets -A \
+            -l app.kubernetes.io/part-of=fabric \
+            -o custom-columns='NAMESPACE:.metadata.namespace,KIND:.kind,NAME:.metadata.name,IMAGES:.spec.template.spec.containers[*].image'
