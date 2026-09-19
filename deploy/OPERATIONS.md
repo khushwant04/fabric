@@ -42,8 +42,9 @@ INFERENCE_TOKEN="$TOKEN" deploy/scripts/failure-drills.sh cp-outage
 # Recreate the stamp pod and verify durable state plus synchronized verification.
 INFERENCE_TOKEN="$TOKEN" deploy/scripts/failure-drills.sh agent-restart
 
-# Staging-safe only. Temporarily changes max_num_seqs and restores the exact old spec.
-CONTROL_TOKEN="$CONTROL_TOKEN" INFERENCE_TOKEN="$TOKEN" \
+# Staging-safe only. Renews short-lived control tokens, changes max_num_seqs,
+# and restores the exact old spec.
+FABRIC_API_KEY="$FABRIC_API_KEY" INFERENCE_TOKEN="$TOKEN" \
 ACCOUNT_ID="$ACCOUNT" DEPLOYMENT_ID="$DEPLOYMENT" ALLOW_MODEL_ROLLOUT=yes \
   deploy/scripts/failure-drills.sh model-rollout
 ```
