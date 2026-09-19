@@ -449,3 +449,143 @@ func TestLiveClaimsWinTheBoundOverTerminatingAndOutOfBandPods(t *testing.T) {
 			reported.FabricRequestedGPUs, hardware.MaxReportedClaims+1)
 	}
 }
+
+func TestRuntimeSettingsAreReadFromTheSpec(t *testing.T) {
+	// These were per-stamp Helm values, so one context length had to suit every model on
+	// the stamp. The deployment's own numbers have to reach the workload or the setting
+	// governs nothing.
+	spec := map[string]any{"runtime": map[string]any{
+		"release":                "r1",
+		"max_model_len":          float64(448),
+		"max_num_seqs":           float64(16),
+		"gpu_memory_utilization": 0.85,
+		"execution":              "cuda_graph",
+	}}
+	if got := maxModelLenFromSpec(spec); got != 448 {
+		t.Fatalf("max model len = %d, want 448", got)
+	}
+	if got := maxNumSeqsFromSpec(spec); got != 16 {
+		t.Fatalf("max num seqs = %d, want 16", got)
+	}
+	// Shortest round-tripping form, so the server sees what was declared rather than a
+	// long decimal expansion of the nearest float64.
+	if got := gpuMemoryUtilizationFromSpec(spec); got != "0.85" {
+		t.Fatalf("gpu memory utilization = %q, want \"0.85\"", got)
+	}
+	if got := executionFromSpec(spec); got != "cuda_graph" {
+		t.Fatalf("execution = %q, want \"cuda_graph\"", got)
+	}
+}
+
+func TestAbsentRuntimeSettingsMeanTheStampsOwnValues(t *testing.T) {
+	// A deployment declared before these existed must be unchanged rather than sized to
+	// zero, and an unrecognised value must not stop the agent reconciling.
+	cases := []map[string]any{
+		{},
+		{"runtime": map[string]any{}},
+		{"runtime": "not-an-object"},
+		{"runtime": map[string]any{
+			"max_model_len":          float64(0),
+			"max_num_seqs":           float64(0),
+			"gpu_memory_utilization": float64(0),
+			"execution":              "whatever-a-newer-control-plane-sends",
+		}},
+		{"runtime": map[string]any{
+			"max_model_len":          "long",
+			"max_num_seqs":           "many",
+			"gpu_memory_utilization": "most",
+		}},
+		// A fraction of one or more asks for memory the runtime itself needs.
+		{"runtime": map[string]any{"gpu_memory_utilization": float64(1)}},
+	}
+	for index, spec := range cases {
+		if got := maxModelLenFromSpec(spec); got != 0 {
+			t.Fatalf("case %d: max model len = %d, want 0", index, got)
+		}
+		if got := maxNumSeqsFromSpec(spec); got != 0 {
+			t.Fatalf("case %d: max num seqs = %d, want 0", index, got)
+		}
+		if got := gpuMemoryUtilizationFromSpec(spec); got != "" {
+			t.Fatalf("case %d: gpu memory utilization = %q, want empty", index, got)
+		}
+		if got := executionFromSpec(spec); got != "" {
+			t.Fatalf("case %d: execution = %q, want empty", index, got)
+		}
+	}
+}
+
+func TestEagerAndGraphCaptureStayDistinctFromUnset(t *testing.T) {
+	// Expressed as a mode rather than a boolean precisely so that a deployment asking for
+	// graphs can override an eager stamp default, which a false boolean could not.
+	eager := map[string]any{"runtime": map[string]any{"execution": "eager"}}
+	if got := executionFromSpec(eager); got != "eager" {
+		t.Fatalf("execution = %q, want \"eager\"", got)
+	}
+}
+
+func TestRuntimeSettingsReachTheConfiguredDeployment(t *testing.T) {
+	// The whole point of these fields is that the control plane decides them and the
+	// workload honours them. This walks the real path: desired state as the control plane
+	// serves it, through the agent, into the entry the operator reads.
+	stub := &controlPlaneStub{desired: []controlplane.DesiredState{{
+		StampID:       stampID,
+		MaxGeneration: 1,
+		Deployments: []controlplane.DesiredDeployment{{
+			DeploymentID:      deployA,
+			AccountID:         customerA,
+			ModelAlias:        "transcriber",
+			DesiredGeneration: 1,
+			Spec: map[string]any{"runtime": map[string]any{
+				"release":                "r1",
+				"max_model_len":          float64(448),
+				"max_num_seqs":           float64(16),
+				"gpu_memory_utilization": 0.85,
+				"execution":              "cuda_graph",
+			}},
+		}},
+	}}}
+	server := stub.server(t)
+	instance, _ := newAgent(t, server.URL)
+
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	configured, err := instance.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(configured) != 1 {
+		t.Fatalf("expected one deployment, got %d", len(configured))
+	}
+	entry := configured[0]
+	if entry.MaxModelLen != 448 {
+		t.Fatalf("max model len = %d, want 448", entry.MaxModelLen)
+	}
+	if entry.MaxNumSeqs != 16 {
+		t.Fatalf("max num seqs = %d, want 16", entry.MaxNumSeqs)
+	}
+	if entry.GPUMemoryUtilization != "0.85" {
+		t.Fatalf("gpu memory utilization = %q, want \"0.85\"", entry.GPUMemoryUtilization)
+	}
+	if entry.Execution != "cuda_graph" {
+		t.Fatalf("execution = %q, want \"cuda_graph\"", entry.Execution)
+	}
+}
+
+func TestChangedRuntimeSettingsRepublish(t *testing.T) {
+	// The agent republishes on struct inequality, so a field it carries but does not
+	// compare would leave the workload running the previous context length indefinitely.
+	first := state.Deployment{DeploymentID: deployA, MaxModelLen: 2048}
+	second := first
+	second.MaxModelLen = 448
+	if first == second {
+		t.Fatal("a changed context length compared equal, so no republish would happen")
+	}
+
+	graphs := first
+	graphs.Execution = "cuda_graph"
+	if first == graphs {
+		t.Fatal("a changed execution mode compared equal, so no republish would happen")
+	}
+}

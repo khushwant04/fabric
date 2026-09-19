@@ -77,8 +77,32 @@ type Spec struct {
 	// ask for the same number it was admitted for. Absent or zero means the count the
 	// operator was configured with, so a deployment declared before this field is
 	// unchanged.
-	GPUCount   int `json:"gpuCount,omitempty"`
-	Generation int `json:"generation"`
+	GPUCount int `json:"gpuCount,omitempty"`
+	// MaxModelLen, MaxNumSeqs, GPUMemoryUtilization, and Execution are the serving
+	// settings this deployment asked for, each falling back to the operator's configured
+	// value when absent. They belong on the deployment because they are properties of the
+	// model: one stamp-wide context length has to suit the largest model on the stamp,
+	// which leaves capacity unused on the smaller ones and can make a short-context model
+	// unservable outright.
+	//
+	// dtype is deliberately absent. The operator derives it from the profiled hardware,
+	// and a deployment that could override it could ask for a precision the device does
+	// not implement, which fails at startup rather than degrading.
+	MaxModelLen int `json:"maxModelLen,omitempty"`
+	MaxNumSeqs  int `json:"maxNumSeqs,omitempty"`
+	// A string so the fraction is passed through exactly as declared.
+	GPUMemoryUtilization string `json:"gpuMemoryUtilization,omitempty"`
+	// Execution is "eager" or "cuda_graph"; empty means the operator's configured
+	// behaviour. A mode rather than a boolean so absent and false stay distinct.
+	Execution string `json:"execution,omitempty"`
+	// JWTIssuer and JWKSURL are how the data plane must verify tokens. They describe the
+	// stamp rather than this deployment, and they are here because the operator renders the
+	// data plane's configuration from these resources and has no other channel to read
+	// stamp-wide state from. Every resource on a stamp carries the same values, and the
+	// rendered document holds one copy at the top rather than one per entry.
+	JWTIssuer  string `json:"jwtIssuer,omitempty"`
+	JWKSURL    string `json:"jwksUrl,omitempty"`
+	Generation int    `json:"generation"`
 }
 
 // DesiredReplicas is the replica count to run, defaulting to one when unset.
@@ -99,6 +123,51 @@ func (s Spec) DesiredGPUs(configured int) int {
 		return configured
 	}
 	return s.GPUCount
+}
+
+// DesiredMaxModelLen is the context bound to serve with, falling back to the operator's
+// configured value when the deployment does not ask for one.
+func (s Spec) DesiredMaxModelLen(configured int) int {
+	if s.MaxModelLen < 1 {
+		return configured
+	}
+	return s.MaxModelLen
+}
+
+// DesiredMaxNumSeqs is the concurrent-sequence bound, falling back as above.
+func (s Spec) DesiredMaxNumSeqs(configured int) int {
+	if s.MaxNumSeqs < 1 {
+		return configured
+	}
+	return s.MaxNumSeqs
+}
+
+// DesiredGPUMemoryUtilization is the memory fraction, falling back as above.
+//
+// Returned as declared. The caller still clamps it against the smallest device in the
+// pool, because a fraction that leaves too little absolute headroom fails at startup
+// whether a deployment or the chart asked for it.
+func (s Spec) DesiredGPUMemoryUtilization(configured string) string {
+	if s.GPUMemoryUtilization == "" {
+		return configured
+	}
+	return s.GPUMemoryUtilization
+}
+
+// DesiredEnforceEager reports whether to skip CUDA graph capture.
+//
+// Absent means the operator's configured behaviour, so a deployment that expresses no
+// opinion is unchanged while one that explicitly asks for graphs can still turn off an
+// eager default.
+func (s Spec) DesiredEnforceEager(configured bool) bool {
+	switch s.Execution {
+	case "eager":
+		return true
+	case "cuda_graph":
+		return false
+	default:
+		return configured
+	}
 }
 
 // Condition is a standard Kubernetes-style status condition.
@@ -210,6 +279,16 @@ type Reconciler struct {
 	// while a node runs, so listing nodes every pass would spend a cluster read per
 	// interval on an answer that does not move.
 	profiled bool
+	// smallestMemoryMiB is the smallest frame buffer profiled in the pool, retained so a
+	// per-deployment memory fraction can be clamped against the same device the
+	// stamp-wide value was. Zero means the pool could not be described for memory, in
+	// which case nothing is clamped. A host may be scheduled onto any node in the pool,
+	// so a fraction that only fits the largest device fails intermittently.
+	smallestMemoryMiB int
+	// clampWarned remembers which per-deployment clamps have already been logged, keyed by
+	// deployment and the adjustment made. Reconcile runs on an interval, so warning on
+	// every pass would bury the one time the value actually changed.
+	clampWarned map[string]string
 }
 
 // New builds a reconciler.
@@ -553,19 +632,49 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 		return entries[i].DeploymentID < entries[j].DeploymentID
 	})
 
-	canonical, err := json.Marshal(map[string]any{"deployments": entries})
+	// Lifted to one top-level section. Each resource carries the stamp's issuer because
+	// that is the only channel the operator has for stamp-wide state, but writing it once
+	// keeps the document unambiguous: entries cannot disagree about a value there is only
+	// one of. Omitted when no resource declares it, which the data plane reads as "keep
+	// what you have" rather than "clear it".
+	var verification *dataPlaneVerification
+	for _, item := range items {
+		if item.Spec.JWTIssuer != "" && item.Spec.JWKSURL != "" {
+			verification = &dataPlaneVerification{
+				JWTIssuer: item.Spec.JWTIssuer,
+				JWKSURL:   item.Spec.JWKSURL,
+			}
+			break
+		}
+	}
+
+	// The revision is a digest of everything the data plane acts on, verification
+	// included, so a changed issuer produces a changed revision and is not mistaken for
+	// an unchanged document.
+	canonicalBody := map[string]any{"deployments": entries}
+	body := map[string]any{"deployments": entries}
+	if verification != nil {
+		canonicalBody["verification"] = verification
+		body["verification"] = verification
+	}
+	canonical, err := json.Marshal(canonicalBody)
 	if err != nil {
 		return "", fmt.Errorf("render canonical configuration: %w", err)
 	}
 	digest := sha256.Sum256(canonical)
-	revision := hex.EncodeToString(digest[:])
-	document, err := json.MarshalIndent(
-		map[string]any{"revision": revision, "deployments": entries}, "", "  ",
-	)
+	body["revision"] = hex.EncodeToString(digest[:])
+	document, err := json.MarshalIndent(body, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("render configuration: %w", err)
 	}
 	return string(document) + "\n", nil
+}
+
+// dataPlaneVerification is the stamp-wide token-verification contract as the data plane
+// reads it.
+type dataPlaneVerification struct {
+	JWTIssuer string `json:"jwt_issuer"`
+	JWKSURL   string `json:"jwks_url"`
 }
 
 type configMap struct {
@@ -859,6 +968,8 @@ func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
 			"memory_mib", profile.MemoryMiB, "gpus", profile.Count,
 			"source", profile.Source)
 	}
+
+	r.smallestMemoryMiB = smallestMemory(profiles)
 
 	adjusted, changes := applyProfile(r.options.ModelHost, profiles)
 	for _, change := range changes {

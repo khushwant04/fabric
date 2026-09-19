@@ -119,8 +119,52 @@ class UpstreamStub:
         self.fail = False
         #: A host that ignores stream_options, so the gateway cannot meter the stream.
         self.report_stream_usage = True
+        #: A host answering ``response_format=text``, which replies with a media type
+        #: that is not JSON at all.
+        self.transcription_text_response = False
+
+    @staticmethod
+    def _multipart_field(body: bytes, name: str) -> str | None:
+        """Read one text field out of a multipart body, for assertions only."""
+        marker = f'name="{name}"'.encode()
+        start = body.find(marker)
+        if start == -1:
+            return None
+        value_start = body.find(b"\r\n\r\n", start)
+        if value_start == -1:
+            return None
+        value_end = body.find(b"\r\n--", value_start + 4)
+        return body[value_start + 4 : value_end].decode(errors="replace")
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        # The audio endpoints are multipart, so the body is not JSON and must not be
+        # parsed as such.
+        if "/v1/audio/" in request.url.path:
+            body = request.content or b""
+            self.requests.append(
+                {
+                    "url": str(request.url),
+                    "headers": {k.lower(): v for k, v in request.headers.items()},
+                    "multipart": body,
+                    "model": self._multipart_field(body, "model"),
+                    "language": self._multipart_field(body, "language"),
+                }
+            )
+            if self.fail:
+                raise httpx.ConnectError("model host is down", request=request)
+            if self.transcription_text_response:
+                return httpx.Response(
+                    self.status, text="a spoken sentence", headers={"content-type": "text/plain"}
+                )
+            return httpx.Response(
+                self.status,
+                json={
+                    "text": "a spoken sentence",
+                    "model": self._multipart_field(body, "model"),
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 5},
+                },
+            )
+
         payload = json.loads(request.content or b"{}")
         self.requests.append(
             {

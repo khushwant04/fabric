@@ -1149,3 +1149,145 @@ func TestASingleGPUReplicaIsNotGivenTensorParallelism(t *testing.T) {
 		t.Fatalf("a single-device host was given tensor parallelism: %s", encoded)
 	}
 }
+
+// hostResourceWithRuntime is resource() plus the per-deployment serving settings.
+func hostResourceWithRuntime(maxModelLen, maxNumSeqs int, memory, execution string) ModelDeployment {
+	item := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	item.Spec.MaxModelLen = maxModelLen
+	item.Spec.MaxNumSeqs = maxNumSeqs
+	item.Spec.GPUMemoryUtilization = memory
+	item.Spec.Execution = execution
+	return item
+}
+
+func TestPerDeploymentRuntimeSettingsReachTheModelHost(t *testing.T) {
+	// The stamp is configured for a long context, few sequences, and eager execution. A
+	// short-context model on the same stamp must be able to ask for its own numbers:
+	// before this, one stamp-wide context length had to suit every model present, and a
+	// model whose decoder is shorter than that value could not start at all.
+	state, client := newHostServer(t, hostResourceWithRuntime(448, 16, "0.70", "cuda_graph"))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	host, present := state.deploys["fabric-host-dep-a"]
+	if !present {
+		t.Fatalf("no model host was created: %v", state.deploys)
+	}
+	encoded, _ := json.Marshal(host.Spec)
+	body := string(encoded)
+	for _, expected := range []string{
+		"--max-model-len=448", "--max-num-seqs=16", "--gpu-memory-utilization=0.70",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("host spec is missing %q: %s", expected, body)
+		}
+	}
+	// The stamp asked for eager; this deployment asked for graph capture and must get it.
+	if strings.Contains(body, "--enforce-eager") {
+		t.Fatalf("a deployment asking for graph capture was still forced eager: %s", body)
+	}
+	// dtype stays the stamp's, because it is a property of the device rather than the
+	// model and the operator derives it from the profiled hardware.
+	if !strings.Contains(body, "--dtype=bfloat16") {
+		t.Fatalf("host spec lost the stamp's dtype: %s", body)
+	}
+}
+
+func TestADeploymentWithoutRuntimeSettingsUsesTheStamps(t *testing.T) {
+	// A declaration that predates these fields must be served exactly as before.
+	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	body := string(encoded)
+	for _, expected := range []string{
+		"--max-model-len=2048", "--max-num-seqs=2", "--gpu-memory-utilization=0.80",
+		"--enforce-eager",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("host spec is missing the stamp's %q: %s", expected, body)
+		}
+	}
+}
+
+func TestADeploymentCannotOutrunTheDevicesMemoryHeadroom(t *testing.T) {
+	// The stamp-wide fraction is clamped once at startup, so a per-deployment fraction
+	// arrives after that and would otherwise be the one value reaching the server
+	// unchecked. On a 16 GiB device, 0.99 leaves under the headroom the CUDA context and
+	// driver allocations need, and the server dies allocating instead of starting.
+	state, client := newHostServer(t, hostResourceWithRuntime(0, 0, "0.99", ""))
+
+	reconciler := hostReconciler(client, testHost())
+	reconciler.smallestMemoryMiB = 16384
+
+	if _, err := reconciler.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	body := string(encoded)
+	if strings.Contains(body, "--gpu-memory-utilization=0.99") {
+		t.Fatalf("a deployment bypassed the device memory clamp: %s", body)
+	}
+	// Floored to two decimals from (16384-1024)/16384, never nudged back above it.
+	if !strings.Contains(body, "--gpu-memory-utilization=0.93") {
+		t.Fatalf("clamped fraction is not the expected 0.93: %s", body)
+	}
+}
+
+func TestAnUnprofiledPoolLeavesTheDeclaredFractionAlone(t *testing.T) {
+	// With no profile there is nothing to clamp against, and inventing a ceiling would
+	// override what somebody asked for on the strength of a guess.
+	state, client := newHostServer(t, hostResourceWithRuntime(0, 0, "0.99", ""))
+
+	if _, err := hostReconciler(client, testHost()).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	encoded, _ := json.Marshal(state.deploys["fabric-host-dep-a"].Spec)
+	if !strings.Contains(string(encoded), "--gpu-memory-utilization=0.99") {
+		t.Fatalf("an unprofiled pool changed the declared fraction: %s", encoded)
+	}
+}
+
+func TestModelsWithDifferentContextLimitsShareOneStamp(t *testing.T) {
+	// The defect these fields exist to fix. The stamp is configured for 4096 tokens, which
+	// suits the general-purpose model. A transcription model whose decoder tops out at 448
+	// cannot be served with that value at all: vLLM refuses a max-model-len above the
+	// model's own limit and exits before listening. While the setting was stamp-wide the
+	// only options were to cap every model at 448 or to leave the short one unservable.
+	qwen := resource("qwen", "dep-qwen", "acct-a", "qwen3.5-2b", 1)
+	qwen.Spec.MaxModelLen = 4096
+	qwen.Spec.MaxNumSeqs = 8
+
+	whisper := resource("whisper", "dep-whisper", "acct-a", "whisper", 1)
+	whisper.Spec.MaxModelLen = 448
+	whisper.Spec.MaxNumSeqs = 2
+
+	state, client := newHostServer(t, qwen, whisper)
+	host := testHost()
+	host.MaxModelLen = 4096
+
+	if _, err := hostReconciler(client, host).ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	for name, want := range map[string]string{
+		"fabric-host-dep-qwen":    "--max-model-len=4096",
+		"fabric-host-dep-whisper": "--max-model-len=448",
+	} {
+		workload, present := state.deploys[name]
+		if !present {
+			t.Fatalf("%s was not created: %v", name, state.deploys)
+		}
+		encoded, _ := json.Marshal(workload.Spec)
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("%s is missing %q: %s", name, want, encoded)
+		}
+	}
+}

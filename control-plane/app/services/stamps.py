@@ -41,6 +41,7 @@ from app.schemas import (
     DesiredDeployment,
     DesiredStateResponse,
     StampCapabilities,
+    VerificationConfig,
 )
 from app.services.audit import publish_outbox, record_audit
 
@@ -388,7 +389,29 @@ async def build_desired_state(
         max_generation = max(max_generation, placement.desired_generation)
 
     return DesiredStateResponse(
-        stamp_id=stamp_id, max_generation=max_generation, deployments=deployments
+        stamp_id=stamp_id,
+        max_generation=max_generation,
+        deployments=deployments,
+        verification=_verification_config(),
+    )
+
+
+def _verification_config() -> VerificationConfig:
+    """How stamps must verify the tokens this control plane signs.
+
+    Taken from this process's own signing configuration rather than from anything a
+    stamp or an operator supplied, which is what makes it authoritative: the issuer
+    returned here is exactly the one written into every token, so the two cannot
+    disagree. A stamp holding a different value is drift, and correcting it is the
+    point of sending this.
+    """
+    settings = get_settings()
+    issuer = settings.jwt_issuer.rstrip("/")
+    return VerificationConfig(
+        jwt_issuer=settings.jwt_issuer,
+        # Derived rather than configured. The document is served at the root of the same
+        # origin that signs, so a separately configured URL could only ever be wrong.
+        jwks_url=f"{issuer}/.well-known/jwks.json",
     )
 
 

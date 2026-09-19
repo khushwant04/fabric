@@ -69,11 +69,48 @@ type Deployment struct {
 	// from a per-stamp Helm value. Zero means the field was absent, which the operator
 	// reads as the chart's configured count.
 	GPUCount int `json:"gpu_count,omitempty"`
+	// MaxModelLen, MaxNumSeqs, GPUMemoryUtilization, and Execution are serving settings
+	// the deployment asked for. Carried for the operator, which turns them into the model
+	// host's own flags; the data plane ignores them.
+	//
+	// These were per-stamp Helm values, which forced one context length to suit every
+	// model on the stamp. Zero or empty means the field was absent, which the operator
+	// reads as the value it was configured with.
+	MaxModelLen int `json:"max_model_len,omitempty"`
+	MaxNumSeqs  int `json:"max_num_seqs,omitempty"`
+	// Carried as a string so the fraction reaches the server exactly as written rather
+	// than as the nearest float64 rendering of it.
+	GPUMemoryUtilization string `json:"gpu_memory_utilization,omitempty"`
+	// Execution is "eager" to skip CUDA graph capture or "cuda_graph" to capture. Empty
+	// means the stamp's configured behaviour, which is what keeps "no opinion"
+	// distinguishable from "explicitly do not capture".
+	Execution string `json:"execution,omitempty"`
+	// Verification is stamp-wide, carried here because this struct is what flows through
+	// both delivery paths: the agent writes the file directly, or declares custom
+	// resources the operator renders. It is deliberately not serialised per entry — both
+	// writers lift it to the document's single top-level section instead, since repeating
+	// one stamp's issuer on every deployment would invite the entries to disagree.
+	Verification Verification `json:"-"`
+}
+
+// Verification is how the data plane must check the tokens it is sent.
+//
+// Stamp-wide rather than per-deployment: one control plane mints every token a stamp
+// serves, so there is one issuer and one key source. It comes from the control plane's
+// own signing configuration, which is what makes it authoritative — a cluster holding a
+// different value is drift, and correcting that is the point of carrying it.
+type Verification struct {
+	JWTIssuer string `json:"jwt_issuer,omitempty"`
+	JWKSURL   string `json:"jwks_url,omitempty"`
 }
 
 // DeploymentsFile is the document the data plane loads.
 type DeploymentsFile struct {
 	Deployments []Deployment `json:"deployments"`
+	// Written once at the top rather than repeated on every entry, because it describes
+	// the stamp rather than any one deployment. Omitted when the control plane did not
+	// send one, which the data plane reads as "keep what you have" rather than "clear it".
+	Verification *Verification `json:"verification,omitempty"`
 }
 
 // writeAtomic replaces a file in one step so a reader never sees a partial
@@ -150,7 +187,18 @@ func WriteDeployments(path string, deployments []Deployment) error {
 	if sorted == nil {
 		sorted = []Deployment{}
 	}
-	payload, err := json.MarshalIndent(DeploymentsFile{Deployments: sorted}, "", "  ")
+	document := DeploymentsFile{Deployments: sorted}
+	// Lifted out of the entries to the one place it belongs. Every entry carries the same
+	// stamp-wide value, so the first one that has it decides; omitted entirely when the
+	// control plane sent nothing, which the data plane reads as "keep what you have".
+	for _, entry := range sorted {
+		if entry.Verification.JWTIssuer != "" || entry.Verification.JWKSURL != "" {
+			verification := entry.Verification
+			document.Verification = &verification
+			break
+		}
+	}
+	payload, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode deployments: %w", err)
 	}

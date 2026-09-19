@@ -141,11 +141,26 @@ type DesiredDeployment struct {
 	Deleted           bool           `json:"deleted"`
 }
 
+// VerificationConfig is how the data plane must verify the tokens this control plane
+// signs.
+//
+// Reported from the control plane's own signing configuration, so it cannot disagree with
+// the identity that actually mints tokens. A stamp holding a different issuer rejects
+// every request with the same code a forged token gets, which is why this is carried
+// rather than configured per cluster.
+type VerificationConfig struct {
+	JWTIssuer string `json:"jwt_issuer"`
+	JWKSURL   string `json:"jwks_url"`
+}
+
 // DesiredState is the response to a desired-state read.
 type DesiredState struct {
 	StampID       string              `json:"stamp_id"`
 	MaxGeneration int                 `json:"max_generation"`
 	Deployments   []DesiredDeployment `json:"deployments"`
+	// Absent from an older control plane, which leaves the stamp on its locally
+	// configured values rather than clearing them.
+	Verification *VerificationConfig `json:"verification,omitempty"`
 }
 
 // StatusReport is an observed-state write.

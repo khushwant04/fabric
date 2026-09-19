@@ -239,3 +239,83 @@ func TestAnUndeclaredGPUCountFallsBackToTheStampsSetting(t *testing.T) {
 		t.Fatalf("DesiredGPUs = %d, want the configured 2", got)
 	}
 }
+
+func TestRuntimeSettingsReachTheDeclaredResource(t *testing.T) {
+	publisher := NewPublisher(nil, namespace, stampID)
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID:         "dep-a",
+		AccountID:            "acct-a",
+		ModelAlias:           "alpha-model",
+		UpstreamURL:          "http://legacy.test",
+		MaxModelLen:          448,
+		MaxNumSeqs:           16,
+		GPUMemoryUtilization: "0.85",
+		Execution:            "cuda_graph",
+	})
+
+	// The CRD spells these camelCase. A drifted name is pruned by the API server and the
+	// pod silently falls back to the stamp's own setting, which is exactly the failure
+	// these fields exist to remove.
+	encoded, err := json.Marshal(declared.Spec)
+	if err != nil {
+		t.Fatalf("encode spec: %v", err)
+	}
+	for _, expected := range []string{
+		`"maxModelLen":448`, `"maxNumSeqs":16`,
+		`"gpuMemoryUtilization":"0.85"`, `"execution":"cuda_graph"`,
+	} {
+		if !strings.Contains(string(encoded), expected) {
+			t.Fatalf("spec does not carry %s: %s", expected, encoded)
+		}
+	}
+
+	if got := declared.Spec.DesiredMaxModelLen(2048); got != 448 {
+		t.Fatalf("DesiredMaxModelLen = %d, want the declared 448", got)
+	}
+	if got := declared.Spec.DesiredMaxNumSeqs(2); got != 16 {
+		t.Fatalf("DesiredMaxNumSeqs = %d, want the declared 16", got)
+	}
+	if got := declared.Spec.DesiredGPUMemoryUtilization("0.80"); got != "0.85" {
+		t.Fatalf("DesiredGPUMemoryUtilization = %q, want the declared 0.85", got)
+	}
+	// An eager stamp default must be overridable, which is why this is a mode.
+	if declared.Spec.DesiredEnforceEager(true) {
+		t.Fatal("a deployment asking for graph capture was still forced eager")
+	}
+}
+
+func TestUndeclaredRuntimeSettingsFallBackToTheStamp(t *testing.T) {
+	publisher := NewPublisher(nil, namespace, stampID)
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID: "dep-a",
+		AccountID:    "acct-a",
+		ModelAlias:   "alpha-model",
+		UpstreamURL:  "http://legacy.test",
+	})
+
+	encoded, _ := json.Marshal(declared.Spec)
+	for _, absent := range []string{
+		"maxModelLen", "maxNumSeqs", "gpuMemoryUtilization", "execution",
+	} {
+		if strings.Contains(string(encoded), absent) {
+			t.Fatalf("an absent %s was serialised: %s", absent, encoded)
+		}
+	}
+
+	if got := declared.Spec.DesiredMaxModelLen(2048); got != 2048 {
+		t.Fatalf("DesiredMaxModelLen = %d, want the configured 2048", got)
+	}
+	if got := declared.Spec.DesiredMaxNumSeqs(2); got != 2 {
+		t.Fatalf("DesiredMaxNumSeqs = %d, want the configured 2", got)
+	}
+	if got := declared.Spec.DesiredGPUMemoryUtilization("0.80"); got != "0.80" {
+		t.Fatalf("DesiredGPUMemoryUtilization = %q, want the configured 0.80", got)
+	}
+	// Unset must mean "whatever the stamp does", in both directions.
+	if !declared.Spec.DesiredEnforceEager(true) {
+		t.Fatal("an unset execution mode did not inherit the stamp's eager setting")
+	}
+	if declared.Spec.DesiredEnforceEager(false) {
+		t.Fatal("an unset execution mode did not inherit the stamp's graph setting")
+	}
+}

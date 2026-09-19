@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/agentcontract"
@@ -107,6 +109,13 @@ type Agent struct {
 	// known tracks assignments seen so far, because desired state is delivered
 	// incrementally by generation and a later pass returns only what changed.
 	known map[string]state.Deployment
+	// verification is how the data plane must check tokens, as the control plane last
+	// reported it. Held on the agent rather than on an assignment because it describes the
+	// stamp: desired state returns only deployments newer than the acknowledged
+	// generation, so a steady-state pass carries no assignments at all while still
+	// carrying this. An empty value means the control plane has not told us, which leaves
+	// the data plane on its locally configured values.
+	verification state.Verification
 	// Status reports the control plane has not accepted yet, retried on later
 	// passes because desired state will not mention them again.
 	pendingStatus map[string]controlplane.DesiredDeployment
@@ -424,6 +433,18 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 	}
 
 	changed := false
+	// Checked before the assignments, and on every pass rather than only when an
+	// assignment arrives: a steady-state poll returns no deployments at all, and a stamp
+	// whose issuer is wrong has to converge without waiting for an unrelated change.
+	if updated := verificationFrom(desired.Verification); updated != a.verification {
+		if updated != (state.Verification{}) {
+			a.log.Info("token verification updated from the control plane",
+				"issuer", updated.JWTIssuer, "jwks_url", updated.JWKSURL)
+		}
+		a.verification = updated
+		changed = true
+	}
+
 	for _, assignment := range desired.Deployments {
 		if assignment.Deleted {
 			if _, present := a.known[assignment.DeploymentID]; present {
@@ -448,6 +469,10 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.Replicas = replicasFromSpec(assignment.Spec)
 		entry.Strategy = strategyFromSpec(assignment.Spec)
 		entry.GPUCount = gpuCountFromSpec(assignment.Spec)
+		entry.MaxModelLen = maxModelLenFromSpec(assignment.Spec)
+		entry.MaxNumSeqs = maxNumSeqsFromSpec(assignment.Spec)
+		entry.GPUMemoryUtilization = gpuMemoryUtilizationFromSpec(assignment.Spec)
+		entry.Execution = executionFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || previous != entry {
 			changed = true
 			a.log.Info("configured deployment",
@@ -668,6 +693,10 @@ func (a *Agent) publish(ctx context.Context, configured []state.Deployment) erro
 func (a *Agent) configured() []state.Deployment {
 	entries := make([]state.Deployment, 0, len(a.known))
 	for _, entry := range a.known {
+		// Stamped on here rather than stored per assignment, so a verification change does
+		// not require rewriting every remembered entry and cannot leave two of them
+		// disagreeing about one stamp's issuer.
+		entry.Verification = a.verification
 		entries = append(entries, entry)
 	}
 	return entries
@@ -768,6 +797,107 @@ func gpuCountFromSpec(spec map[string]any) int {
 		}
 	}
 	return 0
+}
+
+// runtimeInt extracts a positive integer from the runtime sub-spec.
+//
+// JSON numbers decode into float64 through an any-typed map, so both shapes are accepted
+// rather than assuming one decoder. An absent, non-numeric, or below-one value is reported
+// as zero, which the operator reads as the stamp's configured value.
+func runtimeInt(spec map[string]any, field string) int {
+	runtime, ok := spec["runtime"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	switch value := runtime[field].(type) {
+	case float64:
+		if value >= 1 {
+			return int(value)
+		}
+	case int:
+		if value >= 1 {
+			return value
+		}
+	}
+	return 0
+}
+
+// maxModelLenFromSpec extracts the context bound this deployment asked for.
+//
+// Before this existed the bound came from a per-stamp Helm value, so one number had to
+// suit every model on the stamp: too large and a short-context model refuses to start,
+// too small and a long-context model is capped below what it can do.
+func maxModelLenFromSpec(spec map[string]any) int {
+	return runtimeInt(spec, "max_model_len")
+}
+
+// maxNumSeqsFromSpec extracts the concurrent-sequence bound this deployment asked for.
+func maxNumSeqsFromSpec(spec map[string]any) int {
+	return runtimeInt(spec, "max_num_seqs")
+}
+
+// gpuMemoryUtilizationFromSpec extracts the memory fraction as a string.
+//
+// Formatted with the shortest representation that round-trips, so 0.85 reaches the server
+// as "0.85" rather than as a long decimal expansion of the nearest float64. Values outside
+// (0,1) are treated as unset: the fraction is of total device memory, so one means asking
+// for memory the runtime itself needs.
+func gpuMemoryUtilizationFromSpec(spec map[string]any) string {
+	runtime, ok := spec["runtime"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	var fraction float64
+	switch value := runtime["gpu_memory_utilization"].(type) {
+	case float64:
+		fraction = value
+	case int:
+		fraction = float64(value)
+	default:
+		return ""
+	}
+	if fraction <= 0 || fraction >= 1 {
+		return ""
+	}
+	return strconv.FormatFloat(fraction, 'g', -1, 64)
+}
+
+// executionFromSpec extracts whether the host should capture CUDA graphs.
+//
+// A mode rather than a boolean so that a deployment expressing no opinion stays
+// distinguishable from one explicitly asking not to capture. An unrecognised value is
+// treated as unset rather than rejected, matching the other extractors.
+func executionFromSpec(spec map[string]any) string {
+	runtime, ok := spec["runtime"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	execution, _ := runtime["execution"].(string)
+	switch execution {
+	case "eager", "cuda_graph":
+		return execution
+	default:
+		return ""
+	}
+}
+
+// verificationFrom reads the control plane's reported verification contract.
+//
+// A partial answer is discarded rather than half-applied: an issuer with no key source, or
+// keys with no issuer, cannot verify anything, and adopting half of it would replace a
+// working local configuration with one that rejects everything. Nil or incomplete
+// therefore means "the control plane has not told us", which leaves the data plane on the
+// values it already has.
+func verificationFrom(reported *controlplane.VerificationConfig) state.Verification {
+	if reported == nil {
+		return state.Verification{}
+	}
+	issuer := strings.TrimSpace(reported.JWTIssuer)
+	jwks := strings.TrimSpace(reported.JWKSURL)
+	if issuer == "" || jwks == "" {
+		return state.Verification{}
+	}
+	return state.Verification{JWTIssuer: issuer, JWKSURL: jwks}
 }
 
 // releaseFromSpec extracts the runtime release the host should serve.

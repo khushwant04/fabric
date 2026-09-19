@@ -17,6 +17,10 @@ dependencies = [
   "pyjwt[crypto]==2.10.1",
   "cryptography==44.0.0",
   "python-json-logger==2.0.7",
+  # Starlette parses multipart bodies only when this is installed, and the audio
+  # endpoints are multipart. Without it those routes raise at request time rather
+  # than at import, so the gap would not show until a caller sent audio.
+  "python-multipart==0.0.20",
 ]
 
 [project.optional-dependencies]
