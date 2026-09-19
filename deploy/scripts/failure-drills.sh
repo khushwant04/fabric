@@ -77,30 +77,40 @@ MODEL_WORK=""
 MODEL_URL=""
 
 model_rollout() {
-  : "${CONTROL_TOKEN:?set a short-lived control-plane bearer token}"
+  : "${FABRIC_API_KEY:?set FABRIC_API_KEY so the drill can renew short-lived control tokens}"
   : "${ACCOUNT_ID:?set ACCOUNT_ID}"
   : "${DEPLOYMENT_ID:?set DEPLOYMENT_ID for a staging-safe deployment}"
   [ "${ALLOW_MODEL_ROLLOUT:-}" = 'yes' ] || {
     echo 'set ALLOW_MODEL_ROLLOUT=yes after confirming spare GPU capacity' >&2
     exit 2
   }
-  local generation observed restore_generation
+  local generation restore_generation fmd
+  fmd="fabric-$DEPLOYMENT_ID"
   MODEL_URL="$CP_URL/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID"
   MODEL_WORK=$(mktemp -d)
   chmod 700 "$MODEL_WORK"
+  issue_control_token() {
+    python3 -c 'import json,os; print(json.dumps({"grant_type":"api_key","audience":"fabric-control","api_key":os.environ["FABRIC_API_KEY"],"account_id":os.environ["ACCOUNT_ID"]}))' \
+      | curl -fsS -X POST "$CP_URL/v1/token" -H 'content-type: application/json' --data-binary @- \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+  }
+  CONTROL_TOKEN=$(issue_control_token)
   wait_for_generation() {
-    local wanted=$1 current=0
-    for _ in $(seq 1 90); do
-      current=$(curl -fsS "$MODEL_URL/status" -H "authorization: Bearer $CONTROL_TOKEN" \
-        | python3 -c 'import json,sys; rows=json.load(sys.stdin); print(max((x.get("observed_generation",0) for x in rows),default=0))')
-      [ "$current" -ge "$wanted" ] && return 0
+    local current=0 phase=''
+    for _ in $(seq 1 120); do
+      read -r current phase < <(kubectl get fabricmodeldeployment "$fmd" \
+        -n "$STAMP_NAMESPACE" \
+        -o jsonpath='{.metadata.generation}{" "}{.status.observedGeneration}{" "}{.status.phase}{"\n"}' \
+        | awk '{print ($1 == $2), $3}')
+      [ "$current" = 1 ] && [ "$phase" = ready ] && return 0
       sleep 10
     done
-    echo "generation $wanted did not converge (last observed $current)" >&2
+    echo "Kubernetes rollout did not converge for $fmd (matched=$current phase=$phase)" >&2
     return 1
   }
   restore() {
     [ -s "$MODEL_WORK/original-request.json" ] || return 0
+    CONTROL_TOKEN=$(issue_control_token)
     curl -fsS -X PATCH "$MODEL_URL" -H "authorization: Bearer $CONTROL_TOKEN" \
       -H 'content-type: application/json' --data-binary @"$MODEL_WORK/original-request.json" \
       >"$MODEL_WORK/restored.json"
