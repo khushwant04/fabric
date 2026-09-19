@@ -31,25 +31,33 @@ inference_canary() {
     | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]; print("inference: serving from local verification")'
 }
 
+CP_ORIGINAL_REPLICAS=""
+restore_cp() {
+  trap - EXIT
+  [ -n "$CP_ORIGINAL_REPLICAS" ] || return 0
+  kubectl scale deployment "$CP_DEPLOYMENT" -n "$CP_NAMESPACE" \
+    --replicas="$CP_ORIGINAL_REPLICAS" >/dev/null
+  kubectl rollout status deployment/"$CP_DEPLOYMENT" -n "$CP_NAMESPACE" \
+    --timeout="$TIMEOUT" >/dev/null
+}
+
 cp_outage() {
-  local replicas
-  replicas=$(kubectl get deployment "$CP_DEPLOYMENT" -n "$CP_NAMESPACE" -o jsonpath='{.spec.replicas}')
-  restore() {
-    kubectl scale deployment "$CP_DEPLOYMENT" -n "$CP_NAMESPACE" --replicas="$replicas" >/dev/null
-    kubectl rollout status deployment/"$CP_DEPLOYMENT" -n "$CP_NAMESPACE" --timeout="$TIMEOUT" >/dev/null
-  }
-  trap restore EXIT
+  CP_ORIGINAL_REPLICAS=$(kubectl get deployment "$CP_DEPLOYMENT" -n "$CP_NAMESPACE" -o jsonpath='{.spec.replicas}')
+  trap restore_cp EXIT
   # Warm and prove the token before imposing failure.
   inference_canary
   kubectl scale deployment "$CP_DEPLOYMENT" -n "$CP_NAMESPACE" --replicas=0 >/dev/null
-  kubectl wait --for=delete pod -n "$CP_NAMESPACE" -l app.kubernetes.io/name=fabric-control-plane --timeout=3m >/dev/null
+  # Migration Jobs share the app name. Select only deployment pods, which have no
+  # component label, or completed migration pods make this wait time out forever.
+  kubectl wait --for=delete pod -n "$CP_NAMESPACE" \
+    -l 'app.kubernetes.io/name=fabric-control-plane,!app.kubernetes.io/component' \
+    --timeout=3m >/dev/null
   inference_canary
   # An outage must never become fail-open.
   code=$(curl -sS -o /dev/null -w '%{http_code}' "$DP_URL/v1/models" \
     -H 'authorization: Bearer definitely-invalid')
   [ "$code" = 401 ] || { echo "invalid token returned $code during outage" >&2; exit 1; }
-  restore
-  trap - EXIT
+  restore_cp
   curl -fsS "$CP_URL/readyz" >/dev/null
   echo 'cp-outage: cached-key inference survived and invalid tokens stayed closed'
 }
