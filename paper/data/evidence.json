@@ -1,0 +1,87 @@
+{
+  "provenance": {
+    "generated_for": "Fabric technical paper",
+    "source_commit": "f50fdc6d25d0bb644fbcdb6703d82f09923a6bea",
+    "rule": "Values are copied from dated repository records or the September 2026 live audit. Missing observations are not imputed."
+  },
+  "deployment_snapshot": {
+    "date": "2026-09-20",
+    "region": "Azure Central India",
+    "resource_group": "rg-inference",
+    "kubernetes_version": "1.35.7",
+    "public_ip": "4.213.211.146",
+    "control_plane_replicas": 2,
+    "postgresql_version": "18",
+    "postgresql_sku": "B1ms",
+    "postgresql_storage_gib": 64,
+    "gpu_nodes": 5,
+    "gpu_sku": "Standard_NC8as_T4_v3",
+    "gpu_model": "NVIDIA T4",
+    "model_hosts": 5,
+    "dcgm_exporters": 5,
+    "acr_repositories": 4,
+    "cloudflare": {
+      "control": "proxied",
+      "grafana": "proxied",
+      "inference": "DNS-only",
+      "ssl_mode": "not established by repository evidence"
+    },
+    "stamp_service_account_gap": "The shared stamp pod automounts the agent service-account token into agent, data-plane, and collector containers."
+  },
+  "fleet_snapshots": [
+    {
+      "label": "18 Sep\nearly validation",
+      "evidence": "repository-recorded",
+      "gpu_nodes": 8,
+      "serving_replicas": 6,
+      "spare_nodes": 2,
+      "model_aliases": 4
+    },
+    {
+      "label": "pre-scale\naudit",
+      "evidence": "live observation",
+      "gpu_nodes": 8,
+      "serving_replicas": 7,
+      "spare_nodes": 1,
+      "model_aliases": 5
+    },
+    {
+      "label": "20 Sep\npost-scale",
+      "evidence": "live observation",
+      "gpu_nodes": 5,
+      "serving_replicas": 5,
+      "spare_nodes": 0,
+      "model_aliases": 5
+    }
+  ],
+  "current_models": [
+    {"alias": "qwen3.5-0.8b", "weight_gb": 1.7, "replicas": 1, "ready": 1, "http_status": 200},
+    {"alias": "qwen3.5-2b", "weight_gb": 4.5, "replicas": 1, "ready": 1, "http_status": 200},
+    {"alias": "qwen3.5-4b", "weight_gb": 9.3, "replicas": 1, "ready": 1, "http_status": 200},
+    {"alias": "qwen2.5-coder-3b", "weight_gb": 6.2, "replicas": 1, "ready": 1, "http_status": 200},
+    {"alias": "phi4-mini", "weight_gb": 7.7, "replicas": 1, "ready": 1, "http_status": 200}
+  ],
+  "admission_burst": {
+    "evidence": "repository-recorded earlier two-T4 pilot",
+    "offered_requests": 30,
+    "served": 5,
+    "rate_limited_429": 25,
+    "usage_attributed": 30
+  },
+  "kernel_microbenchmark": {
+    "evidence": "immutable development artifact; not production or T4 evidence",
+    "hardware": "RTX 4070 Laptop GPU",
+    "engine": "vLLM 0.11.0 unpacked recurrence",
+    "sequences": [1, 16, 32],
+    "baseline_us": [19.041, 157.564, 305.720],
+    "fabric_us": [16.032, 159.932, 307.124],
+    "warmups": 100,
+    "repetitions": 500
+  },
+  "cost_scenarios": {
+    "evidence": "derived from the 18 Sep Azure retail-price estimate; not invoices",
+    "gpu_nodes": [0, 2, 4, 5, 6, 7, 8],
+    "hourly_usd": [1.01, 2.67, 4.32, 5.145, 5.98, 6.80, 7.63],
+    "current_five_node_caveat": "The five-node point reuses the earlier non-GPU fixed-cost assumption although PostgreSQL was later observed on a different SKU."
+  }
+}
