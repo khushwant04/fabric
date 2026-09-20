@@ -1,7 +1,8 @@
 # Fabric Adaptive Inference
 
 **Status:** Research and implementation design
-**Target:** Fabric's five-model, 8× NVIDIA T4 inference fleet
+**Pre-scale research target:** Fabric's five-model, 8× NVIDIA T4 inference fleet.
+**Operational update (2026-09-20):** the live fleet now has **5 T4 nodes** and **one replica of each model**. All five GPUs are occupied, so the current topology has no rollout/canary spare. The baseline below is retained as the dated pre-scale experimental design, not the current deployment.
 **Primary goal:** maximize accepted output throughput per GPU while preserving explicit quality, latency, reliability, memory, and cost constraints.
 
 ## Abstract
@@ -14,9 +15,9 @@ The research question is:
 
 The intended contribution is a coherent production system—not unrelated optimizations collected for a benchmark.
 
-## 1. Current baseline
+## 1. Pre-scale research baseline
 
-The fleet serves:
+The pre-scale research fleet served:
 
 | Alias | Architecture | Replicas | Role |
 |---|---|---:|---|
@@ -26,7 +27,7 @@ The fleet serves:
 | `qwen2.5-coder-3b` | Dense grouped-query attention | 1 | Code |
 | `phi4-mini` | Dense grouped-query attention | 1 | STEM/reasoning |
 
-Seven T4s serve and one remains available for rollout/canary work. All deployments currently share a conservative stamp-wide profile: FP16, 4096 context, eight sequences, 85% memory utilization, eager execution, and least-in-flight routing.
+In that pre-scale baseline, seven T4s served and one remained available for rollout/canary work. The 2026-09-20 live topology instead uses five T4s for five one-replica models, with no spare. All deployments use a conservative profile: FP16, 4096 context, eight sequences, 85% memory utilization, eager execution, and least-in-flight routing.
 
 This is operationally safe but structurally inefficient. Qwen3.5 has full attention only every fourth layer and fixed recurrent state in the other layers; dense Qwen2.5/Phi accumulate KV state in every layer. One memory, batching, graph, and routing policy cannot be optimal for both.
 

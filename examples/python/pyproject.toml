@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling==1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fabric-examples"
+version = "0.1.0"
+description = "Runnable customer examples for the Fabric APIs."
+requires-python = ">=3.12"
+dependencies = [
+  "httpx==0.28.1",
+  "openai==3.16.2",
+]
+
+[project.optional-dependencies]
+agents = ["openai-agents==0.22.3"]
+dev = ["ruff==0.8.4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["fabric_examples"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
