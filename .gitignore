@@ -1,3 +1,9 @@
 # Python
 __pycache__/
 *.py[cod]
+
+
+# Local environments and example credentials
+.venv/
+.ruff_cache/
+examples/.env

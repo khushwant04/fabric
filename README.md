@@ -7,11 +7,7 @@ hardware.
 Built around a strict control-plane/data-plane split: inference never traverses the control
 plane, so serving continues when the control plane does not.
 
-**Status.** Deployed and serving. Two NVIDIA T4 nodes on Azure Kubernetes, PostgreSQL with
-row-level security in force, three public HTTPS endpoints, per-request metering. The frontend
-is a scaffold and there is no autoscaling. See [Current state](docs/context/current-state.md)
-for the exact boundary, and the [project review](docs/project-review.md) for measured results
-and the claims those measurements do not support.
+**Status.** Deployed and serving. Five NVIDIA T4 nodes on Azure Kubernetes Service currently host five model varieties with one replica each. PostgreSQL row-level security is enforced, three public HTTPS endpoints are live, and usage is metered per request. The frontend remains a scaffold and GPU autoscaling is not enabled. See [Current state](docs/context/current-state.md) for implementation details and the [technical paper](FABRIC-TECHNICAL-PAPER-LATEX.md) for the latest audited topology, evidence boundaries, and limitations.
 
 ---
 
@@ -72,41 +68,23 @@ The agent polls outbound only. The control plane never dials into a customer clu
 
 ## Quick start
 
-Inference uses a short-lived token obtained by exchanging an API key. The data plane verifies
-that token locally, which is why serving does not depend on the control plane being reachable.
+Fabric includes [runnable API examples](examples/README.md) for Python and curl. They exchange an
+API key for a short-lived inference token; the raw `fab_key_…` value is never sent to the data
+plane.
 
-```python
-import os, requests
-from openai import OpenAI
-
-token = requests.post(
-    "https://fabric-cp-api.hexelstudio.com/v1/token",
-    json={
-        "grant_type": "api_key",
-        "api_key": os.environ["FABRIC_API_KEY"],
-        "audience": "fabric-inference",
-    },
-    timeout=20,
-).json()["access_token"]
-
-client = OpenAI(
-    base_url="https://fabric-inference-api.hexelstudio.com/v1",
-    api_key=token,
-)
-
-stream = client.chat.completions.create(
-    model="launch-model",
-    messages=[{"role": "user", "content": "Explain how rivers shape land."}],
-    max_tokens=256,
-    stream=True,
-)
-for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="")
+```bash
+cp examples/.env.example examples/.env
+# Set FABRIC_CONTROL_URL, FABRIC_INFERENCE_URL, and FABRIC_API_KEY, then:
+set -a; source examples/.env; set +a
+uv sync --project examples/python
+uv run --project examples/python python examples/python/scripts/list_models.py
+uv run --project examples/python python examples/python/scripts/chat.py
 ```
 
-Pass the exchanged token as `api_key`, not the `fab_key_…` value: the raw key is refused by
-the data plane, which only trusts Fabric-signed tokens. Tokens are short-lived, so long-running
-clients should re-exchange.
+`FABRIC_MODEL` optionally selects a deployment alias (default `qwen3.5-0.8b`). Tokens are
+short-lived and audience-specific, so long-running clients should re-exchange. See the
+[examples guide](examples/README.md) for streaming, vision, audio, tools, concurrency, read-only
+control-plane inspection, API compatibility, and caveats.
 
 ---
 
@@ -158,10 +136,9 @@ Details in [Packaging and deployment](docs/context/packaging-deployment.md).
 
 ---
 
-## Measured results
+## Earlier measured results
 
-From the deployed cluster. Full context, including what these numbers do not show, is in the
-[project review](docs/project-review.md).
+From an earlier deployed validation snapshot. Full context, including what these numbers do not show, is in the [project review](docs/project-review.md); do not treat them as benchmarks of the current five-node topology.
 
 | Observation | Value |
 |---|---|

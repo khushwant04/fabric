@@ -1,14 +1,15 @@
 # Fabric Deployment
 
-**Target:** a brand-new, self-contained Fabric installation in Azure `centralindia` with 8× NVIDIA T4 GPUs.
+**Initial target (historical):** a brand-new, self-contained Fabric installation in Azure `centralindia` with 8× NVIDIA T4 GPUs.
 **Rule for this deployment:** every resource is **newly created**. Nothing in the subscription is reused, shared, or modified. The existing `rg-cp-prod-global` / `aks-prod-global-01` / `postgres-db` / `kv-cp-prod-centralindia` resources are **out of scope and must not be touched**.
-**Last validated:** 2026-09-18, against the live subscription and the charts in this repo.
+**Initial validation:** 2026-09-18, against the live subscription and the charts in this repo.
+**Latest live update:** 2026-09-20 — the GPU pool was reduced to **5 T4 nodes**, and the five model varieties now run at **one replica each**. All 5 nodes and model pods became Ready, all five custom resources reported Available, and an authenticated chat request to every alias returned HTTP 200. There is currently no spare rollout GPU.
 
-This document is the deployment plan and the running status log. Update the status tables as steps complete.
+This document preserves the original deployment plan and dated as-built evidence. Unless a section is explicitly marked as the latest live update, its node, replica, monitoring-target, and cost counts describe the 2026-09-18 eight-node validation snapshot.
 
 ---
 
-## 1. Status at a glance
+## 1. Status at a glance — 2026-09-18 snapshot
 
 | Phase | State |
 |---|---|
@@ -32,7 +33,7 @@ This document is the deployment plan and the running status log. Update the stat
 | Audio endpoints | **Route shipped and live**; no audio model can run yet — see §9 #13 |
 | CI/CD | **Not started** |
 
-### Live endpoints
+### Live endpoints — 2026-09-18 snapshot
 | Endpoint | Status |
 |---|---|
 | `https://fabric-cp.hexelstudio.com/.well-known/jwks.json` | **200** — serving the signing key |
@@ -42,7 +43,7 @@ This document is the deployment plan and the running status log. Update the stat
 | `https://inference.hexelstudio.com/v1/audio/transcriptions` | **Route live**, awaiting a servable audio model (§9 #13) |
 | `https://fabric-grafana.hexelstudio.com` | **Grafana 13.2.2**, Fabric dashboard imported |
 
-### Observability
+### Observability — 2026-09-18 snapshot
 
 Installed per `deploy/observability/README.md`, in namespace `fabric-observability`.
 
@@ -68,7 +69,7 @@ helm upgrade st deploy/helm/fabric-stamp -n fabric-stamp --reuse-values \
   --set enrollment.existingSecret=st-fabric-stamp-enrollment
 ```
 
-### The model fleet
+### The model fleet — 2026-09-18 snapshot
 
 `Qwen3.5` was chosen over the original single-model plan: it is **natively multimodal**, so vision needs no separate deployment, and `Qwen3.5-2B` is the launch model already described in `docs/project-review.md:73`.
 

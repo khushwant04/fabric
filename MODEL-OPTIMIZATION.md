@@ -1,7 +1,8 @@
 # Model-Specific Performance and Novel Technique Plan
 
-**Status:** Proposed, grounded in the five models currently serving on the Fabric T4 fleet.
+**Status:** Proposed, grounded in the five models serving on the Fabric T4 fleet.
 **Date:** 2026-09-18
+**Operational update:** As of 2026-09-20, the live fleet has five T4 nodes and one replica per model. Pre-scale references to three `qwen3.5-2b` replicas or a spare GPU below describe the original eight-node research baseline, not current capacity.
 **Primary recommendation:** build an **Architecture-Aware Memory Envelope Controller (AMEC)** before tuning another isolated kernel.
 
 ---
@@ -13,7 +14,7 @@ All five deployments run on one 16 GiB NVIDIA T4 per replica with FP16, 4096 con
 | Alias | Architecture | Layers | Hidden | Attention / KV heads | Weight size | Important property |
 |---|---|---:|---:|---|---:|---|
 | `qwen3.5-0.8b` | Qwen3.5 hybrid multimodal | 24 | 1024 | 8 / 2; full attention every 4th layer | 1.7 GB | Large memory headroom; fixed recurrent state on 18 layers, KV on 6 |
-| `qwen3.5-2b` | Qwen3.5 hybrid multimodal | 24 | 2048 | 8 / 2; full attention every 4th layer | 4.5 GB | Primary research target; 3 replicas; same recurrent geometry as 0.8B |
+| `qwen3.5-2b` | Qwen3.5 hybrid multimodal | 24 | 2048 | 8 / 2; full attention every 4th layer | 4.5 GB | Primary research target; currently 1 replica (pre-scale plan: 3); same recurrent geometry as 0.8B |
 | `qwen3.5-4b` | Qwen3.5 hybrid multimodal | 32 | 2560 | 16 / 4; full attention every 4th layer | 9.3 GB | Memory-constrained; 24 recurrent + 8 full-attention layers |
 | `qwen2.5-coder-3b` | Dense decoder, grouped-query attention | 36 | 2048 | 16 / 2 | 6.2 GB | KV grows with context in every layer; repeated code/system prefixes likely |
 | `phi4-mini` | Dense Phi-3 decoder | 32 | 3072 | 24 / 8 | 7.7 GB | Larger KV per token than Coder because it has 8 KV heads and wider hidden state |
@@ -262,9 +263,9 @@ This converts Fabric from “deploy a model on a GPU” into “admit a measurab
 
 ---
 
-## 6. Additional novel technique: Rollout-Spare as an optimization budget
+## 6. Additional novel technique: temporary rollout capacity as an optimization budget
 
-The fleet intentionally keeps one T4 unused for safe one-replica rollouts. Treat this spare as a controlled **experimental lane**, not idle waste:
+The pre-scale eight-node fleet intentionally kept one T4 unused for safe one-replica rollouts. The current five-node fleet has no spare; applying this technique now requires temporarily scaling to six nodes before launching a candidate. Treat that temporary capacity as a controlled **experimental lane**, not a permanent idle allocation:
 
 1. launch a candidate runtime/profile on the spare;
 2. warm weights/graphs/cache without customer traffic;
@@ -274,9 +275,9 @@ The fleet intentionally keeps one T4 unused for safe one-replica rollouts. Treat
 6. promote or set candidate weight to zero and drain;
 7. retain the spare for the next candidate.
 
-This makes the ~$604/month spare GPU a continuous promotion mechanism. The paper can compare deployment velocity and regression containment against offline-only tuning.
+At the documented rate, keeping an eighth pre-scale GPU permanently cost about $604/month; temporary capacity preserves the promotion mechanism without that full standing cost. The paper can compare deployment velocity and regression containment against offline-only tuning.
 
-For the three-replica Qwen3.5-2B deployment, one spare cannot stage all three candidates simultaneously. Canary one candidate replica first; only scale the promoted profile after one old replica drains. Do not claim full zero-downtime replacement of all three without three spare GPUs.
+For the historical three-replica Qwen3.5-2B deployment, one spare could not stage all three candidates simultaneously. The current deployment has one replica, so one temporary node can stage its candidate. Canary one candidate replica first and remove temporary capacity only after the old replica drains.
 
 ---
 
