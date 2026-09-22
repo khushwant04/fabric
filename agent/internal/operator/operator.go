@@ -43,6 +43,21 @@ const (
 	ConditionApplied = "Applied"
 )
 
+// ModelCapabilities is the bounded routing metadata carried from desired state to
+// the data-plane configuration. Snake-case nested names match the public deployment
+// specification and keep the direct and operator delivery paths identical.
+type ModelCapabilities struct {
+	AutoEnabled   bool `json:"auto_enabled"`
+	Chat          bool `json:"chat"`
+	Completion    bool `json:"completion"`
+	Vision        bool `json:"vision"`
+	Transcription bool `json:"transcription"`
+	Translation   bool `json:"translation"`
+	Code          bool `json:"code"`
+	Reasoning     bool `json:"reasoning"`
+	Priority      int  `json:"priority"`
+}
+
 // Spec is the declared intent for one deployment on this stamp.
 //
 // It carries the owning account because a managed stamp serves several: the data plane
@@ -71,6 +86,9 @@ type Spec struct {
 	// right choice depends on what is being served, not on where. Empty means the data
 	// plane's own default, which is least-in-flight.
 	Strategy string `json:"strategy,omitempty"`
+	// Capabilities lets the data plane choose this deployment for model=auto without
+	// consulting the control plane or inspecting any other account's assignments.
+	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 	// GPUCount is how many devices one replica needs, which becomes the container's
 	// nvidia.com/gpu limit. The control plane admits the placement by comparing
 	// replicas x this against the stamp's reported capacity (ADR 0013), so the pod has to
@@ -234,8 +252,10 @@ type dataPlaneEntry struct {
 	Backends      []dataPlaneBackend `json:"backends,omitempty"`
 	// Strategy is how the data plane balances across Backends. Omitted when the
 	// deployment does not name one, so the data plane applies its own default.
-	Strategy      string `json:"strategy,omitempty"`
-	RouteRevision string `json:"route_revision,omitempty"`
+	Strategy      string             `json:"strategy,omitempty"`
+	Capabilities  *ModelCapabilities `json:"capabilities,omitempty"`
+	MaxModelLen   int                `json:"max_model_len,omitempty"`
+	RouteRevision string             `json:"route_revision,omitempty"`
 }
 
 // dataPlaneBackend is one model-host endpoint in a deployment's pool.
@@ -613,6 +633,8 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 			UpstreamURL:   item.Spec.UpstreamURL,
 			UpstreamModel: item.Spec.UpstreamModel,
 			Strategy:      item.Spec.Strategy,
+			Capabilities:  item.Spec.Capabilities,
+			MaxModelLen:   item.Spec.MaxModelLen,
 		}
 		if pool := backends[item.Spec.DeploymentID]; len(pool) > 0 {
 			entry.Backends = pool

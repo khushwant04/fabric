@@ -229,6 +229,30 @@ class RuntimeSpec(BaseModel):
     execution: Literal["eager", "cuda_graph"] | None = None
 
 
+class ModelCapabilities(BaseModel):
+    """Bounded metadata used by the stamp-local ``model=auto`` router.
+
+    These flags describe what the served release can do; they do not grant access.
+    Selection is still restricted to deployments owned by the authenticated account.
+    Text chat/completion default on for compatibility with deployments created before
+    capability routing existed. Audio and vision always require an explicit declaration.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    auto_enabled: bool = True
+    chat: bool = True
+    completion: bool = True
+    vision: bool = False
+    transcription: bool = False
+    translation: bool = False
+    code: bool = False
+    reasoning: bool = False
+    #: Tie-break deployments with otherwise equal task fit. This is deliberately a
+    #: small bounded operator preference rather than a claimed universal quality score.
+    priority: int = Field(default=0, ge=-100, le=100)
+
+
 class ResourceSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -250,6 +274,7 @@ class DeploymentSpec(BaseModel):
     runtime: RuntimeSpec
     replicas: int = Field(default=1, ge=1, le=32)
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     limits_policy_ref: str | None = Field(default=None, max_length=200)
 
 

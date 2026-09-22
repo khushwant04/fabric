@@ -305,6 +305,9 @@
       "DeploymentSpec": {
         "additionalProperties": false,
         "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelCapabilities"
+          },
           "limits_policy_ref": {
             "anyOf": [
               {
@@ -995,6 +998,61 @@
           "collected_at"
         ],
         "title": "MetricsReportRequest",
+        "type": "object"
+      },
+      "ModelCapabilities": {
+        "additionalProperties": false,
+        "description": "Bounded metadata used by the stamp-local ``model=auto`` router.\n\nThese flags describe what the served release can do; they do not grant access.\nSelection is still restricted to deployments owned by the authenticated account.\nText chat/completion default on for compatibility with deployments created before\ncapability routing existed. Audio and vision always require an explicit declaration.",
+        "properties": {
+          "auto_enabled": {
+            "default": true,
+            "title": "Auto Enabled",
+            "type": "boolean"
+          },
+          "chat": {
+            "default": true,
+            "title": "Chat",
+            "type": "boolean"
+          },
+          "code": {
+            "default": false,
+            "title": "Code",
+            "type": "boolean"
+          },
+          "completion": {
+            "default": true,
+            "title": "Completion",
+            "type": "boolean"
+          },
+          "priority": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": -100.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "reasoning": {
+            "default": false,
+            "title": "Reasoning",
+            "type": "boolean"
+          },
+          "transcription": {
+            "default": false,
+            "title": "Transcription",
+            "type": "boolean"
+          },
+          "translation": {
+            "default": false,
+            "title": "Translation",
+            "type": "boolean"
+          },
+          "vision": {
+            "default": false,
+            "title": "Vision",
+            "type": "boolean"
+          }
+        },
+        "title": "ModelCapabilities",
         "type": "object"
       },
       "OIDCProviderRequest": {

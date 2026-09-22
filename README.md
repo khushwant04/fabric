@@ -56,6 +56,7 @@ The agent polls outbound only. The control plane never dials into a customer clu
 | Capability | Detail |
 |---|---|
 | **OpenAI-compatible serving** | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, streaming. Verified against the official `openai` Python SDK |
+| **Context-aware model routing** | Use `model: "auto"` to select an account-owned, healthy deployment by endpoint, modality, context bound, code/reasoning fit, and configured priority—without a request-time control-plane call |
 | **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
 | **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
 | **Declarative deployment** | A customer declares intent; the operator reconciles GPU hosts to match, one at a time, rolling back a release that never becomes ready |
@@ -81,8 +82,16 @@ uv run --project examples/python python examples/python/scripts/list_models.py
 uv run --project examples/python python examples/python/scripts/chat.py
 ```
 
-`FABRIC_MODEL` optionally selects a deployment alias (default `qwen3.5-0.8b`). Tokens are
-short-lived and audience-specific, so long-running clients should re-exchange. See the
+`FABRIC_MODEL` optionally selects a deployment alias (default `qwen3.5-0.8b`). Set it to
+`auto` to route from request context. Deployments declare bounded `capabilities` flags such as
+`vision`, `code`, `reasoning`, `transcription`, and `translation`, plus an optional `priority`
+from -100 to 100. Chat and completion default to enabled for legacy deployments; structurally
+different vision and audio inputs are opt-in. An OpenAI `extra_body` value such as
+`{"routing": {"task": "code"}}` can override heuristic task detection. Routing stays within the
+authenticated account and consumes the `routing` extension before the request reaches the model
+host.
+
+Tokens are short-lived and audience-specific, so long-running clients should re-exchange. See the
 [examples guide](examples/README.md) for streaming, vision, audio, tools, concurrency, read-only
 control-plane inspection, API compatibility, and caveats.
 
