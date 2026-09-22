@@ -69,6 +69,55 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "AccountUsageResponse": {
+        "properties": {
+          "events": {
+            "title": "Events",
+            "type": "integer"
+          },
+          "first_occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Occurred At"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "last_occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Occurred At"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "events",
+          "input_tokens",
+          "output_tokens",
+          "first_occurred_at",
+          "last_occurred_at"
+        ],
+        "title": "AccountUsageResponse",
+        "type": "object"
+      },
       "ApiKeyCreateRequest": {
         "properties": {
           "expires_in_days": {
@@ -2788,6 +2837,52 @@
           }
         },
         "summary": "Create deployment intent",
+        "tags": [
+          "deployments"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/deployments/usage": {
+      "get": {
+        "description": "Aggregate operational usage reported across all account deployments.",
+        "operationId": "read_account_usage_v1_accounts__account_id__deployments_usage_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read account-wide reported usage totals",
         "tags": [
           "deployments"
         ]

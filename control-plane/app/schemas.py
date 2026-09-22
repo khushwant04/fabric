@@ -457,6 +457,14 @@ class UsageStampBreakdown(BaseModel):
     output_tokens: int
 
 
+class AccountUsageResponse(BaseModel):
+    events: int
+    input_tokens: int
+    output_tokens: int
+    first_occurred_at: dt.datetime | None
+    last_occurred_at: dt.datetime | None
+
+
 class DeploymentUsageResponse(BaseModel):
     deployment_id: uuid.UUID
     events: int

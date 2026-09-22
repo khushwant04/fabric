@@ -12,6 +12,7 @@ import {
 } from "@/lib/fabric/demo-data"
 import { getConsoleContext, getFabricAccessToken } from "@/lib/fabric/session"
 import type {
+  AccountUsage,
   ApiKey,
   Deployment,
   DeploymentStatus,
@@ -80,6 +81,41 @@ export async function getDeploymentStatuses(deploymentId: string) {
   }
   return accountRequest<DeploymentStatus[]>(
     `/v1/accounts/${context.account.id}/deployments/${deploymentId}/status`
+  )
+}
+
+export async function getAccountUsage() {
+  const context = await getConsoleContext()
+  if (context.demo) {
+    return Object.values(demoUsage).reduce<AccountUsage>(
+      (total, usage) => ({
+        events: total.events + usage.events,
+        input_tokens: total.input_tokens + usage.input_tokens,
+        output_tokens: total.output_tokens + usage.output_tokens,
+        first_occurred_at:
+          !total.first_occurred_at ||
+          (usage.first_occurred_at &&
+            usage.first_occurred_at < total.first_occurred_at)
+            ? usage.first_occurred_at
+            : total.first_occurred_at,
+        last_occurred_at:
+          !total.last_occurred_at ||
+          (usage.last_occurred_at &&
+            usage.last_occurred_at > total.last_occurred_at)
+            ? usage.last_occurred_at
+            : total.last_occurred_at,
+      }),
+      {
+        events: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        first_occurred_at: null,
+        last_occurred_at: null,
+      }
+    )
+  }
+  return accountRequest<AccountUsage>(
+    `/v1/accounts/${context.account.id}/deployments/usage`
   )
 }
 

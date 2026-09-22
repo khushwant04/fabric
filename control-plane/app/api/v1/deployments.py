@@ -11,6 +11,7 @@ from app.core import scopes as scope_defs
 from app.core.database import get_db_session
 from app.core.security import PrincipalContext, account_scope
 from app.schemas import (
+    AccountUsageResponse,
     DeploymentCreateRequest,
     DeploymentResponse,
     DeploymentStatusResponse,
@@ -30,7 +31,7 @@ from app.services.deployments import (
     list_placements,
     update_deployment,
 )
-from app.services.usage import summarize_deployment_usage
+from app.services.usage import summarize_account_usage, summarize_deployment_usage
 
 router = APIRouter(tags=["deployments"])
 
@@ -222,6 +223,20 @@ async def read_status(
 ) -> list[DeploymentStatusResponse]:
     records = await list_deployment_status(session, principal.account_id, deployment_id)
     return [DeploymentStatusResponse.model_validate(record) for record in records]
+
+
+@router.get(
+    _BASE + "/usage",
+    response_model=AccountUsageResponse,
+    summary="Read account-wide reported usage totals",
+)
+async def read_account_usage(
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> AccountUsageResponse:
+    """Aggregate operational usage reported across all account deployments."""
+    summary = await summarize_account_usage(session, account_id=principal.account_id)
+    return AccountUsageResponse.model_validate(summary)
 
 
 @router.get(
