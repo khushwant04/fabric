@@ -133,15 +133,109 @@ cd runtime && .venv/bin/python -m harness.runner --target rtx4070-dev
 Declaring a harness target that does not match the GPU present fails closed, so a development
 measurement cannot be recorded as a production result.
 
-### On a cluster
+### Bootstrap a Kubernetes stamp
+
+`deploy/scripts/kind-e2e.sh` runs the complete loop on a disposable local cluster. To connect a persistent Kubernetes cluster to an existing Fabric control plane, use the workflow below.
+
+**Prerequisites:** Kubernetes 1.27 or newer, Helm 3, a default StorageClass, outbound HTTPS access to the control plane, and pull access to the configured agent and data-plane images. GPU clusters must expose allocatable `nvidia.com/gpu` resources. Keep `persistence.enabled=true`: the agent stores its durable identity on that volume, while enrollment tokens are single use.
+
+Set the control-plane URL and exchange an account API key for a short-lived control token. API-key exchange derives `ACCOUNT_ID` from the key:
 
 ```bash
-deploy/scripts/kind-e2e.sh                 # whole loop on a throwaway cluster
-helm install cp deploy/helm/fabric-control-plane -n fabric-system
-helm install stamp deploy/helm/fabric-stamp -n fabric
+export CONTROL_URL=https://control.fabric.example
+export FABRIC_API_KEY='fab_key_...'
+
+TOKEN_RESPONSE=$(curl -fsS -X POST "$CONTROL_URL/v1/token" \
+  -H 'Content-Type: application/json' \
+  -d "{\"grant_type\":\"api_key\",\"api_key\":\"$FABRIC_API_KEY\",\"audience\":\"fabric-control\"}")
+export CONTROL_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+export ACCOUNT_ID=$(printf '%s' "$TOKEN_RESPONSE" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["account_id"])')
 ```
 
-Details in [Packaging and deployment](docs/context/packaging-deployment.md).
+For a newly self-hosted control plane, create the first account and API key from its pod before running the exchange above:
+
+```bash
+kubectl exec -n fabric-control deploy/cp-fabric-control-plane -- \
+  python -m app.cli bootstrap-account \
+    --slug acme --email ops@example.com --name "Acme"
+```
+
+The command prints the account ID and API key once. A customer-owned cluster uses `byoi`; `managed` enrollment is reserved for Fabric's system account.
+
+Create a token, immediately place it in a Kubernetes Secret, and avoid passing the raw credential through Helm values or command history:
+
+```bash
+TOKEN_RESPONSE=$(curl -fsS -X POST \
+  "$CONTROL_URL/v1/accounts/$ACCOUNT_ID/stamp-enrollment-tokens" \
+  -H "Authorization: Bearer $CONTROL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"allowed_mode":"byoi","expires_in_minutes":60}')
+ENROLLMENT_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["enrollment_token"])')
+
+kubectl create namespace fabric-stamp
+kubectl -n fabric-stamp create secret generic stamp-enrollment \
+  --from-literal=enrollment-token="$ENROLLMENT_TOKEN"
+unset ENROLLMENT_TOKEN TOKEN_RESPONSE
+```
+
+Install the chart against an existing OpenAI-compatible model host:
+
+```bash
+helm upgrade --install stamp deploy/helm/fabric-stamp \
+  --namespace fabric-stamp \
+  --set controlPlane.url="$CONTROL_URL" \
+  --set controlPlane.jwtIssuer="$CONTROL_URL" \
+  --set enrollment.existingSecret=stamp-enrollment \
+  --set enrollment.existingSecretKey=enrollment-token \
+  --set stamp.name=my-cluster \
+  --set stamp.orchestrator=kubernetes \
+  --set modelHost.url=http://vllm.fabric-stamp.svc:8000 \
+  --wait --timeout 5m
+```
+
+Replace `modelHost.url` with a URL reachable from the stamp. To let Fabric create model-host workloads instead, omit `modelHost.url` and enable the operator:
+
+```bash
+helm upgrade --install stamp deploy/helm/fabric-stamp \
+  --namespace fabric-stamp \
+  --set controlPlane.url="$CONTROL_URL" \
+  --set controlPlane.jwtIssuer="$CONTROL_URL" \
+  --set enrollment.existingSecret=stamp-enrollment \
+  --set enrollment.existingSecretKey=enrollment-token \
+  --set stamp.name=my-cluster \
+  --set stamp.orchestrator=kubernetes \
+  --set operator.enabled=true \
+  --set operator.managedModelHost.image=REGISTRY/fabric/model-host:0.1.0 \
+  --set operator.managedModelHost.modelRef=Qwen/Qwen3.5-2B \
+  --set operator.managedModelHost.servedName=qwen3.5-2b \
+  --wait --timeout 20m
+```
+
+For private registries, configure `imagePullSecrets` for chart containers and cluster-level registry access for operator-created model hosts. Configure `gpu.nodeSelector`, `gpu.tolerations`, and `stamp.region` when placement must target specific GPU nodes or a region.
+
+Verify enrollment before removing the one-time Secret:
+
+```bash
+kubectl -n fabric-stamp rollout status statefulset/stamp-fabric-stamp
+kubectl -n fabric-stamp logs statefulset/stamp-fabric-stamp -c agent
+curl -fsS "$CONTROL_URL/v1/accounts/$ACCOUNT_ID/stamps" \
+  -H "Authorization: Bearer $CONTROL_TOKEN"
+kubectl -n fabric-stamp delete secret stamp-enrollment
+```
+
+The agent log should contain `enrolled`; subsequent restarts load the persisted identity without the Secret. Keep its name in Helm values because chart validation requires a token or Secret reference during upgrades, while the pod's Secret reference is optional:
+
+```bash
+helm upgrade stamp deploy/helm/fabric-stamp \
+  --namespace fabric-stamp --reuse-values \
+  --set enrollment.token='' \
+  --set enrollment.existingSecret=stamp-enrollment
+```
+
+Uninstalling the release does not revoke the server-side stamp and some operational state is retained. Revoke a decommissioned stamp through `DELETE /v1/accounts/{account_id}/stamps/{stamp_id}` and inspect retained identity/usage PVCs before deleting them. See the [production deployment guide](DEPLOYMENT.md) for GPU nodes, registries, operator-managed hosts, Istio/TLS, observability, verification, and lifecycle details; see [Packaging and deployment](docs/context/packaging-deployment.md) for component architecture.
 
 ---
 
