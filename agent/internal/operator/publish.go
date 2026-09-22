@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/khushwant04/fabric/agent/internal/agentcontract"
@@ -107,6 +108,7 @@ func (p *Publisher) mine(ctx context.Context) (map[string]ModelDeployment, error
 }
 
 func (p *Publisher) resource(name string, deployment state.Deployment) ModelDeployment {
+	capabilities := ModelCapabilities(deployment.Capabilities)
 	return ModelDeployment{
 		APIVersion: Group + "/" + Version,
 		Kind:       Kind,
@@ -130,6 +132,7 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			KernelMode:    deployment.KernelMode,
 			Replicas:      deployment.Replicas,
 			Strategy:      deployment.Strategy,
+			Capabilities:  &capabilities,
 			GPUCount:      deployment.GPUCount,
 			MaxModelLen:   deployment.MaxModelLen,
 			MaxNumSeqs:    deployment.MaxNumSeqs,
@@ -156,7 +159,7 @@ func (p *Publisher) update(
 	ctx context.Context, current ModelDeployment, deployment state.Deployment,
 ) error {
 	desired := p.resource(current.Metadata.Name, deployment)
-	if current.Spec == desired.Spec {
+	if reflect.DeepEqual(current.Spec, desired.Spec) {
 		// Nothing changed, so no write: an update would bump the generation and make
 		// the operator re-report status for an identical declaration.
 		return nil

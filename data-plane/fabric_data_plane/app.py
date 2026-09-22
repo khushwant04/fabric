@@ -43,6 +43,7 @@ from fabric_data_plane.config import (
 from fabric_data_plane.errors import (
     ApiError,
     BadRequest,
+    NotFound,
     PayloadTooLarge,
     TooManyRequests,
     UpstreamUnavailable,
@@ -50,6 +51,12 @@ from fabric_data_plane.errors import (
 )
 from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.metrics import Metrics
+from fabric_data_plane.model_selection import (
+    AUTO_MODEL,
+    profile_for_audio,
+    profile_for_json,
+    rank_deployments,
+)
 from fabric_data_plane.pool import Backend, BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.shared_limits import (
@@ -77,6 +84,15 @@ CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 COMPLETIONS_PATH = "/v1/completions"
 TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
 TRANSLATIONS_PATH = "/v1/audio/translations"
+
+_JSON_OPERATIONS = {
+    CHAT_COMPLETIONS_PATH: "chat",
+    COMPLETIONS_PATH: "completion",
+}
+_AUDIO_OPERATIONS = {
+    TRANSCRIPTIONS_PATH: "transcription",
+    TRANSLATIONS_PATH: "translation",
+}
 
 
 class _CleanupStreamingResponse(StreamingResponse):
@@ -503,6 +519,70 @@ def _requested_model(payload: dict[str, Any]) -> str:
     return model.strip()
 
 
+def _pick_available_auto_deployment(
+    plane: DataPlane, candidates: list[Deployment]
+) -> Deployment:
+    if not candidates:
+        raise NotFound(
+            "auto_model_not_found",
+            "No deployment available to this account matches the request",
+        )
+    for candidate in candidates:
+        if plane.pool_for(candidate).has_available():
+            return candidate
+    raise UpstreamUnavailable(
+        "upstream_unavailable",
+        "Matching models exist, but no healthy model host is available",
+    )
+
+
+def _resolve_json_deployment(
+    plane: DataPlane,
+    *,
+    model: str,
+    account_id: uuid.UUID,
+    payload: dict[str, Any],
+    upstream_path: str,
+) -> Deployment:
+    if model != AUTO_MODEL:
+        return plane.registry.resolve(model, account_id=account_id)
+
+    owned = plane.registry.for_account(account_id)
+    # Rolling compatibility: a real deployment already named "auto" keeps its exact
+    # alias semantics. The virtual selector is used only when the account has no such
+    # deployment.
+    concrete = next((item for item in owned if item.model_alias == AUTO_MODEL), None)
+    if concrete is not None:
+        return concrete
+
+    try:
+        profile = profile_for_json(_JSON_OPERATIONS[upstream_path], payload)
+    except ValueError as exc:
+        raise BadRequest("invalid_routing", str(exc)) from exc
+    # ``routing`` is a Fabric extension accepted through OpenAI SDK extra_body. Model
+    # hosts do not know it and may reject unknown fields, so consume it at the router.
+    payload.pop("routing", None)
+    return _pick_available_auto_deployment(plane, rank_deployments(owned, profile))
+
+
+def _resolve_audio_deployment(
+    plane: DataPlane,
+    *,
+    model: str,
+    account_id: uuid.UUID,
+    upstream_path: str,
+) -> Deployment:
+    if model != AUTO_MODEL:
+        return plane.registry.resolve(model, account_id=account_id)
+
+    owned = plane.registry.for_account(account_id)
+    concrete = next((item for item in owned if item.model_alias == AUTO_MODEL), None)
+    if concrete is not None:
+        return concrete
+    profile = profile_for_audio(_AUDIO_OPERATIONS[upstream_path])
+    return _pick_available_auto_deployment(plane, rank_deployments(owned, profile))
+
+
 def _safe_to_retry_transport_failure(exc: httpx.HTTPError) -> bool:
     """Whether the request is known not to have reached a model host.
 
@@ -597,7 +677,13 @@ async def _proxy(
     # Retire withdrawn pool/metric state before resolution, including the case where
     # this request names the removed deployment and resolution itself will fail.
     plane.reconcile_pools()
-    deployment = plane.registry.resolve(model, account_id=principal.account_id)
+    deployment = _resolve_json_deployment(
+        plane,
+        model=model,
+        account_id=principal.account_id,
+        payload=payload,
+        upstream_path=upstream_path,
+    )
 
     # A failed durable spool is known before another expensive model invocation. The request that
     # first discovers an I/O fault may already have completed upstream, but every later request
@@ -1009,7 +1095,12 @@ async def _proxy_transcription(
     # Ownership comes from the verified token plus local configuration; the model name
     # only selects a candidate.
     plane.reconcile_pools()
-    deployment = plane.registry.resolve(model, account_id=principal.account_id)
+    deployment = _resolve_audio_deployment(
+        plane,
+        model=model,
+        account_id=principal.account_id,
+        upstream_path=upstream_path,
+    )
 
     if not plane.usage.healthy:
         raise UpstreamUnavailable(

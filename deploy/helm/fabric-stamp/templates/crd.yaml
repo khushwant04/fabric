@@ -111,6 +111,34 @@ spec:
                     pins a session key to a stable backend, and "weighted" spreads
                     proportionally to per-backend weight. Absent means least_in_flight.
                   enum: [least_in_flight, round_robin, session_affinity, weighted]
+                capabilities:
+                  type: object
+                  description: |
+                    Bounded metadata used by the stamp-local model=auto router. It
+                    affects selection only; account authorization still comes from the
+                    verified token and deployment owner. Text chat/completion default on
+                    in the control plane, while vision and audio are explicit opt-ins.
+                  properties:
+                    auto_enabled:
+                      type: boolean
+                    chat:
+                      type: boolean
+                    completion:
+                      type: boolean
+                    vision:
+                      type: boolean
+                    transcription:
+                      type: boolean
+                    translation:
+                      type: boolean
+                    code:
+                      type: boolean
+                    reasoning:
+                      type: boolean
+                    priority:
+                      type: integer
+                      minimum: -100
+                      maximum: 100
                 gpuCount:
                   type: integer
                   description: |

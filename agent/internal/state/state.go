@@ -39,6 +39,20 @@ type Credentials struct {
 	AckedGeneration int `json:"acked_generation"`
 }
 
+// ModelCapabilities is bounded metadata for stamp-local automatic model selection.
+// It is comparable so deployment changes remain detectable with ordinary struct equality.
+type ModelCapabilities struct {
+	AutoEnabled   bool `json:"auto_enabled"`
+	Chat          bool `json:"chat"`
+	Completion    bool `json:"completion"`
+	Vision        bool `json:"vision"`
+	Transcription bool `json:"transcription"`
+	Translation   bool `json:"translation"`
+	Code          bool `json:"code"`
+	Reasoning     bool `json:"reasoning"`
+	Priority      int  `json:"priority"`
+}
+
 // Deployment is one entry of the data plane's local configuration.
 type Deployment struct {
 	DeploymentID  string `json:"deployment_id"`
@@ -60,6 +74,9 @@ type Deployment struct {
 	// carried it through the CR into the config document. Empty means the data plane's
 	// own default of least-in-flight.
 	Strategy string `json:"strategy,omitempty"`
+	// Capabilities drives model=auto selection in the data plane. Legacy deployments
+	// default to text chat/completion when the agent reads an older desired spec.
+	Capabilities ModelCapabilities `json:"capabilities"`
 	// GPUCount is how many devices one replica needs. Carried for the operator, which
 	// turns it into the container's nvidia.com/gpu limit; the data plane ignores it.
 	//

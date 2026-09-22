@@ -468,6 +468,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.KernelMode = kernelModeFromSpec(assignment.Spec)
 		entry.Replicas = replicasFromSpec(assignment.Spec)
 		entry.Strategy = strategyFromSpec(assignment.Spec)
+		entry.Capabilities = modelCapabilitiesFromSpec(assignment.Spec)
 		entry.GPUCount = gpuCountFromSpec(assignment.Spec)
 		entry.MaxModelLen = maxModelLenFromSpec(assignment.Spec)
 		entry.MaxNumSeqs = maxNumSeqsFromSpec(assignment.Spec)
@@ -768,6 +769,41 @@ func strategyFromSpec(spec map[string]any) string {
 	default:
 		return ""
 	}
+}
+
+// modelCapabilitiesFromSpec extracts the bounded metadata used by model=auto.
+// Missing metadata describes a legacy text model, preserving compatibility while
+// keeping structurally different vision and audio inputs opt-in.
+func modelCapabilitiesFromSpec(spec map[string]any) state.ModelCapabilities {
+	result := state.ModelCapabilities{AutoEnabled: true, Chat: true, Completion: true}
+	capabilities, ok := spec["capabilities"].(map[string]any)
+	if !ok {
+		return result
+	}
+	setBool := func(name string, target *bool) {
+		if value, present := capabilities[name].(bool); present {
+			*target = value
+		}
+	}
+	setBool("auto_enabled", &result.AutoEnabled)
+	setBool("chat", &result.Chat)
+	setBool("completion", &result.Completion)
+	setBool("vision", &result.Vision)
+	setBool("transcription", &result.Transcription)
+	setBool("translation", &result.Translation)
+	setBool("code", &result.Code)
+	setBool("reasoning", &result.Reasoning)
+	switch value := capabilities["priority"].(type) {
+	case float64:
+		if value >= -100 && value <= 100 {
+			result.Priority = int(value)
+		}
+	case int:
+		if value >= -100 && value <= 100 {
+			result.Priority = value
+		}
+	}
+	return result
 }
 
 // gpuCountFromSpec extracts how many devices one replica of this deployment needs.

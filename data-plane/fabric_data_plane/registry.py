@@ -36,6 +36,28 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
+class ModelCapabilities:
+    """Capabilities used by the local automatic model selector.
+
+    Defaults deliberately model a legacy text deployment. Capabilities that would
+    route structurally different input (vision or audio) remain opt-in.
+    """
+
+    auto_enabled: bool = True
+    chat: bool = True
+    completion: bool = True
+    vision: bool = False
+    transcription: bool = False
+    translation: bool = False
+    code: bool = False
+    reasoning: bool = False
+    priority: int = 0
+
+    def supports(self, operation: str) -> bool:
+        return bool(getattr(self, operation, False))
+
+
+@dataclasses.dataclass(frozen=True)
 class Deployment:
     """One locally served deployment.
 
@@ -58,6 +80,10 @@ class Deployment:
     #: validated by the control plane; an unknown value here defaults rather than raising.
     strategy: str = DEFAULT_STRATEGY
     route_revision: str = ""
+    capabilities: ModelCapabilities = dataclasses.field(default_factory=ModelCapabilities)
+    #: Effective served context bound when known. None means the router must not make
+    #: a compatibility claim and leaves enforcement to the selected model host.
+    max_model_len: int | None = None
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGIES:
@@ -162,6 +188,45 @@ class DeploymentRegistry:
         upstream_url = entry.get("upstream_url")
         raw_strategy = entry.get("strategy")
         strategy = str(raw_strategy) if raw_strategy in STRATEGIES else DEFAULT_STRATEGY
+
+        raw_capabilities = entry.get("capabilities")
+        capabilities_payload = (
+            raw_capabilities if isinstance(raw_capabilities, dict) else {}
+        )
+        defaults = ModelCapabilities()
+
+        def capability(name: str) -> bool:
+            value = capabilities_payload.get(name)
+            return value if isinstance(value, bool) else bool(getattr(defaults, name))
+
+        raw_priority = capabilities_payload.get("priority", defaults.priority)
+        priority = (
+            raw_priority
+            if isinstance(raw_priority, int)
+            and not isinstance(raw_priority, bool)
+            and -100 <= raw_priority <= 100
+            else defaults.priority
+        )
+        capabilities = ModelCapabilities(
+            auto_enabled=capability("auto_enabled"),
+            chat=capability("chat"),
+            completion=capability("completion"),
+            vision=capability("vision"),
+            transcription=capability("transcription"),
+            translation=capability("translation"),
+            code=capability("code"),
+            reasoning=capability("reasoning"),
+            priority=priority,
+        )
+
+        raw_max_model_len = entry.get("max_model_len")
+        max_model_len = (
+            raw_max_model_len
+            if isinstance(raw_max_model_len, int)
+            and not isinstance(raw_max_model_len, bool)
+            and raw_max_model_len > 0
+            else None
+        )
         return Deployment(
             deployment_id=uuid.UUID(str(entry["deployment_id"])),
             account_id=uuid.UUID(str(entry["account_id"])),
@@ -171,6 +236,8 @@ class DeploymentRegistry:
             backends=backends,
             strategy=strategy,
             route_revision=str(entry.get("route_revision") or ""),
+            capabilities=capabilities,
+            max_model_len=max_model_len,
         )
 
     @classmethod

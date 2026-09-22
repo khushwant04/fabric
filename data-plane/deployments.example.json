@@ -14,7 +14,19 @@
       "account_id": "11111111-1111-1111-1111-111111111111",
       "model_alias": "launch-model",
       "upstream_url": "http://127.0.0.1:8000",
-      "upstream_model": "<model name the vLLM host serves>"
+      "upstream_model": "<model name the vLLM host serves>",
+      "max_model_len": 32768,
+      "capabilities": {
+        "auto_enabled": true,
+        "chat": true,
+        "completion": true,
+        "vision": false,
+        "transcription": false,
+        "translation": false,
+        "code": true,
+        "reasoning": false,
+        "priority": 0
+      }
     }
   ]
 }
