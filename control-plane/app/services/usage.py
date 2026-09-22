@@ -220,3 +220,31 @@ async def summarize_deployment_usage(
             for row in per_stamp
         ],
     }
+
+
+
+async def summarize_account_usage(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+) -> dict:
+    """Aggregate stored usage across every deployment owned by an account."""
+    totals = (
+        await session.execute(
+            select(
+                func.count(UsageEvent.id),
+                func.coalesce(func.sum(UsageEvent.input_tokens), 0),
+                func.coalesce(func.sum(UsageEvent.output_tokens), 0),
+                func.min(UsageEvent.occurred_at),
+                func.max(UsageEvent.occurred_at),
+            ).where(UsageEvent.account_id == account_id)
+        )
+    ).one()
+
+    return {
+        "events": totals[0],
+        "input_tokens": totals[1],
+        "output_tokens": totals[2],
+        "first_occurred_at": totals[3],
+        "last_occurred_at": totals[4],
+    }

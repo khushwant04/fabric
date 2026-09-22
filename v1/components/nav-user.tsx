@@ -2,7 +2,6 @@
 
 import Link from "next/link"
 import {
-  CheckIcon,
   ChevronsUpDownIcon,
   LaptopIcon,
   LogOutIcon,
@@ -19,6 +18,8 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -31,7 +32,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { useTheme, type Theme } from "@/hooks/use-theme"
+import { isTheme, useTheme, type Theme } from "@/hooks/use-theme"
 
 const themes: Array<{ value: Theme; label: string; icon: typeof SunIcon }> = [
   { value: "light", label: "Light", icon: SunIcon },
@@ -112,17 +113,21 @@ export function NavUser({
                   <SunIcon /> Appearance
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
-                  {themes.map((item) => (
-                    <DropdownMenuItem
-                      key={item.value}
-                      onClick={() => setTheme(item.value)}
-                    >
-                      <item.icon /> {item.label}
-                      {theme === item.value ? (
-                        <CheckIcon className="ml-auto" />
-                      ) : null}
-                    </DropdownMenuItem>
-                  ))}
+                  <DropdownMenuRadioGroup
+                    value={theme}
+                    onValueChange={(value) => {
+                      if (isTheme(value)) setTheme(value)
+                    }}
+                  >
+                    {themes.map((item) => (
+                      <DropdownMenuRadioItem
+                        key={item.value}
+                        value={item.value}
+                      >
+                        <item.icon /> {item.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             </DropdownMenuGroup>

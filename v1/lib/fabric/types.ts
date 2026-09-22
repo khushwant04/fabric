@@ -83,6 +83,14 @@ export type DeploymentStatus = {
   reported_at: string
 }
 
+export type AccountUsage = {
+  events: number
+  input_tokens: number
+  output_tokens: number
+  first_occurred_at: string | null
+  last_occurred_at: string | null
+}
+
 export type DeploymentUsage = {
   deployment_id: string
   events: number
