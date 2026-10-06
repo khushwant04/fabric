@@ -11,6 +11,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 
 export type NavItem = {
@@ -30,6 +31,7 @@ export function NavMain({
   scopes: string[]
 }) {
   const pathname = usePathname()
+  const { isMobile, setOpenMobile } = useSidebar()
 
   return (
     <>
@@ -42,7 +44,7 @@ export function NavMain({
         return (
           <SidebarGroup
             key={section.label ?? sectionIndex}
-            className="gap-1 px-2 py-1"
+            className="gap-1 px-2 pt-0 pb-4"
           >
             {section.label ? (
               <SidebarGroupLabel className="h-7 px-2 text-[11px] font-medium text-sidebar-foreground/55 group-data-[collapsible=icon]:opacity-0">
@@ -63,7 +65,9 @@ export function NavMain({
                         render={<Link href={item.url} />}
                         isActive={isActive}
                         tooltip={item.title}
-                        className="h-8 gap-2.5 rounded-md px-2 text-[13px] font-normal data-[active=true]:font-medium"
+                        className="h-9 gap-3 rounded-xl px-2.5 text-[13px] font-normal text-sidebar-foreground/90 data-[active=true]:font-medium [&_svg]:size-[17px] [&_svg]:text-sidebar-foreground/60 data-[active=true]:[&_svg]:text-sidebar-accent-foreground"
+                        onClick={() => { if (isMobile) setOpenMobile(false) }}
+                        aria-current={isActive ? "page" : undefined}
                       >
                         {item.icon}
                         <span className="truncate">{item.title}</span>

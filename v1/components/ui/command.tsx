@@ -2,8 +2,8 @@
 
 import * as React from "react"
 import { Command as CommandPrimitive } from "cmdk"
+import { cn } from "cn"
 
-import { cn } from "@/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,7 @@ import {
   InputGroupAddon,
 } from "@/components/ui/input-group"
 import { SearchIcon, CheckIcon } from "lucide-react"
+import { GlidingHighlight, useGlidingHighlight } from "@/components/ui/gliding-highlight"
 
 function Command({
   className,
@@ -91,17 +92,26 @@ function CommandInput({
 
 function CommandList({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof CommandPrimitive.List>) {
+  const { containerRef, highlightRef } = useGlidingHighlight<HTMLDivElement>({
+    itemSelector: '[cmdk-item]',
+    activeSelector: '[aria-selected="true"]',
+  })
   return (
     <CommandPrimitive.List
+      ref={containerRef}
       data-slot="command-list"
       className={cn(
-        "no-scrollbar max-h-72 scroll-py-1 overflow-x-hidden overflow-y-auto outline-none",
+        "relative isolate no-scrollbar max-h-72 scroll-py-1 overflow-x-hidden overflow-y-auto outline-none [&_[cmdk-item]]:relative [&_[cmdk-item]]:z-10 [&_[cmdk-item]]:bg-transparent!",
         className
       )}
       {...props}
-    />
+    >
+      <GlidingHighlight ref={highlightRef} className="bg-accent" />
+      {children}
+    </CommandPrimitive.List>
   )
 }
 
@@ -141,7 +151,7 @@ function CommandSeparator({
   return (
     <CommandPrimitive.Separator
       data-slot="command-separator"
-      className={cn("-mx-1 h-px w-auto bg-border", className)}
+      className={cn("-mx-1 h-px bg-border", className)}
       {...props}
     />
   )
@@ -156,7 +166,7 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "group/command-item relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none in-data-[slot=dialog-content]:rounded-lg! data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-muted data-selected:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:**:[svg]:text-foreground",
+        "group/command-item relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none in-data-[slot=dialog-content]:rounded-lg! data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-muted data-selected:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-foreground",
         className
       )}
       {...props}

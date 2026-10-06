@@ -53,10 +53,8 @@ function initials(name: string) {
 
 export function NavUser({
   user,
-  demo,
 }: {
   user: { name: string; email: string }
-  demo: boolean
 }) {
   const { isMobile } = useSidebar()
   const { theme, setTheme } = useTheme()
@@ -132,18 +130,12 @@ export function NavUser({
               </DropdownMenuSub>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            {demo ? (
-              <DropdownMenuItem disabled>
-                <LogOutIcon /> Preview session
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                variant="destructive"
-                render={<a href="/auth/logout" />}
-              >
-                <LogOutIcon /> Log out
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem
+              variant="destructive"
+              render={<a href="/auth/logout" />}
+            >
+              <LogOutIcon /> Log out
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

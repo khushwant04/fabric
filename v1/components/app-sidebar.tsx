@@ -8,14 +8,13 @@ import {
   KeyRoundIcon,
   LayoutDashboardIcon,
   NetworkIcon,
+  FlaskConicalIcon,
   Settings2Icon,
   UserRoundCogIcon,
   UsersIcon,
 } from "lucide-react"
 
-import { AccountSwitcher } from "@/components/account-switcher"
 import { NavMain, type NavSection } from "@/components/nav-main"
-import { NavUser } from "@/components/nav-user"
 import {
   Sidebar,
   SidebarContent,
@@ -29,6 +28,7 @@ const sections: NavSection[] = [
   {
     items: [
       { title: "Overview", url: "/dashboard", icon: <LayoutDashboardIcon /> },
+      { title: "Architecture", url: "/architecture", icon: <NetworkIcon /> },
     ],
   },
   {
@@ -50,6 +50,12 @@ const sections: NavSection[] = [
         title: "Usage",
         url: "/usage",
         icon: <ChartNoAxesCombinedIcon />,
+        scope: "deployments:read",
+      },
+      {
+        title: "Playground",
+        url: "/playground",
+        icon: <FlaskConicalIcon />,
         scope: "deployments:read",
       },
     ],
@@ -100,25 +106,13 @@ export function AppSidebar({
   context,
   ...props
 }: React.ComponentProps<typeof Sidebar> & { context: ConsoleContext }) {
-  const user = context.me.user
-
   return (
-    <Sidebar collapsible="icon" variant="inset" {...props}>
-      <SidebarHeader className="p-2">
-        <AccountSwitcher context={context} />
-      </SidebarHeader>
-      <SidebarContent className="gap-2 py-1">
+    <Sidebar id="fabric-sidebar" collapsible="icon" variant="inset" className="fabric-sidebar" {...props}>
+      <SidebarHeader className="h-2 p-0" />
+      <SidebarContent className="gap-1 px-1 pt-1">
         <NavMain sections={sections} scopes={context.identity.scopes} />
       </SidebarContent>
-      <SidebarFooter className="p-2">
-        <NavUser
-          user={{
-            name: user.display_name || user.email || "Fabric operator",
-            email: user.email || user.auth0_subject,
-          }}
-          demo={context.demo}
-        />
-      </SidebarFooter>
+      <SidebarFooter className="px-5 py-5 text-[11px] text-sidebar-foreground/45 group-data-[collapsible=icon]:hidden">Fabric Operator Console</SidebarFooter>
       <SidebarRail />
     </Sidebar>
   )

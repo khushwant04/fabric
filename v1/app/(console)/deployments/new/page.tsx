@@ -15,9 +15,9 @@ const gpuClasses = ["t4", "l4", "a10g", "a100", "a100-80gb", "l40s", "h100"]
 
 export default async function NewDeploymentPage() {
   const context = await getConsoleContext()
-  const canWrite = hasScope(context, "deployments:write") && !context.demo
+  const canWrite = hasScope(context, "deployments:write")
   return <PageContainer><PageHeader title="Create deployment" description="Define desired model-serving state. Fabric will select compatible capacity and begin reconciliation." actions={<Button variant="outline" render={<Link href="/deployments" />}><ArrowLeftIcon /> Back</Button>} />
-    {!canWrite ? <Alert><RocketIcon /><AlertTitle>Read-only preview</AlertTitle><AlertDescription>Connect a live account with deployments:write to submit this form.</AlertDescription></Alert> : null}
+    {!canWrite ? <Alert><RocketIcon /><AlertTitle>Read-only access</AlertTitle><AlertDescription>Your account role does not allow creating deployments.</AlertDescription></Alert> : null}
     <form action={createDeployment} className="grid gap-5 xl:grid-cols-[1fr_320px]">
       <Card><CardHeader><CardTitle>Deployment configuration</CardTitle><CardDescription>Required fields are validated again by the control plane.</CardDescription></CardHeader><CardContent><FieldGroup>
         <FieldSet><FieldLegend>Identity</FieldLegend><div className="grid gap-5 md:grid-cols-2"><Field><FieldLabel htmlFor="name">Deployment name</FieldLabel><Input id="name" name="name" placeholder="support-copilot" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" required disabled={!canWrite} /><FieldDescription>Lowercase letters, numbers, and hyphens.</FieldDescription></Field><Field><FieldLabel htmlFor="modelAlias">Model alias</FieldLabel><Input id="modelAlias" name="modelAlias" placeholder="llama-3.1-8b-instruct" required disabled={!canWrite} /></Field></div></FieldSet>

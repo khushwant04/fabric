@@ -1,7 +1,7 @@
 "use client"
 
 import { useActionState, useState } from "react"
-import { CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, ServerCogIcon, UserPlusIcon } from "lucide-react"
+import { CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, ServerCogIcon, Trash2Icon, UserPlusIcon } from "lucide-react"
 
 import {
   addMember,
@@ -27,9 +27,35 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { confirmDeleteDeployment } from "@/lib/fabric/deployment-actions"
+import { confirmsModelDeletion } from "@/lib/fabric/resource-state"
 import type { OidcProvider, ServicePrincipal } from "@/lib/fabric/types"
 
 const initialState: ActionState = {}
+
+export function DeleteDeploymentDialog({ deploymentId, name, modelAlias, gpuCount, gpuClass, disabled = false }: {
+  deploymentId: string
+  name: string
+  modelAlias: string
+  gpuCount: number
+  gpuClass: string
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [typed, setTyped] = useState("")
+  const [state, action, pending] = useActionState(confirmDeleteDeployment.bind(null, deploymentId), {})
+  return <Dialog open={open} onOpenChange={(next) => { if (!pending) { setOpen(next); if (!next) setTyped("") } }}>
+    <DialogTrigger render={<Button variant="destructive" disabled={disabled}><Trash2Icon /> Delete</Button>} />
+    <DialogContent showCloseButton={!pending}>
+      <DialogHeader><DialogTitle>Delete {name}?</DialogTitle><DialogDescription>This removes the model deployment and its placements from serving.</DialogDescription></DialogHeader>
+      <Alert variant="destructive"><Trash2Icon /><AlertTitle>Serving and GPU impact</AlertTitle><AlertDescription>New inference requests will stop reaching this deployment as deletion is reconciled. Its model hosts will drain and shut down. {gpuCount > 0 ? <>The requested {gpuCount} {gpuClass.toUpperCase()} GPU{gpuCount === 1 ? "" : "s"} will be released after cleanup is confirmed.</> : <>GPU capacity is released after model-host cleanup is confirmed.</>} Cleanup waits if a stamp is unreachable. Usage history is retained.</AlertDescription></Alert>
+      <form action={action} className="space-y-5">
+        <Field><FieldLabel htmlFor={`delete-${deploymentId}`}>Type the model alias to confirm</FieldLabel><FieldDescription><span className="break-all font-mono">{modelAlias}</span></FieldDescription><Input id={`delete-${deploymentId}`} name="confirmation" value={typed} onChange={(event) => setTyped(event.target.value)} autoComplete="off" disabled={pending} required />{state.error ? <FieldError>{state.error}</FieldError> : null}</Field>
+        <DialogFooter><Button type="button" variant="outline" disabled={pending} onClick={() => { setTyped(""); setOpen(false) }}>Cancel</Button><Button type="submit" variant="destructive" disabled={pending || !confirmsModelDeletion(typed, modelAlias)}>{pending ? <Spinner /> : <Trash2Icon />}{pending ? "Deleting…" : "Delete deployment"}</Button></DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
+}
 
 function SubmitButton({ pending, children }: { pending: boolean; children: React.ReactNode }) {
   return (

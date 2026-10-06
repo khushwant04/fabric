@@ -6,7 +6,6 @@ import { redirect } from "next/navigation"
 
 import { auth0, isAuth0Configured } from "@/lib/auth0"
 import { controlPlaneRequest } from "@/lib/fabric/client"
-import { demoConsoleContext } from "@/lib/fabric/demo-data"
 import type {
   Account,
   ConsoleContext,
@@ -20,10 +19,6 @@ const tokenCache = new Map<
   string,
   { accessToken: string; expiresAt: number }
 >()
-
-export const isDemoMode =
-  process.env.FABRIC_DEMO_MODE === "true" &&
-  process.env.NODE_ENV !== "production"
 
 function trimTokenCache() {
   const now = Date.now()
@@ -45,7 +40,6 @@ export const getAuth0AccessToken = cache(async () => {
 })
 
 export const getMe = cache(async (): Promise<Me | null> => {
-  if (isDemoMode) return demoConsoleContext.me
   const token = await getAuth0AccessToken()
   if (!token) return null
   return controlPlaneRequest<Me>("/v1/me", { token })
@@ -70,15 +64,17 @@ export async function clearSelectedAccount() {
   (await cookies()).delete(ACCOUNT_COOKIE)
 }
 
-export const getFabricAccessToken = cache(async (accountId: string) => {
-  if (isDemoMode) return "demo-token"
+const getAudienceToken = cache(async (
+  accountId: string,
+  audience: "fabric-control" | "fabric-inference"
+) => {
   if (!auth0) throw new Error("Auth0 is not configured")
 
   const session = await getAuthSession()
   if (!session) redirect("/auth/login?returnTo=/onboarding")
 
   const subject = String(session.user.sub ?? "")
-  const cacheKey = `${subject}:${accountId}`
+  const cacheKey = `${subject}:${accountId}:${audience}`
   const cached = tokenCache.get(cacheKey)
   if (cached && cached.expiresAt - TOKEN_EXPIRY_SKEW_MS > Date.now()) {
     return cached.accessToken
@@ -91,7 +87,7 @@ export const getFabricAccessToken = cache(async (accountId: string) => {
     method: "POST",
     body: JSON.stringify({
       grant_type: "auth0_token",
-      audience: "fabric-control",
+      audience,
       assertion,
       account_id: accountId,
     }),
@@ -105,8 +101,13 @@ export const getFabricAccessToken = cache(async (accountId: string) => {
   return exchanged.access_token
 })
 
+export const getFabricAccessToken = (accountId: string) =>
+  getAudienceToken(accountId, "fabric-control")
+
+export const getFabricInferenceToken = (accountId: string) =>
+  getAudienceToken(accountId, "fabric-inference")
+
 export const getConsoleContext = cache(async (): Promise<ConsoleContext> => {
-  if (isDemoMode) return demoConsoleContext
   if (!isAuth0Configured || !auth0) redirect("/?configuration=required")
 
   const session = await getAuthSession()
@@ -127,7 +128,7 @@ export const getConsoleContext = cache(async (): Promise<ConsoleContext> => {
     controlPlaneRequest<ConsoleContext["identity"]>("/v1/self", { token }),
   ])
 
-  return { account, identity, me, demo: false }
+  return { account, identity, me }
 })
 
 export function hasScope(context: ConsoleContext, scope: string) {

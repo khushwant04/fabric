@@ -167,5 +167,4 @@ export type ConsoleContext = {
   account: Account
   identity: FabricSelf
   me: Me
-  demo: boolean
 }

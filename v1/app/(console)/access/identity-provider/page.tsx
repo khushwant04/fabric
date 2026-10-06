@@ -11,7 +11,7 @@ import { formatDate } from "@/lib/format"
 
 export default async function IdentityProviderPage() {
   const [context, provider] = await Promise.all([getConsoleContext(), getOidcProvider()])
-  const canWrite = hasScope(context, "members:write") && !context.demo
+  const canWrite = hasScope(context, "members:write")
   return <PageContainer><PageHeader title="Identity provider" description="Trust one account-owned OIDC directory for workforce authentication." />
     <Alert><ShieldCheckIcon /><AlertTitle>Account trust boundary</AlertTitle><AlertDescription>Issuer matching is exact. Removing a provider blocks future exchanges but does not revoke tokens already issued.</AlertDescription></Alert>
     <div className="grid gap-5 xl:grid-cols-[1fr_300px]"><Card><CardHeader><CardTitle>OIDC configuration</CardTitle><CardDescription>Use discovery where possible so the provider remains authoritative for signing keys.</CardDescription></CardHeader><CardContent><OidcProviderForm provider={provider} disabled={!canWrite} /></CardContent></Card>

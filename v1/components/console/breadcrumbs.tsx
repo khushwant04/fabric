@@ -15,6 +15,8 @@ import {
 
 const labels: Record<string, string> = {
   dashboard: "Overview",
+  architecture: "Architecture",
+  playground: "Playground",
   deployments: "Deployments",
   new: "Create",
   stamps: "Inference stamps",

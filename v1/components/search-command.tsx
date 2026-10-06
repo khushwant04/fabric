@@ -9,6 +9,7 @@ import {
   KeyRoundIcon,
   LayoutDashboardIcon,
   NetworkIcon,
+  FlaskConicalIcon,
   SearchIcon,
   Settings2Icon,
   UserRoundCogIcon,
@@ -30,9 +31,11 @@ import { Kbd } from "@/components/ui/kbd"
 
 const items = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboardIcon, group: "Platform" },
+  { label: "Architecture", href: "/architecture", icon: NetworkIcon, group: "Platform" },
   { label: "Deployments", href: "/deployments", icon: BoxesIcon, group: "Infrastructure" },
   { label: "Inference stamps", href: "/stamps", icon: CpuIcon, group: "Infrastructure" },
   { label: "Usage", href: "/usage", icon: ChartNoAxesCombinedIcon, group: "Infrastructure" },
+  { label: "Playground", href: "/playground", icon: FlaskConicalIcon, group: "Infrastructure" },
   { label: "Members", href: "/access/members", icon: UsersIcon, group: "Identity & access" },
   { label: "Service principals", href: "/access/service-principals", icon: UserRoundCogIcon, group: "Identity & access" },
   { label: "API keys", href: "/access/api-keys", icon: KeyRoundIcon, group: "Identity & access" },
@@ -63,13 +66,13 @@ export function SearchCommand({ compact = false }: { compact?: boolean }) {
   return (
     <>
       {compact ? (
-        <Button variant="ghost" size="icon-sm" className="lg:hidden" aria-label="Search" onClick={() => setOpen(true)}>
+        <Button variant="ghost" size="icon-sm" className="xl:hidden" aria-label="Search" onClick={() => setOpen(true)}>
           <SearchIcon />
         </Button>
       ) : (
         <Button
           variant="outline"
-          className="h-8 w-full justify-start bg-background px-2.5 text-xs font-normal text-muted-foreground shadow-xs"
+          className="h-9 w-full justify-start rounded-xl border-sidebar-border bg-background px-3 text-[13px] font-normal text-muted-foreground shadow-none"
           onClick={() => setOpen(true)}
         >
           <SearchIcon className="size-3.5" />

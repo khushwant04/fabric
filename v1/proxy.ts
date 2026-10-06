@@ -25,6 +25,9 @@ export async function proxy(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/deployments") ||
     request.nextUrl.pathname.startsWith("/stamps") ||
     request.nextUrl.pathname.startsWith("/usage") ||
+    request.nextUrl.pathname.startsWith("/playground") ||
+    request.nextUrl.pathname.startsWith("/architecture") ||
+    request.nextUrl.pathname.startsWith("/api/playground") ||
     request.nextUrl.pathname.startsWith("/access") ||
     request.nextUrl.pathname.startsWith("/settings") ||
     request.nextUrl.pathname.startsWith("/onboarding")

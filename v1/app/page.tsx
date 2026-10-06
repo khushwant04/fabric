@@ -6,11 +6,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { isAuth0Configured } from "@/lib/auth0"
-import { getAuthSession, isDemoMode } from "@/lib/fabric/session"
+import { getAuthSession } from "@/lib/fabric/session"
 
 export default async function Home({ searchParams }: PageProps<"/">) {
   const query = await searchParams
-  if (isDemoMode) redirect("/dashboard")
   const session = await getAuthSession()
   if (session) redirect("/onboarding")
 
@@ -32,7 +31,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         <Card className="w-full max-w-md">
           <CardHeader><div className="mb-4 flex size-10 items-center justify-center rounded-lg border bg-muted"><ShieldCheckIcon className="size-5" /></div><CardTitle className="text-xl">Sign in to Fabric</CardTitle><CardDescription>Authenticate with your organization to access the operator console.</CardDescription></CardHeader>
           <CardContent className="gap-5">
-            {configurationRequired ? <Alert><ShieldCheckIcon /><AlertTitle>Configuration required</AlertTitle><AlertDescription>Add the Auth0 and control-plane variables from <code className="font-mono text-xs">.env.example</code>. For local visual review only, set <code className="font-mono text-xs">FABRIC_DEMO_MODE=true</code>.</AlertDescription></Alert> : <Button size="lg" render={<a href="/auth/login?returnTo=/onboarding" />} className="w-full">Continue with SSO <ArrowRightIcon /></Button>}
+            {configurationRequired ? <Alert><ShieldCheckIcon /><AlertTitle>Configuration required</AlertTitle><AlertDescription>Configure organization sign-in and the Fabric control plane to access this console.</AlertDescription></Alert> : <Button size="lg" render={<a href="/auth/login?returnTo=/onboarding" />} className="w-full">Continue with SSO <ArrowRightIcon /></Button>}
             <Separator />
             <p className="text-center text-xs leading-5 text-muted-foreground">Access is restricted to authorized Fabric operators. Authentication events may be audited.</p>
           </CardContent>

@@ -38,7 +38,6 @@ function actionError(error: unknown) {
 async function mutationContext(scope: string) {
   const context = await getConsoleContext()
   requireScope(context, scope)
-  if (context.demo) throw new Error("Mutations are disabled in preview mode")
   const token = await getFabricAccessToken(context.account.id)
   return { context, token }
 }
@@ -101,20 +100,6 @@ export async function createDeployment(formData: FormData) {
   redirect(
     `/deployments/${deployment.id}${placementFailed ? "?placement=failed" : ""}`
   )
-}
-
-export async function deleteDeployment(
-  deploymentId: string,
-  formData: FormData
-) {
-  void formData
-  const { context, token } = await mutationContext("deployments:write")
-  await controlPlaneRequest(
-    `/v1/accounts/${context.account.id}/deployments/${deploymentId}`,
-    { method: "DELETE", token }
-  )
-  revalidatePath("/deployments")
-  redirect("/deployments")
 }
 
 export async function createEnrollmentToken(

@@ -4,8 +4,8 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
 const healthy = new Set(["active", "ready", "healthy", "enabled"])
-const warning = new Set(["pending", "deploying", "registered", "updating"])
-const danger = new Set(["degraded", "failed", "error", "revoked", "inactive"])
+const warning = new Set(["pending", "deploying", "registered", "updating", "waiting", "unverified", "terminating", "deleting", "draining", "stale"])
+const danger = new Set(["degraded", "failed", "error", "blocked", "revoked", "inactive", "offline"])
 
 export function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase()

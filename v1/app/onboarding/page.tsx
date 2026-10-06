@@ -9,12 +9,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { getAuthSession, getMe, getSelectedAccountId, isDemoMode } from "@/lib/fabric/session"
+import { getAuthSession, getMe, getSelectedAccountId } from "@/lib/fabric/session"
 import { shortId } from "@/lib/format"
 
 export default async function OnboardingPage({ searchParams }: PageProps<"/onboarding">) {
   const query = await searchParams
-  if (isDemoMode) redirect("/dashboard")
   const session = await getAuthSession()
   if (!session) redirect("/auth/login?returnTo=/onboarding")
   const me = await getMe()

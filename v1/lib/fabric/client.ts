@@ -1,6 +1,6 @@
 import "server-only"
 
-const DEFAULT_CONTROL_PLANE_URL = "http://localhost:8000"
+const DEFAULT_CONTROL_PLANE_URL = "http://localhost:8080"
 
 export class FabricApiError extends Error {
   constructor(
@@ -66,6 +66,8 @@ export async function controlPlaneRequest<T>(
     ...init,
     headers,
     cache: "no-store",
+    redirect: "error",
+    signal: init.signal ?? AbortSignal.timeout(30_000),
   })
 
   if (!response.ok) throw await parseFailure(response)
