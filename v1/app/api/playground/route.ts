@@ -1,8 +1,8 @@
-import { FabricApiError } from "@/lib/fabric/client"
-import { getDeployment, getDeploymentStatuses, listDeployments, listPlacements } from "@/lib/fabric/data"
+import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
 import { inferenceConfiguration } from "@/lib/fabric/playground-data"
 import { MAX_REQUEST_BYTES, PlaygroundError, readyPlacements, resolveInferenceUrl, routingDiagnostics, validatePlaygroundRequest } from "@/lib/fabric/playground"
-import { getAuthSession, getConsoleContext, getFabricInferenceToken, hasScope } from "@/lib/fabric/session"
+import { getAuthSession, getConsoleContext, getFabricAccessToken, getFabricInferenceToken, hasScope } from "@/lib/fabric/session"
+import type { Deployment, DeploymentStatus, Placement } from "@/lib/fabric/types"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -61,12 +61,26 @@ export async function POST(request: Request) {
     const input = validatePlaygroundRequest(await readBody(request))
     const context = await getConsoleContext()
     if (!hasScope(context, "deployments:read")) throw new PlaygroundError(403, "Your account role does not allow deployment access.")
-    const deployment = await getDeployment(input.deploymentId)
+    // Route handlers are outside React's render memoization. Resolve the account
+    // once and reuse its control token for every account-bound management read.
+    const controlToken = await getFabricAccessToken(context.account.id)
+    const accountPath = `/v1/accounts/${encodeURIComponent(context.account.id)}/deployments`
+    const deploymentPath = `${accountPath}/${encodeURIComponent(input.deploymentId)}`
+    let deployment: Deployment | null
+    try {
+      deployment = await controlPlaneRequest<Deployment>(deploymentPath, { token: controlToken, signal: abort.signal })
+    } catch (error) {
+      if (!(error instanceof FabricApiError) || error.status !== 404) throw error
+      deployment = null
+    }
     if (!deployment || deployment.account_id !== context.account.id) throw new PlaygroundError(404, "Deployment is not available to this account.")
-    const [placements, statuses] = await Promise.all([listPlacements(deployment.id), getDeploymentStatuses(deployment.id)])
+    const [placements, statuses] = await Promise.all([
+      controlPlaneRequest<Placement[]>(`${deploymentPath}/placements`, { token: controlToken, signal: abort.signal }),
+      controlPlaneRequest<DeploymentStatus[]>(`${deploymentPath}/status`, { token: controlToken, signal: abort.signal }),
+    ])
     const url = resolveInferenceUrl(readyPlacements(deployment, placements, statuses), inferenceConfiguration())
     if (input.model === "auto") {
-      const owned = await listDeployments()
+      const owned = await controlPlaneRequest<Deployment[]>(accountPath, { token: controlToken, signal: abort.signal })
       if (owned.some((item) => item.model_alias === "auto")) throw new PlaygroundError(400, "Choose the account's exact auto deployment.")
     }
     const token = await getFabricInferenceToken(context.account.id)

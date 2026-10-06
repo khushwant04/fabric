@@ -117,3 +117,47 @@ Validation included 227 PostgreSQL tests under a non-superuser role without
 BYPASSRLS, the full Go suite, four new agent regression tests, three cache chart
 checks, and an actual Valkey check of shared hits, three-second TTL and generation
 invalidation. Cache downtime is covered by bounded fallback tests.
+
+## Navigation and gateway validation on 2026-10-06
+
+The follow-up control-plane release uses digest
+`sha256:7fea130c264194bf7559656caa885be6a62411459a42c23bcffe1b963efd28be`
+(ACR run `cun`, Helm revision 13). Both API replicas are Ready. Warm authenticated
+reads through the cluster service measured median 8.65 ms for deployments, 8.22 ms
+for status and 9.27 ms for stamp inventory, compared with the earlier 50–63 ms
+cache-hit samples. These are service timings rather than browser page timings.
+Sixteen reads added 13 Redis hits and three misses; the account cache generation
+stayed at 93 across a 16-second heartbeat interval. JWT verification measured
+0.053 ms median inside the updated pod.
+
+The console now reuses visited pages for ten seconds and fully prefetched pages
+for Next.js's minimum thirty-second window. Sidebar destinations are prefetched
+on hover or keyboard focus. Server-rendered duplicate account reads are memoized
+only for the current render, and deployment inventory reads run in parallel.
+Live pages still refresh every eight seconds; revisiting older content starts
+an immediate refresh while keeping that content visible. Account selection,
+authentication and mutations retain their existing invalidation boundaries.
+
+The hosted console's `v1/vercel.json` explicitly approves only
+`https://inference.hexelstudio.com` as a stamp-reported inference origin and places
+its server function in Mumbai (`bom1`), near the Central India control plane.
+The deployed public health response confirmed `bom1::bom1`, replacing
+`bom1::iad1`. This file applies to this Vercel installation; Helm installations
+continue to configure their gateway or allowed domains through chart values.
+Playground availability now refreshes without discarding its prompt or responses.
+
+A live authenticated request returned all four current gateway aliases, including
+`qwen` and `qwen3.5-4b`. The `qwen` stream returned HTTP 200, terminal `[DONE]` and
+three reported completion tokens in 0.130 seconds for a short prompt. This is a
+single warm request, not a throughput benchmark. The authenticated browser session
+was unavailable for end-to-end UI verification. Regression tests cover gateway
+approval, readiness and generation mismatch; all five CI jobs passed for `c597098`.
+
+The actual console playground modules were also executed against the public control
+plane and inference gateway, using short-lived diagnostic credentials held only
+in process memory. They returned five choices (Auto plus the four deployment
+aliases), no unavailable notice, and a completed HTTP 200 SSE response through
+the playground handler in 0.653 seconds. Authentication/session resolution was
+substituted for this integration check; the real Auth0 browser flow was not tested.
+The handler now resolves its account context once and reuses one control token
+across deployment, placement and status reads before obtaining its inference token.
