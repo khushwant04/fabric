@@ -1,7 +1,6 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { RiveParameters } from "@rive-app/react-webgl2";
 import {
   useRive,
   useStateMachineInput,
@@ -11,6 +10,10 @@ import {
 } from "@rive-app/react-webgl2";
 import type { FC, ReactNode } from "react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+
+// Read the wrapper's public hook contract; the underlying RiveParameters type
+// is imported internally by the package but is not re-exported.
+type RiveParameters = NonNullable<Parameters<typeof useRive>[0]>;
 
 // Delays Rive initialization by one frame so that React Strict Mode's
 // immediate unmount cycle never creates a WebGL2 context. Only the

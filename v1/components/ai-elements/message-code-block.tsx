@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { DownloadIcon, Maximize2Icon } from "lucide-react"
-import { StreamdownContext, defaultComponents, type ExtraProps, useIsCodeFenceIncomplete } from "streamdown"
+import { StreamdownContext, defaultComponents, type ControlsConfig, type ExtraProps, useIsCodeFenceIncomplete } from "streamdown"
 import { toast } from "sonner"
 import { CopyFeedbackIcon } from "./copy-feedback"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
@@ -12,6 +12,12 @@ import { MessageMermaidBlock } from "./message-mermaid"
 
 type MarkdownCodeProps = React.ComponentProps<"code"> & ExtraProps & {
   "data-block"?: string
+}
+
+// Fullscreen is implemented by this renderer; Streamdown's built-in code
+// controls declare only copy/download. Keep their types and add our option.
+type MessageCodeControls = Exclude<Exclude<ControlsConfig, boolean>["code"], boolean | undefined> & {
+  fullscreen?: boolean
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -51,7 +57,7 @@ function MessageCodeBlock({ code, language, incomplete }: { code: string; langua
   const [expanded, setExpanded] = React.useState(false)
   const expandRef = React.useRef<HTMLButtonElement>(null)
   const codeControls = typeof controls === "object" ? controls.code : controls
-  const config = typeof codeControls === "object" ? codeControls : undefined
+  const config: MessageCodeControls | undefined = typeof codeControls === "object" ? codeControls : undefined
   const enabled = controls !== false && codeControls !== false
   const disabled = incomplete || isAnimating
   const label = LANGUAGE_LABELS[language.toLowerCase()] ?? (language ? language[0].toUpperCase() + language.slice(1) : "Code")
