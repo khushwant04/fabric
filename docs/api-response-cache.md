@@ -161,3 +161,9 @@ the playground handler in 0.653 seconds. Authentication/session resolution was
 substituted for this integration check; the real Auth0 browser flow was not tested.
 The handler now resolves its account context once and reuses one control token
 across deployment, placement and status reads before obtaining its inference token.
+
+The matching standalone console image is available for Helm installations at
+`acrfabricinference.azurecr.io/fabric/console@sha256:dccdc95d6667f0586427f8a19bd725f9d96f2cdb54d49ff3e99d02dcf11be8f8`
+(ACR build `cup`). Use the image overlay in
+`deploy/releases/console-cache-20261006/control-plane-images.yaml` with your
+installation's existing configuration. All five CI jobs passed for `9f4b40c`.

@@ -1,0 +1,168 @@
+{
+  "release": "console-cache-20261006",
+  "verified_on": "2026-10-06",
+  "registry_anonymous_pull": true,
+  "images": {
+    "control-plane": {
+      "tag": "console-cache-20261006-1705",
+      "digest": "sha256:7fea130c264194bf7559656caa885be6a62411459a42c23bcffe1b963efd28be",
+      "acr_build_run": "cun"
+    },
+    "console": {
+      "tag": "console-cache-20261006-1711",
+      "digest": "sha256:dccdc95d6667f0586427f8a19bd725f9d96f2cdb54d49ff3e99d02dcf11be8f8",
+      "acr_build_run": "cup"
+    }
+  },
+  "production_validation": {
+    "control_plane_helm_revision": 13,
+    "control_plane_ready_replicas": 2,
+    "cache_ready_replicas": 1,
+    "api_service_probe": {
+      "jwt_decode_median_ms": 0.053,
+      "reads": {
+        "deployments": {
+          "http": 200,
+          "first_ms": 97.7,
+          "warm_median_ms": 8.65
+        },
+        "status": {
+          "http": 200,
+          "first_ms": 12.88,
+          "warm_median_ms": 8.22
+        },
+        "stamps": {
+          "http": 200,
+          "first_ms": 17.74,
+          "warm_median_ms": 9.27
+        }
+      },
+      "redis_hits_added": 13,
+      "redis_misses_added": 3,
+      "account_version_before": 93,
+      "account_version_after_16s": 93,
+      "qwen_status": [
+        {
+          "deployment_id": "fbbedecd-d3dc-4867-bd16-92a3d3fce15a",
+          "stamp_id": "cf9dd635-e3cc-473c-8d14-9cc211f75cb0",
+          "observed_generation": 14,
+          "phase": "ready",
+          "ready_replicas": 1,
+          "unavailable_replicas": 0,
+          "endpoint": "https://inference.hexelstudio.com",
+          "conditions": [
+            {
+              "type": "Configured",
+              "reason": "ModelHostAndConfigurationApplied",
+              "status": "True",
+              "message": "Whether the declared release is the active routed release",
+              "last_transition_time": null
+            },
+            {
+              "type": "Available",
+              "reason": "ModelHostServing",
+              "status": "True",
+              "message": null,
+              "last_transition_time": null
+            }
+          ],
+          "reported_at": "2026-10-06T16:48:32.539407Z"
+        }
+      ],
+      "models": [
+        "ocr",
+        "qwen",
+        "qwen2.5-coder-3b",
+        "qwen3.5-4b"
+      ],
+      "stream": {
+        "http": 200,
+        "content_type": "text/event-stream; charset=utf-8",
+        "done": true,
+        "seconds": 0.13,
+        "usage": {
+          "prompt_tokens": 34,
+          "total_tokens": 37,
+          "completion_tokens": 3
+        }
+      }
+    },
+    "playground_module_integration": {
+      "ready_options": [
+        "auto",
+        "ocr",
+        "qwen",
+        "qwen2.5-coder-3b",
+        "qwen3.5-4b"
+      ],
+      "notice": null,
+      "route_http": 200,
+      "stream_done": true,
+      "content_type": "text/event-stream; charset=utf-8",
+      "seconds": 0.653
+    },
+    "console_function_region": "bom1",
+    "postgres_tests_passed": 234,
+    "sqlite_tests_passed": 220,
+    "ci_passed_commit": "9f4b40c2487cbe5f65f47682b81bdcf46d0c9470",
+    "auth0_browser_session_tested": false,
+    "vercel_deployment_id": 6890448088
+  },
+  "source_files_sha256": {
+    "control-plane/app/__init__.py": "c2ff8285a40d5e0d928b24261290e3da15c842811a0bf91c21233d42a593abbf",
+    "control-plane/app/api/__init__.py": "6b80f88fda6d9e8c639161e04e40ddb27796c0ec47e7862f8dfb8206ecbba2d5",
+    "control-plane/app/api/v1/__init__.py": "d4b2eb89135e821dc7f9fabadc471ca64955dce6db13a811b7c626c08113fef2",
+    "control-plane/app/api/v1/accounts.py": "3ea571f91be2c4da21b6c430027dfe01478205c4907d5f2c09b368364949c9d4",
+    "control-plane/app/api/v1/api_keys.py": "2a5d85011878a7a18f3fa6dd36a4ed48065be0991922200b98643845faff4bde",
+    "control-plane/app/api/v1/deployments.py": "d4343e8c6dad90198392e72bc4a973f31faf6db8e830860675732c75b9901783",
+    "control-plane/app/api/v1/identity_providers.py": "509142a7298a90b7ae2675bf5d2e87920611a31f094ba7ad4ff21961bc1e573a",
+    "control-plane/app/api/v1/service_principals.py": "a77fb169a8812219471e304ee8b4c54ad8b88f7fec2e90309f536ad2988f99ac",
+    "control-plane/app/api/v1/stamps.py": "16732609c0239bfbf133de7965fd3314a34b7b3019b6343725f271b1a95bb760",
+    "control-plane/app/api/v1/system.py": "c6c3e27f2b70cc854bd7d91d77d9762ce169d8e334372515ca5b8412ba616c51",
+    "control-plane/app/api/v1/telemetry.py": "cbaa51d17b60b38804edde9705af5a41aa62de80d1eb805c9c5cbdffe0772a71",
+    "control-plane/app/api/v1/tokens.py": "dca48ddffddb106b9dc9fb792e024dade85aba712b597718ce55247a7f02f5eb",
+    "control-plane/app/cli.py": "693297d6c89252d1f606f649350e4de08599d9723775fc438c09c41062938d4e",
+    "control-plane/app/core/__init__.py": "cddcc2e64de926a56059fa71af7a4db4b3ce3870af3f23bc3d697446abf89603",
+    "control-plane/app/core/auth0.py": "5ae755a8b69fc63ed7e30f4101cec06869fc5039e73ca540ae350d34a2cb6556",
+    "control-plane/app/core/cache.py": "9b2cc9ceb1cd57bfa8b59d92b35c5662fa873662fcb8cfcbac4eea660386900e",
+    "control-plane/app/core/config.py": "89dec081322443b1dad360adbe4a8db5ced5a3f1527af82dfe7475eaa6696e54",
+    "control-plane/app/core/credentials.py": "21978aaadceb7bbfb0707437b581229f614a7622181c22f6c4c9893c418762be",
+    "control-plane/app/core/database.py": "dc93562490f9d3ba44e36ab0147319eb93225f848dd82c37cb2cf88200a9ca54",
+    "control-plane/app/core/errors.py": "c284169b1ebcf3ac4b9eb67f830c10775244d66872e298041d628415092eb6ee",
+    "control-plane/app/core/installation.py": "bbc88ae4aca2c154c99e25035e1510dfd7453f0b077884d22d3b6522befd674c",
+    "control-plane/app/core/jwt_service.py": "2d32cbab465bb929d04f03e701832c3d966ee3823f53f8f81811e1a45de2d036",
+    "control-plane/app/core/platform.py": "746ad099a989fa9a8c65f034f74099e36558894b652165d860ebe8254afb7c62",
+    "control-plane/app/core/scopes.py": "3db7ab680a0640f31c6762f4cfd5d82980746ccdc67f5f8c62cf4a4a3b913ecd",
+    "control-plane/app/core/security.py": "111ac2159bc4eceb9aa98f901ecf350c90eacfb093749d733382859e9fbebbb6",
+    "control-plane/app/core/tenancy.py": "86bc9d5505b14a44e1d8f2b11445c7e453af16245a60c6d99ae24d657c2e9fa3",
+    "control-plane/app/core/timeutil.py": "c56af599be3b257ba74d5c00fcd1d624ebef5ec1d7f79bef038542dc65a281a4",
+    "control-plane/app/main.py": "d46dcfa8e4ea98005f8ec9cbd2d03e61d539e135d354cf7e4e9cb10768d26166",
+    "control-plane/app/models.py": "be69a9eca3f5a4945fc5b47d15cb909c2e4f23b7b7ed9773234cd7ccf8bca226",
+    "control-plane/app/schemas.py": "b99f1efaca481eed2e24153ed525568a8a74ce8f89b8ddaaed53c7248a22124c",
+    "control-plane/app/services/__init__.py": "46a986772a6d7bd96e4e69d98c36dfd7f60f9bf657bcbad7bfd10d6478fc8e6c",
+    "control-plane/app/services/accounts.py": "1b9365b3e78109d2730b10a66f4421ae449962044a177511f412194cf59982a2",
+    "control-plane/app/services/api_keys.py": "f30a75a8293d20b9c4c0e300862a55df9a781871e0dabab9179bb14bb15b78fd",
+    "control-plane/app/services/audit.py": "7c0f432457828bb4b7aa4367d57b43388876e180f9e6915959618496929e3377",
+    "control-plane/app/services/bootstrap.py": "3fb6ff8af04cfcdf5649b770b07205177b6f50d7d415dd0a7352d8ea6f1c5819",
+    "control-plane/app/services/deployments.py": "9daeb3d67a3f47f10e8477a9ac1ed1849957c36c2f7c0c1d930b3e6084e12bbb",
+    "control-plane/app/services/entitlements.py": "5b4253684cca0a006890e5cb56879d14d142bfe35440392578bd5c5daf3c79de",
+    "control-plane/app/services/idempotency.py": "43d34dcafb88ea98eed511e5a2767379e02880606f1d2a82ed76d198e4834be5",
+    "control-plane/app/services/identity.py": "2d1621722df212403b6e432b0c38faeff10b62f23fab01d68b28630862ed5e19",
+    "control-plane/app/services/metrics.py": "46dcf60853d41f622a1807bb8cc1a527c27aabc7af3faefd7d94959623b4c7fe",
+    "control-plane/app/services/oidc.py": "ba073abb981dc29d695493d983453117262486fbc044137dc329b7868bbc51d6",
+    "control-plane/app/services/outbox.py": "fa7b5c748df14887fc22efb3ab5510f976f28283f05d912a4cb3756964cfa033",
+    "control-plane/app/services/placement.py": "12ce6ad4537c235bc1146a049fb0aa590370c9e9d097926d369c11f5ad0191bf",
+    "control-plane/app/services/service_principals.py": "72a9c184c47b79aab04c1d32c3157f6497edb2236e75cf740ef73580b7473deb",
+    "control-plane/app/services/stamps.py": "ec6e728894bbaef44505c5e1c2e67f055cb7883b1acfb4692ba5e21720ce7326",
+    "control-plane/app/services/usage.py": "dc734771651a22acfe62e138e5e73e1f9c02c02ee8f73fe10f558be167e1491f",
+    "v1/app/(console)/deployments/page.tsx": "6b8728cb93eaf3bbf22756d92076c85dc87ff6449cbc6dfde9dee046234cad2e",
+    "v1/app/(console)/playground/page.tsx": "36ddd4413859b51d35a08066e7c75f89303c2f7283a5b34e90be580a0e173a8d",
+    "v1/app/api/playground/route.ts": "63c98a177c7d64f9a236100f57ee70530ea23b502208216c3f39d71e2ad7ff57",
+    "v1/components/console/live-refresh.tsx": "c85c23dea6608e6fb139c75a0531daed41281423c64787fc053a03ec8d0fbe85",
+    "v1/components/nav-main.tsx": "3169a9832d2a17965e6fab244fe7e2b994c9956728bdfa5c843c8ef58bb2dcaf",
+    "v1/components/playground/playground.tsx": "5bdbe9c00a78c1fec4a92465e841ff722a962a554ea3576d7ef729ba56788c08",
+    "v1/lib/fabric/data.ts": "9a855c5f461879b231293026cf466b12a1b0e157651425d0d90e1de6231d0f9b",
+    "v1/next.config.ts": "071ae3df96c32648cb5cc7054a613fb119526100d8fb6307f1391f7d5292087d",
+    "v1/vercel.json": "e6dbdb2521891f07b6be07b18a35977b8bb3ab28214f289bc06fa0640d3ee3b8"
+  }
+}
