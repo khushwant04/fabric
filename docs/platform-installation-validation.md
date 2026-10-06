@@ -10,12 +10,23 @@ the registry-confirmed image digests and source-file hashes. Image-only Helm ove
 are available for the [control plane and console](../deploy/releases/singletenant-20261006/control-plane-images.yaml)
 and [stamp](../deploy/releases/singletenant-20261006/stamp-images.yaml). The local
 installation used locally imported builds. The published control-plane and console
-images were also pulled and run in isolated containers. Target-cluster access to
-the private registry requires its own pull credentials.
+images were also pulled and run in isolated containers. Azure confirmed registry-wide
+anonymous pulls are enabled; published references require no Azure account or registry
+pull Secret. Publishing remains authenticated.
+
+All four release digest manifests returned HTTP 200 through anonymous registry
+authentication, with matching digest headers. This used registry-issued anonymous
+tokens and no Azure or Docker credentials. A fresh k3s Pod with
+`imagePullPolicy: Always`, no `imagePullSecrets`, and no ServiceAccount pull Secrets
+downloaded the published data-plane image and completed successfully. The pull event
+reported 70,352,801 bytes in 60.484 seconds; the container imported the application
+as UID 65532. This is one observed download, not a registry throughput benchmark.
 
 | Check | Observed result |
 |---|---|
 | Fresh Helm control-plane installation | Migration/bootstrap completed; API and console Deployments became ready. |
+| Published control-plane and console images | Migration and server startup succeeded; the console served its health route and configured Auth0 redirect. |
+| Anonymous Kubernetes image pull | The published data-plane digest downloaded completely and ran without Azure credentials or image pull Secrets. |
 | Repeated bootstrap/upgrade | The configured fixed account and administrator membership were preserved. |
 | Stamp installation before model selection | Agent, data plane, collector, and operator became ready without a chart-wide model repository. |
 | Infrastructure enrollment | The agent registered the stamp and reported zero measured GPU capacity. |
@@ -41,6 +52,7 @@ and upstream served name.
 
 | Suite | Result and coverage |
 |---|---|
+| GitHub CI | All five jobs passed for commit `472f6d0`: control plane, data plane, agent, console, and packaging. |
 | Control-plane PostgreSQL | 222 tests passed using a non-superuser `fabric_app` role without BYPASSRLS; two tests were skipped. |
 | Data plane | 371 tests passed, one skipped; Ruff passed. Routing, verification, metering, streaming, and upstream isolation were checked. |
 | Go agent/operator | All packages passed `go test ./...`, including model-free stamp startup, readiness reporting, capacity claims, standard/legacy GPU discovery labels, and endpoint validation. |

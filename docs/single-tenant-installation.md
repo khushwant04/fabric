@@ -28,9 +28,10 @@ flowchart LR
 
 ## Prepare the dependencies
 
-You need Helm, kubectl, access to both cluster contexts, and images built from this
-checkout. The control-plane chart uses an existing PostgreSQL database; it does not
-install a database server. The console currently uses Auth0 for browser authentication.
+You need Helm, kubectl, access to both cluster contexts, and the published Fabric
+images or your own builds. The control-plane chart uses an existing PostgreSQL
+database; it does not install a database server. The console currently uses Auth0
+for browser authentication.
 Provide that application through Helm Secret references. Single-tenant mode creates a
 fixed Fabric account and its initial owner; users still sign in and need an active
 membership. Identity-provider configuration has no dashboard setup page.
@@ -62,7 +63,16 @@ kubectl --context "$FABRIC_DP_CONTEXT" get nodes \
   -o 'custom-columns=NAME:.metadata.name,GPUS:.status.allocatable.nvidia\.com/gpu'
 ```
 
-## Build and publish the images
+## Choose the published images or build your own
+
+The published Fabric release uses `acrfabricinference.azurecr.io`, which has
+registry-wide anonymous pulls enabled. You can use the release overlays without an
+Azure account, Azure role, registry login, or `imagePullSecrets` for those images.
+Pushing images still requires authentication. Anonymous read access applies to every
+repository in that registry, including `fabric/model-host` and earlier releases.
+
+Use the published overlays below to skip building Fabric images. If you want to build
+and publish your own version, run these commands instead.
 
 Run these commands from the repository root, replacing the registry and release tag
 with ones your clusters can pull. The console image includes the standalone Next.js
@@ -99,8 +109,8 @@ secret manager. Configure `imagePullSecrets` for Fabric images and
 The [2026-10-06 release manifest](../deploy/releases/singletenant-20261006/release.json)
 contains registry-confirmed Fabric image digests. Its image-only overlays can be
 passed with your installation values to Helm, or their image fields can be copied
-into your values file before invoking the wrapper. These private-registry overlays do not contain authentication,
-account, database, or cluster configuration. The
+into your values file before invoking the wrapper. These image-only overlays do not
+contain authentication, account, database, or cluster configuration. The
 [installation validation report](platform-installation-validation.md) records what
 was checked and which external integration checks remain.
 

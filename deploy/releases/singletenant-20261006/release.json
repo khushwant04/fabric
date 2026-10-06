@@ -322,6 +322,35 @@
     "real_auth0_owner_login_tested": false,
     "public_dns_and_certificate_issuance_tested": false,
     "data_plane_test_cases_passed": 371,
-    "data_plane_test_cases_skipped": 1
+    "data_plane_test_cases_skipped": 1,
+    "github_ci": {
+      "source_commit": "472f6d0",
+      "jobs_passed": 5,
+      "status": "passed"
+    },
+    "published_control_plane_migration_and_startup": "passed",
+    "published_console_health_and_auth0_redirect": "passed"
+  },
+  "registry_access": {
+    "anonymous_pull_enabled": true,
+    "configuration_verified_on": "2026-10-06",
+    "scope": "registry-wide",
+    "azure_account_required_to_pull": false,
+    "image_pull_secret_required_to_pull": false,
+    "publishing_requires_authentication": true,
+    "release_digest_manifest_checks": "all four returned HTTP 200 with matching digest headers using anonymous registry tokens",
+    "anonymous_full_image_pull_verified": true,
+    "anonymous_kubernetes_pull": {
+      "component": "data-plane",
+      "digest": "sha256:73f606436cf150e116ddad43ed35cf69fa2df52d46f4eddf78d77db1789d28ad",
+      "image_pull_policy": "Always",
+      "pod_image_pull_secrets": false,
+      "service_account_image_pull_secrets": false,
+      "pod_phase": "Succeeded",
+      "reported_image_bytes": 70352801,
+      "reported_pull_seconds": 60.484,
+      "runtime_uid": 65532,
+      "boundary": "One successful isolated k3s pull; not a registry throughput benchmark."
+    }
   }
 }
