@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import commit_and_invalidate
 from app.core.database import get_db_session
 from app.core.security import StampContext, require_telemetry_credential
 from app.schemas import (
@@ -98,7 +99,7 @@ async def report_metrics(
         gpus=[sample.model_dump() for sample in payload.gpus],
         runtime=payload.runtime.model_dump(),
     )
-    await session.commit()
+    await commit_and_invalidate(session, [stamp.account_id])
 
     return MetricsAcceptedResponse(
         stamp_id=context.stamp_id,

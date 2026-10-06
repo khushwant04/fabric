@@ -117,6 +117,7 @@ jobs:
       - name: Assert console and native stamp exposure packaging
         run: |
           python deploy/scripts/test_console_chart.py
+          python deploy/scripts/test_cache_chart.py
           bash deploy/scripts/test-stamp-exposure-chart.sh
       - name: Verify upgrades from legacy release values
         run: python deploy/scripts/test_upgrade_automation.py

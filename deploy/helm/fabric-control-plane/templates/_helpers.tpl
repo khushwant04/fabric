@@ -88,6 +88,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
       key: {{ .Values.cache.existingSecretKey }}
 - name: FABRIC_API_CACHE_TTL_SECONDS
   value: {{ .Values.cache.ttlSeconds | quote }}
+- name: FABRIC_API_CACHE_LIVE_TTL_SECONDS
+  value: {{ .Values.cache.liveTtlSeconds | default 3 | quote }}
+- name: FABRIC_API_CACHE_TIMEOUT_SECONDS
+  value: {{ .Values.cache.timeoutSeconds | default 0.2 | quote }}
+- name: FABRIC_API_CACHE_MAX_CONNECTIONS
+  value: {{ .Values.cache.maxConnections | default 32 | quote }}
+- name: FABRIC_API_CACHE_MAX_VALUE_BYTES
+  value: {{ .Values.cache.maxValueBytes | default 1048576 | int | quote }}
 {{- end }}
 - name: FABRIC_CREDENTIAL_PEPPER
   valueFrom:

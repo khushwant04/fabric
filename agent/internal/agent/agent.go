@@ -177,24 +177,36 @@ func (a *Agent) Ensure(ctx context.Context) error {
 	}
 	if existing != nil {
 		a.credentials = existing
+		if existing.DeploymentGenerations == nil {
+			existing.DeploymentGenerations = map[string]int{}
+		}
 		a.client.Credential = existing.AgentCredential
 		// The collector's copy may live on an ephemeral volume, so it is rewritten
 		// on every start rather than only when the credential was first issued.
 		a.handOffTelemetryCredential()
 		a.buildSink()
-		// A restart also loses unreported status, and desired state will not
-		// mention already-acknowledged assignments again. What is on disk is what
-		// this agent has applied, so it is reported at the acknowledged generation.
+		// A restart also loses unreported status. A directly rendered assignment
+		// can be recovered from disk when its own placement generation is durable.
+		// The operator's file contains only routed releases, so a full desired-state
+		// replay is needed there to recover pending placements too.
 		existingDeployments, readErr := state.ReadDeployments(a.config.DeploymentsPath)
 		switch {
 		case readErr == nil:
 			for _, deployment := range existingDeployments.Deployments {
+				generation, knownGeneration := existing.DeploymentGenerations[deployment.DeploymentID]
+				if !knownGeneration {
+					// Upgrade from an agent that persisted only the global cursor.
+					// Asking for the full set recovers each placement's own counter.
+					existing.AckedGeneration = 0
+					continue
+				}
 				a.known[deployment.DeploymentID] = deployment
 				a.pendingStatus[deployment.DeploymentID] = controlplane.DesiredDeployment{
 					DeploymentID:      deployment.DeploymentID,
 					AccountID:         deployment.AccountID,
 					ModelAlias:        deployment.ModelAlias,
-					DesiredGeneration: existing.AckedGeneration,
+					DesiredGeneration: generation,
+					Spec:              map[string]any{"replicas": deployment.Replicas},
 				}
 			}
 		case a.credentials.AckedGeneration > 0:
@@ -213,6 +225,13 @@ func (a *Agent) Ensure(ctx context.Context) error {
 				"acked_generation", a.credentials.AckedGeneration,
 				"error", readErr)
 			a.credentials.AckedGeneration = 0
+		}
+		if _, operatorBacked := a.config.Sink.(StatusSource); operatorBacked {
+			// Routed backends are not a durable copy of desired intent. Replaying
+			// assignments is idempotent and keeps the operator's pending releases.
+			existing.AckedGeneration = 0
+			a.known = map[string]state.Deployment{}
+			a.pendingStatus = map[string]controlplane.DesiredDeployment{}
 		}
 		a.log.Info("using persisted stamp identity",
 			"stamp_id", existing.StampID, "acked_generation", existing.AckedGeneration)
@@ -235,11 +254,12 @@ func (a *Agent) Ensure(ctx context.Context) error {
 	}
 
 	a.credentials = &state.Credentials{
-		StampID:             enrolled.Stamp.ID,
-		AccountID:           enrolled.Stamp.AccountID,
-		Mode:                enrolled.Stamp.Mode,
-		AgentCredential:     enrolled.AgentCredential,
-		TelemetryCredential: enrolled.TelemetryCredential,
+		StampID:               enrolled.Stamp.ID,
+		AccountID:             enrolled.Stamp.AccountID,
+		Mode:                  enrolled.Stamp.Mode,
+		AgentCredential:       enrolled.AgentCredential,
+		TelemetryCredential:   enrolled.TelemetryCredential,
+		DeploymentGenerations: map[string]int{},
 	}
 	if err := state.SaveCredentials(a.config.CredentialsPath, a.credentials); err != nil {
 		// The credentials exist server-side but could not be persisted. Surfacing
@@ -436,6 +456,18 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		return nil, fmt.Errorf("desired state: %w", err)
 	}
 
+	// Keep the last applied assignment set until publishing succeeds. Otherwise
+	// a failed CR update can look unchanged on the next pass and allow the old
+	// release's ready observation to acknowledge an intent never declared.
+	previousKnown := make(map[string]state.Deployment, len(a.known))
+	for id, deployment := range a.known {
+		previousKnown[id] = deployment
+	}
+	previousGenerations := make(map[string]int, len(a.credentials.DeploymentGenerations))
+	for id, generation := range a.credentials.DeploymentGenerations {
+		previousGenerations[id] = generation
+	}
+	previousVerification := a.verification
 	changed := false
 	// Checked before the assignments, and on every pass rather than only when an
 	// assignment arrives: a steady-state poll returns no deployments at all, and a stamp
@@ -451,6 +483,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 
 	for _, assignment := range desired.Deployments {
 		if assignment.Deleted {
+			delete(a.credentials.DeploymentGenerations, assignment.DeploymentID)
 			if _, present := a.known[assignment.DeploymentID]; present {
 				delete(a.known, assignment.DeploymentID)
 				changed = true
@@ -487,11 +520,15 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 				"generation", assignment.DesiredGeneration)
 		}
 		a.known[assignment.DeploymentID] = entry
+		a.credentials.DeploymentGenerations[assignment.DeploymentID] = assignment.DesiredGeneration
 	}
 
 	configured := a.configured()
 	if changed {
 		if err := a.publish(ctx, configured); err != nil {
+			a.known = previousKnown
+			a.credentials.DeploymentGenerations = previousGenerations
+			a.verification = previousVerification
 			return nil, err
 		}
 	}
@@ -573,9 +610,9 @@ func (a *Agent) reportStatus(ctx context.Context, assignment controlplane.Desire
 		} else if !observed.Applied {
 			phase = "pending"
 		}
-		if observed.ObservedGeneration > 0 {
-			generation = int(observed.ObservedGeneration)
-		}
+		// The operator's observedGeneration is the Kubernetes CR version. It
+		// validates that observation locally in Publisher.Observed; the control
+		// plane expects the independent placement generation from its assignment.
 		if observed.ReadyReplicas != nil {
 			readyReplicas = *observed.ReadyReplicas
 		}
@@ -645,9 +682,9 @@ func (a *Agent) queueChangedVerdicts() {
 			// Preserve the spec so the fallback replica count remains truthful when an
 			// older operator does not publish replica status yet.
 			Spec: map[string]any{"replicas": a.known[deploymentID].Replicas},
-			// The generation this agent has applied, which is what it can honestly
-			// claim to have observed.
-			DesiredGeneration: a.credentials.AckedGeneration,
+			// Each placement has its own generation. The stamp-wide stream cursor
+			// may have advanced for an unrelated deployment since this was applied.
+			DesiredGeneration: a.credentials.DeploymentGenerations[deploymentID],
 		}
 	}
 }

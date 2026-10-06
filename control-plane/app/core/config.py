@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://fabric:fabric@localhost:5432/fabric"
     redis_url: str | None = None
     api_cache_ttl_seconds: int = Field(default=60, ge=1, le=3600)
+    api_cache_live_ttl_seconds: int = Field(default=3, ge=1, le=8)
+    api_cache_timeout_seconds: float = Field(default=0.2, ge=0.01, le=2)
+    api_cache_max_connections: int = Field(default=32, ge=1, le=256)
+    api_cache_max_value_bytes: int = Field(default=1048576, ge=1024, le=8388608)
 
     #: How often the outbox worker looks for undelivered events. Short enough that a
     #: placement is announced promptly, long enough that an idle deployment is not

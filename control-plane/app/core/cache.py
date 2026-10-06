@@ -7,15 +7,19 @@ response current again when Redis recovers.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 from redis.asyncio import Redis
+from redis.backoff import NoBackoff
 from redis.exceptions import RedisError
+from redis.retry import Retry
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,22 +33,54 @@ T = TypeVar("T")
 class ResponseCache:
     """Small fail-open wrapper around Redis for validated response objects."""
 
-    def __init__(self, client: Redis | None, ttl_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        client: Redis | None,
+        ttl_seconds: int = 60,
+        *,
+        live_ttl_seconds: int = 3,
+        timeout_seconds: float = 0.2,
+        max_value_bytes: int = 1048576,
+    ) -> None:
         self._client = client
         self._ttl_seconds = ttl_seconds
+        self._live_ttl_seconds = live_ttl_seconds
+        self._timeout_seconds = timeout_seconds
+        self._max_value_bytes = max_value_bytes
+        self._unavailable_until = 0.0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> ResponseCache:
         if settings.redis_url is None:
             return cls(None, settings.api_cache_ttl_seconds)
         return cls(
-            Redis.from_url(settings.redis_url, decode_responses=True),
+            Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=settings.api_cache_timeout_seconds,
+                socket_timeout=settings.api_cache_timeout_seconds,
+                retry=Retry(NoBackoff(), 0),
+                retry_on_timeout=False,
+                max_connections=settings.api_cache_max_connections,
+            ),
             settings.api_cache_ttl_seconds,
+            live_ttl_seconds=settings.api_cache_live_ttl_seconds,
+            timeout_seconds=settings.api_cache_timeout_seconds,
+            max_value_bytes=settings.api_cache_max_value_bytes,
         )
 
     @property
     def enabled(self) -> bool:
         return self._client is not None
+
+    def _available(self) -> bool:
+        return self._client is not None and time.monotonic() >= self._unavailable_until
+
+    def _unavailable(self, operation: str, error: Exception) -> None:
+        # A failed dependency must not add its timeout to every dashboard request.
+        # Versions still come from PostgreSQL during this brief retry cooldown.
+        self._unavailable_until = time.monotonic() + 5
+        logger.warning("response cache %s unavailable error=%s", operation, type(error).__name__)
 
     @staticmethod
     def key(account_id: uuid.UUID, version: int, resource: str, *parameters: object) -> str:
@@ -62,28 +98,40 @@ class ResponseCache:
         response_type: object,
         loader: Callable[[], Awaitable[T]],
         parameters: tuple[object, ...] = (),
+        live: bool = False,
     ) -> T:
         adapter = TypeAdapter(response_type)
         key = self.key(account_id, version, resource, *parameters)
-        if self._client is not None:
+        if self._available():
             try:
-                cached = await self._client.get(key)
+                async with asyncio.timeout(self._timeout_seconds):
+                    cached = await self._client.get(key)
                 if cached is not None:
+                    if len(cached.encode("utf-8")) > self._max_value_bytes:
+                        raise ValueError("cached response exceeds size limit")
                     return adapter.validate_json(cached)
-            except (RedisError, ValidationError, ValueError, TypeError):
-                logger.warning("response cache read failed key=%s", key, exc_info=True)
+            except (RedisError, TimeoutError, OSError) as error:
+                self._unavailable("read", error)
+            except (ValidationError, ValueError, TypeError):
+                logger.warning("response cache contains invalid response key=%s", key)
 
         value = await loader()
         validated = adapter.validate_python(value)
-        if self._client is not None:
+        if self._available():
             try:
                 payload = json.dumps(
                     adapter.dump_python(validated, mode="json"),
                     separators=(",", ":"),
                 )
-                await self._client.set(key, payload, ex=self._ttl_seconds)
-            except (RedisError, ValidationError, ValueError, TypeError):
-                logger.warning("response cache write failed key=%s", key, exc_info=True)
+                if len(payload.encode("utf-8")) <= self._max_value_bytes:
+                    async with asyncio.timeout(self._timeout_seconds):
+                        await self._client.set(
+                            key, payload, ex=self._live_ttl_seconds if live else self._ttl_seconds
+                        )
+            except (RedisError, TimeoutError, OSError) as error:
+                self._unavailable("write", error)
+            except (ValidationError, ValueError, TypeError):
+                logger.warning("response cache could not serialize response key=%s", key)
         return validated
 
     async def close(self) -> None:
@@ -106,6 +154,18 @@ def get_cache() -> ResponseCache:
 
 async def commit_and_invalidate(session: AsyncSession, account_ids: Iterable[uuid.UUID]) -> None:
     """Atomically advance durable generations and commit the related mutation."""
+    await invalidate_account_versions(session, account_ids)
+    await session.commit()
+
+
+async def invalidate_account_versions(
+    session: AsyncSession, account_ids: Iterable[uuid.UUID]
+) -> None:
+    """Advance generations within the caller's transaction and authorization context.
+
+    Services accepting managed-stamp reports resolve customer ownership themselves
+    before calling this, while they still hold the required elevated transaction.
+    """
     for account_id in sorted(set(account_ids), key=str):
         updated_id = (
             await session.execute(
@@ -118,4 +178,3 @@ async def commit_and_invalidate(session: AsyncSession, account_ids: Iterable[uui
         ).scalar_one_or_none()
         if updated_id is None:
             raise LookupError(f"cannot invalidate missing account {account_id}")
-    await session.commit()

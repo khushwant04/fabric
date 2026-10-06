@@ -134,10 +134,23 @@ async def list_all(
 async def read_account_usage(
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> AccountUsageResponse:
     """Aggregate operational usage reported across all account deployments."""
-    summary = await summarize_account_usage(session, account_id=principal.account_id)
-    return AccountUsageResponse.model_validate(summary)
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> AccountUsageResponse:
+        summary = await summarize_account_usage(session, account_id=principal.account_id)
+        return AccountUsageResponse.model_validate(summary)
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="account-usage",
+        response_type=AccountUsageResponse,
+        loader=load,
+        live=True,
+    )
 
 
 @router.get(
@@ -276,9 +289,23 @@ async def read_status(
     deployment_id: uuid.UUID = Path(...),
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[DeploymentStatusResponse]:
-    records = await list_deployment_status(session, principal.account_id, deployment_id)
-    return [DeploymentStatusResponse.model_validate(record) for record in records]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[DeploymentStatusResponse]:
+        records = await list_deployment_status(session, principal.account_id, deployment_id)
+        return [DeploymentStatusResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="deployment-status",
+        parameters=(deployment_id,),
+        response_type=list[DeploymentStatusResponse],
+        loader=load,
+        live=True,
+    )
 
 
 @router.get(
@@ -290,6 +317,7 @@ async def read_usage(
     deployment_id: uuid.UUID = Path(...),
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> DeploymentUsageResponse:
     """Aggregate usage a collector reported for this deployment.
 
@@ -297,9 +325,22 @@ async def read_usage(
     deduplicated per stamp but delivery is at-least-once and a stamp that never
     reports simply contributes nothing.
     """
-    # Confirms the deployment exists and belongs to the token's account.
-    await get_deployment(session, principal.account_id, deployment_id)
-    summary = await summarize_deployment_usage(
-        session, account_id=principal.account_id, deployment_id=deployment_id
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> DeploymentUsageResponse:
+        # Confirms the deployment exists and belongs to the token's account.
+        await get_deployment(session, principal.account_id, deployment_id)
+        summary = await summarize_deployment_usage(
+            session, account_id=principal.account_id, deployment_id=deployment_id
+        )
+        return DeploymentUsageResponse.model_validate(summary)
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="deployment-usage",
+        parameters=(deployment_id,),
+        response_type=DeploymentUsageResponse,
+        loader=load,
+        live=True,
     )
-    return DeploymentUsageResponse.model_validate(summary)

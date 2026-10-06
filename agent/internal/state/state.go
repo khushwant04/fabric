@@ -37,6 +37,10 @@ type Credentials struct {
 	// AckedGeneration is the highest desired generation already applied, so a
 	// restart resumes instead of replaying every assignment.
 	AckedGeneration int `json:"acked_generation"`
+	// DeploymentGenerations records the control-plane placement generation per
+	// deployment. AckedGeneration is a stamp-wide stream cursor; neither it nor a
+	// Kubernetes object's metadata.generation identifies another deployment's intent.
+	DeploymentGenerations map[string]int `json:"deployment_generations,omitempty"`
 }
 
 // ModelCapabilities is bounded metadata for stamp-local automatic model selection.

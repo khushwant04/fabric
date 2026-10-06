@@ -13,6 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import invalidate_account_versions
 from app.core.config import get_settings
 from app.core.credentials import (
     PREFIX_AGENT,
@@ -504,4 +505,5 @@ async def report_status(
         deployment.status = phase
 
     await session.flush()
+    await invalidate_account_versions(session, [account_id])
     return now

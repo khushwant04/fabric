@@ -1,0 +1,4 @@
+image:
+  agent:
+    repository: acrfabricinference.azurecr.io/fabric/agent
+    digest: sha256:079683653592b7768785094d5fb6f448726f39c305eec828146e62d2f6b80933

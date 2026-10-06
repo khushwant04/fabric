@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import invalidate_account_versions
 from app.core.tenancy import elevated
 from app.models import DeploymentPlacement, UsageEvent
 
@@ -50,6 +51,7 @@ class IngestResult:
     accepted: int = 0
     duplicates: int = 0
     rejections: list[Rejection] = dataclasses.field(default_factory=list)
+    affected_account_ids: set[uuid.UUID] = dataclasses.field(default_factory=set)
 
     @property
     def rejected(self) -> int:
@@ -88,8 +90,10 @@ async def ingest_usage(
     # policies refused every usage row while the same code passed in tests that
     # happened to share one transaction.
     async with elevated(session):
-        return await _ingest(session, stamp_id=stamp_id, records=records, moment=moment,
-                             result=result)
+        result = await _ingest(session, stamp_id=stamp_id, records=records, moment=moment,
+                               result=result)
+        await invalidate_account_versions(session, result.affected_account_ids)
+        return result
 
 
 async def _ingest(
@@ -161,6 +165,7 @@ async def _ingest(
             result.duplicates += 1
             continue
         result.accepted += 1
+        result.affected_account_ids.add(placement.account_id)
 
     return result
 

@@ -19,7 +19,7 @@ spec:
       annotations:
         # Roll the pods when the signing key or database target changes, since neither
         # is re-read while a process runs.
-        checksum/config: {{ printf "%s|%s|%s" .Values.database.url .Values.signingKey.value .Values.jwt.issuer | sha256sum }}
+        checksum/config: {{ printf "%s|%s|%s|%s" .Values.database.url .Values.signingKey.value .Values.jwt.issuer (toJson .Values.cache) | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

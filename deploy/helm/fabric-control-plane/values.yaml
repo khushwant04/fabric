@@ -23,8 +23,18 @@ cache:
   existingSecretKey: redis-url
   passwordSecretKey: password
   ttlSeconds: 60
+  # Stamp/status/usage reads use a shorter TTL than deployment configuration.
+  liveTtlSeconds: 3
+  timeoutSeconds: 0.2
+  maxConnections: 32
+  maxValueBytes: 1048576
   internal:
     enabled: false
+    # One disposable, shared Redis-compatible cache for all control-plane replicas.
+    # HA deployments can point existingSecret at an externally managed Redis URL.
+    maxMemoryMiB: 192
+    nodeSelector: {}
+    tolerations: []
     image:
       repository: valkey/valkey
       digest: sha256:5d586b6d9574ce96954142cdca85f4903a0efdbd4d04d4fe27c9fb245cdf91d4

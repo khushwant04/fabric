@@ -122,6 +122,7 @@ async def list_account_stamps(
         resource="stamps",
         response_type=list[StampResponse],
         loader=load,
+        live=True,
     )
 
 
@@ -194,7 +195,7 @@ async def heartbeat(
     received_at = await record_heartbeat(
         session, stamp_id=context.stamp_id, capabilities=payload.capabilities
     )
-    await session.commit()
+    await commit_and_invalidate(session, [context.account_id])
     return HeartbeatResponse(stamp_id=context.stamp_id, received_at=received_at)
 
 
