@@ -26,15 +26,15 @@ import {
 function CopyCommand({ command, label }: { command: string; label: string }) {
   const [copied, setCopied] = useState("")
   const [error, setError] = useState("")
-  return <div className="overflow-hidden rounded-xl border bg-muted/40">
-    <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
-      <span className="flex items-center gap-2 text-xs text-muted-foreground"><TerminalIcon className="size-3.5" />{label}</span>
+  return <div className="w-full min-w-0 max-w-full overflow-hidden rounded-xl border bg-muted/40">
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b px-3 py-2">
+      <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><TerminalIcon className="size-3.5 shrink-0" /><span className="truncate">{label}</span></span>
       <Button type="button" variant="ghost" size="sm" aria-label={`Copy ${label}`} onClick={async () => {
         try { await navigator.clipboard.writeText(command); setCopied(command); setError("") }
         catch { setError("Copy is unavailable. Select the command below and copy it manually.") }
       }}>{copied === command ? <CheckIcon /> : <CopyIcon />}{copied === command ? "Copied" : "Copy"}</Button>
     </div>
-    <pre tabIndex={0} aria-label={label} className="max-h-72 overflow-auto p-3 font-mono text-[11px] leading-6"><code>{command}</code></pre>
+    <pre tabIndex={0} aria-label={label} className="w-full min-w-0 max-w-full max-h-72 overflow-auto p-3 font-mono text-[11px] leading-6"><code>{command}</code></pre>
     {error ? <p role="status" className="px-3 pb-3 text-xs text-destructive">{error}</p> : null}
   </div>
 }
@@ -75,23 +75,24 @@ function EnrollmentSession({ disabled, config, onFinish }: { disabled: boolean; 
     if (!next) onFinish()
   }}>
     <DialogTrigger render={<Button disabled={disabled}><PlusIcon /> Enroll stamp</Button>} />
-    <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-3xl" showCloseButton={!pending}>
-      <DialogHeader>
+    <DialogContent className="flex w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl" showCloseButton={!pending}>
+      <DialogHeader className="min-w-0 shrink-0 border-b px-5 py-5 pr-14">
         <DialogTitle>Enroll an inference stamp</DialogTitle>
         <DialogDescription>Prepare your cluster, then install the Fabric operator to connect its capacity to this account.</DialogDescription>
       </DialogHeader>
-      <form action={state.enrollmentToken ? undefined : action} onSubmit={state.enrollmentToken ? (event) => event.preventDefault() : undefined} className="space-y-5">
+      <form action={state.enrollmentToken ? undefined : action} onSubmit={state.enrollmentToken ? (event) => event.preventDefault() : undefined} className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         <input type="hidden" name="mode" value="byoi" />
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="min-h-0 min-w-0 space-y-5 overflow-x-hidden overflow-y-auto overscroll-contain px-5 py-5 [overflow-wrap:anywhere] [&_[data-slot=field]]:min-w-0">
+        <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           <Field><FieldLabel htmlFor={`${id}-target`}>Cluster</FieldLabel><Select value={setup.target} disabled={pending} onValueChange={(value) => {
             if (value !== "k3s" && value !== "kubernetes") return
             setSetup((previous) => ({ ...previous, target: value, runtimeClass: value === "k3s" ? (nvidia ? "nvidia" : "") : "", ingressClass: value === "k3s" ? "traefik" : "" }))
-          }}><SelectTrigger id={`${id}-target`} className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="k3s">Create k3s on a VM</SelectItem><SelectItem value="kubernetes">Existing Kubernetes cluster</SelectItem></SelectContent></Select></Field>
+          }}><SelectTrigger id={`${id}-target`} className="w-full min-w-0"><SelectValue className="truncate" /></SelectTrigger><SelectContent><SelectItem value="k3s">Create k3s on a VM</SelectItem><SelectItem value="kubernetes">Existing Kubernetes cluster</SelectItem></SelectContent></Select></Field>
           <Field><FieldLabel htmlFor={`${id}-name`}>Stamp name</FieldLabel><Input id={`${id}-name`} value={setup.stampName} onChange={(event) => update("stampName", event.target.value)} maxLength={53} disabled={pending} required /></Field>
         </div>
 
-        {setup.target === "k3s" ? <section className="space-y-3 rounded-xl border p-4" aria-labelledby={`${id}-vm-title`}>
-          <h3 id={`${id}-vm-title`} className="flex items-center gap-2 font-medium"><ServerIcon className="size-4 text-muted-foreground" /><span className="text-muted-foreground">1.</span> Create a k3s cluster on your VM</h3>
+        {setup.target === "k3s" ? <section className="min-w-0 space-y-3 rounded-xl border p-4" aria-labelledby={`${id}-vm-title`}>
+          <h3 id={`${id}-vm-title`} className="flex items-center gap-2 font-medium"><ServerIcon className="size-4 shrink-0 text-muted-foreground" /><span><span className="mr-2 text-muted-foreground">1.</span>Create a k3s cluster on your VM</span></h3>
           <p className="text-xs leading-5 text-muted-foreground">Run this on an Ubuntu 22.04 or 24.04 VM. It installs k3s and Helm, with Traefik and local storage. Existing local k3s installations are reused.</p>
           <label className="flex items-center gap-2 text-xs"><Checkbox checked={nvidia} disabled={pending} onCheckedChange={(checked) => {
             setNvidia(checked === true)
@@ -102,13 +103,13 @@ function EnrollmentSession({ disabled, config, onFinish }: { disabled: boolean; 
           <a href={K3S_BOOTSTRAP_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">View the GitHub script<ExternalLinkIcon className="size-3" /></a>
         </section> : <Field><FieldLabel htmlFor={`${id}-context`}>Kubectl context</FieldLabel><Input id={`${id}-context`} value={setup.kubeContext} onChange={(event) => update("kubeContext", event.target.value)} placeholder="Your cluster context from kubectl config get-contexts" disabled={pending} required /><FieldDescription>Run the Helm command on a machine with Helm, this context, cluster-admin access and working GPU support.</FieldDescription></Field>}
 
-        <section className="space-y-4 rounded-xl border p-4" aria-labelledby={`${id}-helm-title`}>
+        <section className="min-w-0 space-y-4 rounded-xl border p-4" aria-labelledby={`${id}-helm-title`}>
           <div className="space-y-1"><h3 id={`${id}-helm-title`} className="font-medium"><span className="mr-2 text-muted-foreground">{setup.target === "k3s" ? "2." : "1."}</span>Install the Fabric stamp with Helm</h3><p className="text-xs leading-5 text-muted-foreground">The operator registers this cluster and reconciles model deployments you create in the dashboard.</p></div>
           <Field><FieldLabel htmlFor={`${id}-control`}>Control-plane address</FieldLabel><Input id={`${id}-control`} type="url" value={setup.controlPlaneUrl} onChange={(event) => update("controlPlaneUrl", event.target.value)} placeholder="https://control.your-domain.com" disabled={pending} required /><FieldDescription>Use the HTTPS address reachable from this VM or cluster.</FieldDescription></Field>
           <p className="text-xs leading-5 text-muted-foreground">Model runtime: <code className="break-all">{setup.modelImage}</code>. Standard vLLM 0.26 uses CUDA 13 and needs an R580 or newer driver. For A10 GRID 570 / CUDA 12.8, choose vLLM 0.11 below for its supported models.</p>
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-xs"><span>Helm chart: <code>deploy/helm/fabric-stamp</code></span><a href={`${STAMP_REPOSITORY}/tree/${STAMP_CHART_REF}/deploy/helm/fabric-stamp`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground">Chart reference<ExternalLinkIcon className="size-3" /></a></div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-xs"><span className="min-w-0">Helm chart: <code>deploy/helm/fabric-stamp</code></span><a href={`${STAMP_REPOSITORY}/tree/${STAMP_CHART_REF}/deploy/helm/fabric-stamp`} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1.5 text-muted-foreground hover:text-foreground">Chart reference<ExternalLinkIcon className="size-3" /></a></div>
 
-          <details className="rounded-lg border p-3"><summary className="cursor-pointer text-xs font-medium">Runtime and inference gateway settings</summary><div className="mt-4 space-y-4">
+          <details className="min-w-0 rounded-lg border p-3"><summary className="cursor-pointer text-xs font-medium">Runtime and inference gateway settings</summary><div className="mt-4 min-w-0 space-y-4">
             <Field><FieldLabel htmlFor={`${id}-image`}>vLLM image</FieldLabel><Input id={`${id}-image`} value={setup.modelImage} onChange={(event) => update("modelImage", event.target.value)} disabled={pending} /><FieldDescription>Choose an image compatible with the GPU driver and model. For the A10 GRID 570 / CUDA 12.8 setup, use <code>vllm/vllm-openai:v0.11.0</code> for supported models. Qwen3.5 needs a newer vLLM image and a compatible driver.</FieldDescription></Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field><FieldLabel htmlFor={`${id}-runtime`}>GPU RuntimeClass</FieldLabel><Input id={`${id}-runtime`} value={setup.runtimeClass} onChange={(event) => update("runtimeClass", event.target.value)} placeholder="Leave empty for the default runtime" disabled={pending} /></Field>
@@ -127,14 +128,17 @@ function EnrollmentSession({ disabled, config, onFinish }: { disabled: boolean; 
             {helm ? <CopyCommand command={helm} label="Helm enrollment command" /> : null}
             <p className="text-xs leading-5 text-muted-foreground">The token is stored in the Helm release and enrollment Secret. Run this once for a new stamp. The agent keeps its enrolled identity on persistent storage.</p>
             {setup.gatewayHost ? <p className="text-xs leading-5 text-muted-foreground">After a model placement is ready, the stamp reports <code className="break-all">https://{setup.gatewayHost}</code> to Fabric. Approve this origin in the console&apos;s inference gateway configuration to use the playground.</p> : <p className="text-xs leading-5 text-muted-foreground">This enrolls the cluster. Public inference and playground access also need a gateway hostname and TLS.</p>}
-          </div> : <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+          </div> : <div className="min-w-0">
             <Field><FieldLabel htmlFor={`${id}-expiry`}>Token expires in (minutes)</FieldLabel><Input id={`${id}-expiry`} name="expiresInMinutes" type="number" min={5} max={1440} defaultValue={60} disabled={pending} required /><FieldDescription>Generate it after the cluster is ready. Valid for 5 minutes to 24 hours.</FieldDescription></Field>
-            <Button type="submit" disabled={pending || !!setupError}>{pending ? <Spinner /> : <KeyRoundIcon />}{pending ? "Generating…" : "Generate token and command"}</Button>
           </div>}
           {!state.enrollmentToken && setupError ? <p role="status" className="text-xs text-muted-foreground">{setupError}</p> : null}
           {state.error ? <FieldError>{state.error}</FieldError> : null}
         </section>
-        <DialogFooter><Button type="button" variant="outline" disabled={pending} onClick={() => { setOpen(false); onFinish() }}>Close</Button></DialogFooter>
+        </div>
+        <DialogFooter className="m-0 min-w-0 shrink-0 px-5 py-4">
+          <Button type="button" variant="outline" disabled={pending} onClick={() => { setOpen(false); onFinish() }}>Close</Button>
+          {!state.enrollmentToken ? <Button type="submit" disabled={pending || !!setupError}>{pending ? <Spinner /> : <KeyRoundIcon />}{pending ? "Generating…" : "Generate token and command"}</Button> : null}
+        </DialogFooter>
       </form>
     </DialogContent>
   </Dialog>
