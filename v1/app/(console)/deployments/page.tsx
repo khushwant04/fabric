@@ -21,11 +21,15 @@ export default async function DeploymentsPage({ searchParams }: PageProps<"/depl
   const query = String((await searchParams).q ?? "").toLowerCase()
   let all: Deployment[] = []
   let error: string | null = null
-  try { all = await listDeployments() } catch { error = "Deployment data is unavailable." }
   let stamps: Stamp[] | undefined
-  if (hasScope(context, "stamps:read")) {
-    try { stamps = await listStamps() } catch { error = "Stamp heartbeats could not be checked." }
-  }
+  const [deploymentResult, stampResult] = await Promise.allSettled([
+    listDeployments(),
+    hasScope(context, "stamps:read") ? listStamps() : Promise.resolve(undefined),
+  ])
+  if (deploymentResult.status === "fulfilled") all = deploymentResult.value
+  else error = "Deployment data is unavailable."
+  if (stampResult.status === "fulfilled") stamps = stampResult.value
+  else error = error ?? "Stamp heartbeats could not be checked."
   const deployments = query ? all.filter((item) => item.name.toLowerCase().includes(query) || item.model_alias.toLowerCase().includes(query)) : all
   const states = new Map<string, ReturnType<typeof deploymentState>>()
   const observationFailures: string[] = []

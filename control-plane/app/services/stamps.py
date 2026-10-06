@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
@@ -220,6 +220,29 @@ async def list_stamps(session: AsyncSession, account_id: uuid.UUID) -> list[Infe
         .order_by(InferenceStamp.created_at.desc())
     )
     return list(rows.scalars().all())
+
+
+async def get_stamp_cache_revision(
+    session: AsyncSession, account_id: uuid.UUID
+) -> tuple[int, str]:
+    """Read a durable inventory revision without invalidating unrelated resources.
+
+    Heartbeats and metrics change stamp.updated_at, not deployment intent or account
+    configuration. The aggregate keeps inventory responses current across API replicas
+    without a separate Redis invalidation operation or an extra schema version.
+    """
+    row = (
+        await session.execute(
+            select(Account.cache_version, func.max(InferenceStamp.updated_at),
+                   func.count(InferenceStamp.id))
+            .outerjoin(InferenceStamp, InferenceStamp.account_id == Account.id)
+            .where(Account.id == account_id)
+            .group_by(Account.id, Account.cache_version)
+        )
+    ).one_or_none()
+    if row is None:
+        raise NotFound("account_not_found", "Account does not exist")
+    return row[0], f"{row[1].isoformat() if row[1] else 'empty'}:{row[2]}"
 
 
 async def get_stamp(session: AsyncSession, stamp_id: uuid.UUID) -> InferenceStamp:
@@ -473,6 +496,7 @@ async def report_status(
         )
     ).scalar_one_or_none()
 
+    changed = record is None
     if record is None:
         record = DeploymentStatus(
             account_id=account_id,
@@ -480,6 +504,15 @@ async def report_status(
             stamp_id=stamp_id,
         )
         session.add(record)
+    else:
+        changed = (
+            record.observed_generation != observed_generation
+            or record.phase != phase
+            or record.ready_replicas != ready_replicas
+            or record.unavailable_replicas != unavailable_replicas
+            or record.endpoint != endpoint
+            or record.conditions != conditions
+        )
 
     record.observed_generation = observed_generation
     record.phase = phase
@@ -490,8 +523,10 @@ async def report_status(
     record.reported_at = now
 
     if observed_generation is not None:
+        changed = changed or placement.observed_generation != observed_generation
         placement.observed_generation = observed_generation
         if observed_generation >= placement.desired_generation and phase == "ready":
+            changed = changed or placement.status != "ready"
             placement.status = "ready"
 
     deployment = (
@@ -502,8 +537,10 @@ async def report_status(
         )
     ).scalar_one_or_none()
     if deployment is not None and deployment.deleted_at is None:
+        changed = changed or deployment.status != phase
         deployment.status = phase
 
     await session.flush()
-    await invalidate_account_versions(session, [account_id])
+    if changed:
+        await invalidate_account_versions(session, [account_id])
     return now

@@ -18,9 +18,13 @@ onboarding, enrollment, agent desired-state delivery, health probes, and mutatio
 responses are not cached.
 
 Mutations advance the account's cache generation in the same database transaction
-as the write. Deployment status reports also advance the deployment owner's
-generation, so a newly ready replica is visible on the next dashboard refresh.
-Heartbeats and GPU metrics invalidate their stamp owner's generation. Accepted
+as the write. Deployment status reports advance the deployment owner's generation
+when availability, generation, replicas, endpoint, or conditions actually change,
+so a newly ready replica is visible on the next dashboard refresh. Repeated identical
+reports keep the management cache warm while refreshing the recorded report time.
+Stamp inventory keys also include the newest durable stamp update timestamp and
+stamp count. Heartbeats and GPU metrics therefore refresh inventory immediately
+without evicting unrelated deployment or account responses. Accepted
 usage records invalidate the customer accounts resolved from the placements,
 including when a system-owned managed stamp reports on behalf of a customer.
 Rejected and duplicate usage records do not advance these generations. Old keys
@@ -30,6 +34,14 @@ Redis reads and writes each have a 200 ms deadline, no connection retries, and a
 32-connection limit per API process. After a connection failure the process bypasses
 Redis for five seconds and reads PostgreSQL directly. Responses above 1 MiB bypass
 the cache. These bounds prevent a stalled cache from stalling the dashboard.
+
+JWT verification reuses the RSA public key loaded at process startup. Every request
+still verifies its signature, issuer, audience and expiry; it avoids parsing the
+private PEM on each read. A controlled local measurement reduced verification from
+38.072 ms to 0.064 ms median for the same token and key. Existing cluster API cache
+hits measured approximately 50–63 ms before this change, with about 40 ms spent in
+that repeated key parsing. These are component measurements, not a dashboard
+navigation latency guarantee.
 
 Enable the in-cluster cache with values like these:
 

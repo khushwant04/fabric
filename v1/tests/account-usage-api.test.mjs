@@ -37,6 +37,7 @@ function fixture({ aggregate, deployments = [{ id: "dep-one" }, { id: "dep-two" 
   const rows = usage ?? (() => ({ ...empty, events: 2, input_tokens: 3, output_tokens: 4 }))
   const data = compile("../lib/fabric/data.ts", {
     "server-only": {},
+    react: { cache: (fn) => fn },
     "@/lib/fabric/client": {
       FabricApiError: ApiError,
       async controlPlaneRequest(path, init) {

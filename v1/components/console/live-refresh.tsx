@@ -15,6 +15,8 @@ export function LiveRefresh({ checkedAt, error, intervalMs = 8000 }: {
   const [pending, setPending] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
   const control = useRef<ReturnType<typeof createLiveRefresh> | null>(null)
+  const lastCheckedAt = useRef(checkedAt)
+  useEffect(() => { lastCheckedAt.current = checkedAt }, [checkedAt])
   useEffect(() => {
     let mounted = true
     const controller = createLiveRefresh({
@@ -40,7 +42,12 @@ export function LiveRefresh({ checkedAt, error, intervalMs = 8000 }: {
     control.current = controller
     const visible = () => { if (document.visibilityState === "visible") void controller.run() }
     document.addEventListener("visibilitychange", visible)
-    controller.start()
+    // A prefetched or revisited page may already be older than one poll interval.
+    // Keep its content visible and check it immediately instead of waiting again.
+    const age = Date.now() - Date.parse(lastCheckedAt.current)
+    if (!Number.isFinite(age) || age >= Math.max(5000, Math.min(intervalMs, 30_000))) {
+      void controller.run()
+    } else controller.start()
     return () => { mounted = false; controller.stop(); control.current = null; document.removeEventListener("visibilitychange", visible) }
   }, [intervalMs])
   const failure = requestError || error

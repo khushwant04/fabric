@@ -16,6 +16,7 @@ from app.core.config import Settings
 from app.core.tenancy import declare_account, declare_system
 from app.models import Account, DeploymentPlacement
 from tests.helpers import bearer, create_deployment, enroll_stamp, onboard
+from tests.test_metrics import report as metrics_report
 from tests.test_stamps import _enroll_managed_stamp
 from tests.test_telemetry import place, record
 
@@ -239,6 +240,71 @@ async def test_managed_stamp_invalidates_customer_cache_not_only_system_account(
         select(Account).where(Account.id == system_id)
     )).scalar_one()
     assert system_current.cache_version == 2  # Enrollment only; reports belong to the customer.
+
+
+async def test_periodic_reports_keep_management_cache_warm_but_inventory_and_changes_are_fresh(
+    client, db_session
+):
+    redis = MemoryRedis()
+    cache = ResponseCache(redis)
+    client._transport.app.dependency_overrides[get_cache] = lambda: cache
+    account_id, token = await onboard(client, "cache-periodic", "cache-periodic-account")
+    deployment = await create_deployment(client, account_id, token)
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id = enrolled["stamp"]["id"]
+    await place(client, account_id, token, deployment["id"], stamp_id)
+    headers = bearer(token)
+    base = f"/v1/accounts/{account_id}/deployments/{deployment['id']}"
+    stamps_url = f"/v1/accounts/{account_id}/stamps"
+    status_payload = {
+        "deployment_id": deployment["id"], "observed_generation": 1,
+        "phase": "ready", "ready_replicas": 1, "unavailable_replicas": 0,
+        "endpoint": "https://inference.example.test/v1", "conditions": [],
+    }
+    agent_headers = bearer(enrolled["agent_credential"])
+    reported = await client.post(f"/v1/stamps/{stamp_id}/status", headers=agent_headers,
+                                 json=status_payload)
+    assert reported.status_code == 200, reported.text
+    assert (await client.get(base, headers=headers)).json()["status"] == "ready"
+    assert (await client.get(stamps_url, headers=headers)).json()[0]["status"] == "registered"
+    await declare_system(db_session)
+    generation = (await db_session.execute(
+        select(Account.cache_version).where(Account.id == uuid.UUID(account_id))
+    )).scalar_one()
+    await db_session.rollback()
+    key = cache.key(uuid.UUID(account_id), generation, "deployment", deployment["id"])
+    assert key in redis.values
+
+    # Repeated identical status is liveness evidence, not a changed deployment.
+    reported = await client.post(f"/v1/stamps/{stamp_id}/status", headers=agent_headers,
+                                 json=status_payload)
+    assert reported.status_code == 200, reported.text
+    heartbeat = await client.post(
+        f"/v1/stamps/{stamp_id}/heartbeat", headers=agent_headers, json={}
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    assert (await client.get(stamps_url, headers=headers)).json()[0]["status"] == "active"
+    metrics = await client.post("/v1/telemetry/metrics", json=metrics_report(),
+                                headers=bearer(enrolled["telemetry_credential"]))
+    assert metrics.status_code == 200, metrics.text
+    stamp = (await client.get(stamps_url, headers=headers)).json()[0]
+    assert stamp["capabilities"]["metrics"]["gpu"]["devices"] == 1
+    await declare_system(db_session)
+    current = (await db_session.execute(
+        select(Account.cache_version).where(Account.id == uuid.UUID(account_id))
+    )).scalar_one()
+    assert current == generation
+    await db_session.rollback()
+    assert (await client.get(base, headers=headers)).json()["status"] == "ready"
+    assert key in redis.values
+
+    # An actual availability transition invalidates immediately, even within the TTL.
+    reported = await client.post(
+        f"/v1/stamps/{stamp_id}/status", headers=agent_headers,
+        json=status_payload | {"phase": "progressing", "ready_replicas": 0},
+    )
+    assert reported.status_code == 200, reported.text
+    assert (await client.get(base, headers=headers)).json()["status"] == "progressing"
 
 
 @pytest.mark.asyncio

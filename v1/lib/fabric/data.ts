@@ -1,5 +1,7 @@
 import "server-only"
 
+import { cache } from "react"
+
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
 import { summarizeAccountUsage } from "@/lib/fabric/account-usage"
 import { getConsoleContext, getFabricAccessToken } from "@/lib/fabric/session"
@@ -16,10 +18,16 @@ import type {
   Stamp,
 } from "@/lib/fabric/types"
 
-async function accountRequest<T>(path: string, init?: RequestInit) {
+// React's cache lasts only for the current server render. The account-bound
+// path shares duplicate reads across components without storing user data globally.
+const accountRead = cache(async (path: string) => {
   const context = await getConsoleContext()
   const token = await getFabricAccessToken(context.account.id)
-  return controlPlaneRequest<T>(path, { ...init, token })
+  return controlPlaneRequest<unknown>(path, { token })
+})
+
+function accountRequest<T>(path: string) {
+  return accountRead(path) as Promise<T>
 }
 
 export async function listDeployments() {

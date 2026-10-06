@@ -42,6 +42,7 @@ class SigningKey:
     kid: str
     private_pem: str
     public_jwk: dict[str, Any]
+    public_key: rsa.RSAPublicKey
 
 
 def _jwk_from_public_numbers(kid: str, numbers: rsa.RSAPublicNumbers) -> dict[str, Any]:
@@ -72,9 +73,13 @@ def _load_or_generate(settings: Settings) -> SigningKey:
     private_key = serialization.load_pem_private_key(pem.encode(), password=None)
     if not isinstance(private_key, rsa.RSAPrivateKey):
         raise RuntimeError("Fabric signing key must be an RSA private key")
-    numbers = private_key.public_key().public_numbers()
+    public_key = private_key.public_key()
+    numbers = public_key.public_numbers()
     kid = _thumbprint(numbers)
-    return SigningKey(kid=kid, private_pem=pem, public_jwk=_jwk_from_public_numbers(kid, numbers))
+    return SigningKey(
+        kid=kid, private_pem=pem, public_jwk=_jwk_from_public_numbers(kid, numbers),
+        public_key=public_key,
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -141,18 +146,10 @@ def decode_token(token: str, *, audience: str) -> dict[str, Any]:
     """Verify a Fabric-issued token. Used by tests and internal callers."""
     settings = get_settings()
     signing_key = get_signing_key()
-    public_pem = (
-        serialization.load_pem_private_key(signing_key.private_pem.encode(), password=None)
-        .public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-    )
     try:
         return jwt.decode(
             token,
-            public_pem,
+            signing_key.public_key,
             algorithms=[ALGORITHM],
             audience=audience,
             issuer=settings.jwt_issuer,

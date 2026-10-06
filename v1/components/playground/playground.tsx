@@ -36,14 +36,14 @@ function decodeAlias(value: string) {
   try { return decodeURIComponent(value).replace(/[\u0000-\u001f\u007f]/g, "") } catch { return value }
 }
 
-function ComparisonResult({ result, index }: { result: Result; index: number }) {
+function ComparisonResult({ result, index, available }: { result: Result; index: number; available: boolean }) {
   const rate = completionTokensPerSecond(result.usage, result.elapsedMs, result.status === "complete")
   return (
     <Card className="min-w-0 gap-0 overflow-hidden py-0">
       <CardHeader className="gap-3 border-b py-5">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="min-w-0 truncate text-sm">{result.label || `Response ${index + 1}`}</CardTitle>
-          <span role="status" className="text-xs capitalize text-muted-foreground">{result.status === "idle" ? "Ready" : result.status}</span>
+          <span role="status" className="text-xs capitalize text-muted-foreground">{result.status === "idle" ? available ? "Ready" : "Unavailable" : result.status}</span>
         </div>
         <dl className="grid grid-cols-2 gap-4 text-xs sm:grid-cols-4">
           {[
@@ -78,6 +78,10 @@ export function Playground({ options }: { options: PlaygroundOption[] }) {
   const controllers = useRef<AbortController[]>([])
   const mounted = useRef(true)
   const running = results.some((result) => result.status === "running")
+  // Availability can change during a live refresh. Preserve valid selections,
+  // and choose an available replacement without resetting prompts or responses.
+  const currentSelected = selected.map((id, index) => options.some((option) => option.id === id)
+    ? id : options[index]?.id ?? options[0]?.id ?? "")
 
   useEffect(() => {
     mounted.current = true
@@ -146,14 +150,14 @@ export function Playground({ options }: { options: PlaygroundOption[] }) {
   function submit(event: FormEvent) {
     event.preventDefault()
     if (running || !prompt.trim()) return
-    const choices = selected.map((id) => options.find((option) => option.id === id))
+    const choices = currentSelected.map((id) => options.find((option) => option.id === id))
     if (choices.some((choice) => !choice)) return
     controllers.current = [new AbortController(), new AbortController()]
     choices.forEach((choice, index) => { if (choice) void generate(index, choice, controllers.current[index]) })
   }
 
   async function copyRequest() {
-    const option = options.find((item) => item.id === selected[0])
+    const option = options.find((item) => item.id === currentSelected[0])
     if (!option) return
     // SDK credentials remain placeholders; console tokens are never rendered.
     const payload = { model: option.modelAlias, messages: [{ role: "user", content: prompt }], max_tokens: maxTokens, temperature, stream: true, stream_options: { include_usage: true }, routing: { ...(task ? { task } : {}), explain: true } }
@@ -176,7 +180,7 @@ export function Playground({ options }: { options: PlaygroundOption[] }) {
         <Card>
           <CardHeader><CardTitle>Compare models</CardTitle><CardDescription>Responses stream independently. Automatic selection chooses compatible models at the selected gateway.</CardDescription></CardHeader>
           <CardContent className="space-y-5">
-            <div className="grid gap-5 md:grid-cols-2">{[0, 1].map((index) => <Field key={index}><FieldLabel htmlFor={`model-${index}`}>Model {index + 1}</FieldLabel><NativeSelect id={`model-${index}`} className="w-full" value={selected[index]} disabled={running || !options.length} onChange={(event) => setSelected((current) => { const next: [string, string] = [...current]; next[index] = event.target.value; return next })}>{!options.length ? <option value="">No available deployment</option> : options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</NativeSelect></Field>)}</div>
+            <div className="grid gap-5 md:grid-cols-2">{[0, 1].map((index) => <Field key={index}><FieldLabel htmlFor={`model-${index}`}>Model {index + 1}</FieldLabel><NativeSelect id={`model-${index}`} className="w-full" value={currentSelected[index]} disabled={running || !options.length} onChange={(event) => setSelected((current) => { const next: [string, string] = [...current]; next[index] = event.target.value; return next })}>{!options.length ? <option value="">No available deployment</option> : options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</NativeSelect></Field>)}</div>
             <Field><FieldLabel htmlFor="prompt">Prompt</FieldLabel><Textarea id="prompt" name="prompt" autoComplete="off" className="min-h-32" placeholder="Ask a question, compare an argument, or debug a piece of code…" value={prompt} onChange={(event) => setPrompt(event.target.value)} disabled={running} maxLength={MAX_PROMPT_CHARS} required /><p className="text-xs text-muted-foreground">Prompts stay in this page and are sent only for generation. Fabric does not save playground history.</p></Field>
             <div className="grid gap-5 sm:grid-cols-3"><Field><FieldLabel htmlFor="output-limit">Maximum output tokens</FieldLabel><Input id="output-limit" type="number" min={1} max={2048} required value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} disabled={running} /></Field><Field><FieldLabel htmlFor="temperature">Temperature</FieldLabel><Input id="temperature" type="number" min={0} max={2} step={0.1} required value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} disabled={running} /></Field><Field><FieldLabel htmlFor="routing-task">Auto routing task</FieldLabel><NativeSelect id="routing-task" className="w-full" value={task} onChange={(event) => setTask(event.target.value as RoutingTask | "")} disabled={running}><option value="">Infer from prompt</option><option value="general">General</option><option value="code">Code</option><option value="reasoning">Reasoning</option></NativeSelect></Field></div>
             <div className="flex flex-wrap items-center gap-3"><Button type="submit" disabled={running || !options.length || !prompt.trim()}><ArrowUpIcon />Compare responses</Button>{running ? <Button type="button" variant="outline" onClick={() => controllers.current.forEach((controller) => controller.abort())}><SquareIcon />Stop both</Button> : null}<Button type="button" variant="ghost" disabled={!options.length} onClick={copyRequest}>{copied ? <CheckIcon /> : <CopyIcon />}{copied ? "Copied" : "Copy cURL · model 1"}</Button></div>
@@ -184,7 +188,7 @@ export function Playground({ options }: { options: PlaygroundOption[] }) {
         </Card>
       </form>
       <p className="text-xs leading-5 text-muted-foreground">First answer measures time from this browser&apos;s request to its first answer text, including network and authorization. Tokens/sec uses host-reported completion tokens divided by total elapsed time; it is not engine decode speed. Side-by-side requests share capacity, so these results are exploratory rather than a benchmark.</p>
-      <div className="grid items-start gap-5 xl:grid-cols-2">{results.map((result, index) => <ComparisonResult key={index} result={result} index={index} />)}</div>
+      <div className="grid items-start gap-5 xl:grid-cols-2">{results.map((result, index) => <ComparisonResult key={index} result={result} index={index} available={options.length > 0} />)}</div>
     </div>
   )
 }

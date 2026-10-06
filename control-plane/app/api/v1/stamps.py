@@ -39,6 +39,7 @@ from app.services.stamps import (
     build_desired_state,
     create_enrollment_token,
     enroll_stamp,
+    get_stamp_cache_revision,
     list_stamps,
     record_heartbeat,
     report_status,
@@ -110,7 +111,9 @@ async def list_account_stamps(
     session: AsyncSession = Depends(get_db_session),
     cache: ResponseCache = Depends(get_cache),
 ) -> list[StampResponse]:
-    account = await get_account(session, principal.account_id)
+    account_version, inventory_revision = await get_stamp_cache_revision(
+        session, principal.account_id
+    )
 
     async def load() -> list[StampResponse]:
         records = await list_stamps(session, principal.account_id)
@@ -118,8 +121,9 @@ async def list_account_stamps(
 
     return await cache.get_or_load(
         account_id=principal.account_id,
-        version=account.cache_version,
+        version=account_version,
         resource="stamps",
+        parameters=(inventory_revision,),
         response_type=list[StampResponse],
         loader=load,
         live=True,
@@ -195,7 +199,7 @@ async def heartbeat(
     received_at = await record_heartbeat(
         session, stamp_id=context.stamp_id, capabilities=payload.capabilities
     )
-    await commit_and_invalidate(session, [context.account_id])
+    await session.commit()
     return HeartbeatResponse(stamp_id=context.stamp_id, received_at=received_at)
 
 
