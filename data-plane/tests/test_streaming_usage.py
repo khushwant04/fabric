@@ -1455,8 +1455,9 @@ async def test_withdrawal_before_iterator_entry_keeps_an_admitted_loss_attributa
     assert plane.concurrency.snapshot()["in_flight"] == 0
 
 
+@pytest.mark.parametrize("explain", [False, True])
 async def test_cleanup_cancellation_while_limiter_lock_is_contended_releases_once(
-    plane, signing_key: SigningKey
+    plane, signing_key: SigningKey, explain: bool
 ) -> None:
     """Disconnect cancellation cannot strand concurrency or placement admission."""
     import asyncio
@@ -1469,7 +1470,9 @@ async def test_cleanup_cancellation_while_limiter_lock_is_contended_releases_onc
 
     plane.concurrency = ConcurrencyLimiter(1)
     plane.limits = LocalLimitManager(plane.rate_limiter, plane.concurrency)
-    body = json.dumps({"model": "launch-model", "stream": True}).encode()
+    body = json.dumps(
+        {"model": "launch-model", "stream": True, "routing": {"explain": explain}}
+    ).encode()
     scope = {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -1497,6 +1500,7 @@ async def test_cleanup_cancellation_while_limiter_lock_is_contended_releases_onc
         return {"type": "http.disconnect"}
 
     response = await _proxy(plane, Request(scope, receive), CHAT)
+    assert ("x-fabric-routing-policy" in response.headers) is explain
     await plane.concurrency._lock.acquire()
 
     async def consume() -> bytes:

@@ -37,9 +37,9 @@ func (c *clusterStub) Get(_ context.Context, path string, out any) error {
 
 const twoT4Nodes = `{"items":[
 	{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-	 "status":{"allocatable":{"nvidia.com/gpu":"2"}}},
+	 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"2"}}},
 	{"metadata":{"name":"gpu-1","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-	 "status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`
+	 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`
 
 func TestMeasuredCapacityIsWhatTheNodesAdvertise(t *testing.T) {
 	// The number the control plane places against. Before this it was a Helm value a human
@@ -85,12 +85,12 @@ func TestAGroupCollapsesToItsWeakestNode(t *testing.T) {
 			"nvidia.com/gpu.memory":"81920",
 			"nvidia.com/cuda.compute-capability.major":"8",
 			"nvidia.com/cuda.compute-capability.minor":"6"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}},
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}},
 		{"metadata":{"name":"b","labels":{"nvidia.com/gpu.product":"NVIDIA-A100",
 			"nvidia.com/gpu.memory":"40960",
 			"nvidia.com/cuda.compute-capability.major":"8",
 			"nvidia.com/cuda.compute-capability.minor":"0"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
 
 	capacity, err := Measure(context.Background(), cluster, nil)
 	if err != nil {
@@ -113,10 +113,10 @@ func TestOneUndescribedNodeMakesItsGroupUndescribed(t *testing.T) {
 	// cannot see, which is why this has to be reported as unknown rather than omitted.
 	cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[
 		{"metadata":{"name":"a","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}},
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}},
 		{"metadata":{"name":"b","labels":{"nvidia.com/gpu.product":"Tesla-T4",
 			"nvidia.com/gpu.memory":"0"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
 
 	capacity, _ := Measure(context.Background(), cluster, nil)
 
@@ -132,7 +132,7 @@ func TestOneUndescribedNodeMakesItsGroupUndescribed(t *testing.T) {
 func TestAnUnidentifiedDeviceIsReportedAsUnknown(t *testing.T) {
 	cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[
 		{"metadata":{"name":"a","labels":{"node.kubernetes.io/instance-type":"some-vm"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"4"}}}]}`}
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"4"}}}]}`}
 
 	capacity, _ := Measure(context.Background(), cluster, nil)
 
@@ -307,9 +307,9 @@ func TestGroupsAreSortedSoAnUnchangedClusterReportsIdentically(t *testing.T) {
 	// like a capability change forever.
 	cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[
 		{"metadata":{"name":"z","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}},
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}},
 		{"metadata":{"name":"a","labels":{"nvidia.com/gpu.product":"NVIDIA-A100"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
 
 	capacity, _ := Measure(context.Background(), cluster, nil)
 
@@ -348,7 +348,7 @@ func TestGPUsAreDescribedWithoutFeatureDiscoveryOnEveryCloudWeSupport(t *testing
 		t.Run(testCase.name, func(t *testing.T) {
 			cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[{"metadata":{
 				"name":"gpu-0","labels":{` + testCase.labels + `}},
-				"status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+				"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
 
 			capacity, err := Measure(context.Background(), cluster, nil)
 			if err != nil {
@@ -373,7 +373,7 @@ func TestAnUnrecognisedMachineIsStillReportedAsUnknown(t *testing.T) {
 	// The table can only ever be partial, so the honest failure has to stay honest.
 	cluster := &clusterStub{pods: `{"items":[]}`, nodes: `{"items":[{"metadata":{
 		"name":"gpu-0","labels":{"node.kubernetes.io/instance-type":"zz9-plural-z-alpha"}},
-		"status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+		"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
 
 	capacity, _ := Measure(context.Background(), cluster, nil)
 
@@ -484,9 +484,9 @@ func TestLargestFreeNodeIsReportedSeparatelyFromLargestNode(t *testing.T) {
 	// would admit it and Kubernetes would leave it Pending forever.
 	cluster := &clusterStub{nodes: `{"items":[
 		{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"2"}}},
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"2"}}},
 		{"metadata":{"name":"gpu-1","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"2"}}}]}`,
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"2"}}}]}`,
 		pods: `{"items":[
 			{"metadata":{"name":"busy-0"},"spec":{"nodeName":"gpu-0","containers":[
 				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},
@@ -516,7 +516,7 @@ func TestNoFreeNodeIsReportedAsZero(t *testing.T) {
 	// Zero is not "unreported" when claims were measured; it means no new GPU pod fits.
 	cluster := &clusterStub{nodes: `{"items":[
 		{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`,
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`,
 		pods: `{"items":[
 			{"metadata":{"name":"busy"},"spec":{"nodeName":"gpu-0","containers":[
 				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}}]}`}
@@ -538,9 +538,9 @@ func TestSlotsAccountForSeveralReplicasNotOnlyTheLargestFreeNode(t *testing.T) {
 	// one 2-GPU pod. A total plus max-free check would admit two replicas and strand the second.
 	cluster := &clusterStub{nodes: `{"items":[
 		{"metadata":{"name":"gpu-0","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"4"}}},
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"4"}}},
 		{"metadata":{"name":"gpu-1","labels":{"nvidia.com/gpu.product":"Tesla-T4"}},
-		 "status":{"allocatable":{"nvidia.com/gpu":"2"}}}]}`,
+		 "status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"2"}}}]}`,
 		pods: `{"items":[
 			{"metadata":{"name":"busy-0"},"spec":{"nodeName":"gpu-0","containers":[
 				{"resources":{"limits":{"nvidia.com/gpu":"1"}}}]}},

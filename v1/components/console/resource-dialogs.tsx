@@ -1,14 +1,13 @@
 "use client"
 
 import { useActionState, useState } from "react"
-import { CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, ServerCogIcon, Trash2Icon, UserPlusIcon } from "lucide-react"
+import { CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, Trash2Icon, UserPlusIcon } from "lucide-react"
 
 import {
   addMember,
   createApiKey,
   createEnrollmentToken,
   createServicePrincipal,
-  saveOidcProvider,
   type ActionState,
 } from "@/app/(console)/actions"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -29,7 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner"
 import { confirmDeleteDeployment } from "@/lib/fabric/deployment-actions"
 import { confirmsModelDeletion } from "@/lib/fabric/resource-state"
-import type { OidcProvider, ServicePrincipal } from "@/lib/fabric/types"
+import type { ServicePrincipal } from "@/lib/fabric/types"
 
 const initialState: ActionState = {}
 
@@ -213,27 +212,5 @@ export function CreateApiKeyDialog({ principals, disabled = false }: { principal
         )}
       </DialogContent>
     </Dialog>
-  )
-}
-
-export function OidcProviderForm({ provider, disabled = false }: { provider: OidcProvider | null; disabled?: boolean }) {
-  const [state, action, pending] = useActionState(saveOidcProvider, initialState)
-  return (
-    <form action={action} className="space-y-6">
-      <FieldGroup>
-        <div className="grid gap-5 md:grid-cols-2">
-          <Field><FieldLabel htmlFor="issuer">Issuer URL</FieldLabel><Input id="issuer" name="issuer" type="url" defaultValue={provider?.issuer} placeholder="https://login.example.com/" required disabled={disabled} /></Field>
-          <Field><FieldLabel htmlFor="audience">Audience</FieldLabel><Input id="audience" name="audience" defaultValue={provider?.audience} placeholder="fabric-console" required disabled={disabled} /></Field>
-        </div>
-        <Field><FieldLabel htmlFor="jwksUri">JWKS URL (optional)</FieldLabel><Input id="jwksUri" name="jwksUri" type="url" defaultValue={provider?.jwks_uri} placeholder="Discovered from the issuer" disabled={disabled} /><FieldDescription>Leave blank to use the issuer discovery document.</FieldDescription></Field>
-        <div className="grid gap-5 md:grid-cols-3">
-          <Field><FieldLabel htmlFor="subjectClaim">Subject claim</FieldLabel><Input id="subjectClaim" name="subjectClaim" defaultValue={provider?.subject_claim || "sub"} disabled={disabled} /></Field>
-          <Field><FieldLabel htmlFor="emailClaim">Email claim</FieldLabel><Input id="emailClaim" name="emailClaim" defaultValue={provider?.email_claim || "email"} disabled={disabled} /></Field>
-          <Field><FieldLabel>Auto-provision role</FieldLabel><Select name="autoProvisionRole" defaultValue={provider?.auto_provision_role || "none"} disabled={disabled}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Disabled</SelectItem><SelectItem value="viewer">Viewer</SelectItem><SelectItem value="developer">Developer</SelectItem></SelectContent></Select></Field>
-        </div>
-        <ResultMessage state={state} />
-      </FieldGroup>
-      <div className="flex justify-end"><SubmitButton pending={pending || disabled}><ServerCogIcon /> Save provider</SubmitButton></div>
-    </form>
   )
 }

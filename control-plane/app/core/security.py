@@ -27,6 +27,7 @@ from app.core.credentials import (
 )
 from app.core.database import get_db_session
 from app.core.errors import Forbidden, Unauthorized
+from app.core.installation import require_installation_account
 from app.core.jwt_service import decode_token
 from app.core.tenancy import declare_account, declare_system
 from app.core.timeutil import is_expired, utc_now
@@ -129,6 +130,7 @@ def _principal_from_claims(claims: dict, audience: str) -> PrincipalContext:
         account_id = uuid.UUID(account_raw)
     except ValueError as exc:
         raise Unauthorized("invalid_token", "Token account binding is malformed") from exc
+    require_installation_account(account_id)
 
     subject = str(claims.get("sub", ""))
     principal_id: uuid.UUID | None
@@ -217,6 +219,7 @@ async def _lookup_machine_credential(
         settings.credential_pepper, credential_id, secret, record.credential_verifier
     ):
         raise Unauthorized("invalid_credential", "Cluster credential is not recognized")
+    require_installation_account(record.account_id)
 
     now = utc_now()
     if record.revoked_at is not None:

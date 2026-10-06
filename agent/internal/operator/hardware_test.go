@@ -23,7 +23,7 @@ func TestAMachineTypeIsEnoughToKnowTheGPU(t *testing.T) {
 	// chip, and the chip is implied by the SKU.
 	getter := &fakeGetter{payload: `{"items":[{
 		"metadata":{"name":"gpu-0","labels":{"node.kubernetes.io/instance-type":"Standard_NC4as_T4_v3"}},
-		"status":{"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
+		"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"1"}}}]}`}
 
 	profiles, err := ProfileGPUNodes(context.Background(), getter, map[string]string{"gpu": "t4"})
 	if err != nil {
@@ -49,7 +49,7 @@ func TestANodeAdvertisingNoGPUIsNotProfiled(t *testing.T) {
 	// why a GPU pool can exist while advertising nothing schedulable.
 	getter := &fakeGetter{payload: `{"items":[{
 		"metadata":{"name":"gpu-0","labels":{"node.kubernetes.io/instance-type":"Standard_NC4as_T4_v3"}},
-		"status":{"allocatable":{"cpu":"4"}}}]}`}
+		"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"cpu":"4"}}}]}`}
 
 	profiles, err := ProfileGPUNodes(context.Background(), getter, nil)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestDeviceLabelsBeatTheTable(t *testing.T) {
 			"nvidia.com/cuda.compute-capability.major":"8",
 			"nvidia.com/cuda.compute-capability.minor":"0",
 			"nvidia.com/gpu.memory":"81920"}},
-		"status":{"allocatable":{"nvidia.com/gpu":"2"}}}]}`}
+		"status":{"conditions":[{"type":"Ready","status":"True"}],"allocatable":{"nvidia.com/gpu":"2"}}}]}`}
 
 	profiles, _ := ProfileGPUNodes(context.Background(), getter, nil)
 	if len(profiles) != 1 || profiles[0].MemoryMiB != 81920 || profiles[0].Count != 2 {

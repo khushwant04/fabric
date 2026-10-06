@@ -56,6 +56,8 @@ func main() {
 		"name to register this stamp under")
 	upstream := flag.String("upstream", envOr("FABRIC_AGENT_UPSTREAM", ""),
 		"model host base URL the data plane should proxy to")
+	inferenceURL := flag.String("inference-url", envOr("FABRIC_AGENT_INFERENCE_URL", ""),
+		"public HTTPS gateway base URL reported with ready deployments")
 	orchestrator := flag.String("orchestrator", envOr("FABRIC_AGENT_ORCHESTRATOR", "k3s"),
 		"Kubernetes distribution reported in capabilities")
 	region := flag.String("region", envOr("FABRIC_AGENT_REGION", ""), "region reported in capabilities")
@@ -91,6 +93,11 @@ func main() {
 		log.Error("control-plane and upstream are both required")
 		os.Exit(2)
 	}
+	publicURL, err := agent.ValidateInferenceURL(*inferenceURL)
+	if err != nil {
+		log.Error("invalid public inference URL", "error", err)
+		os.Exit(2)
+	}
 
 	// The enrollment token arrives through the environment so it never appears in
 	// a process listing, and it is used at most once.
@@ -109,6 +116,7 @@ func main() {
 		DeploymentsPath:         orDefault(*deploymentsPath, filepath.Join(*stateDir, "deployments.json")),
 		TelemetryCredentialPath: *telemetryCredentialPath,
 		UpstreamURL:             *upstream,
+		InferenceURL:            publicURL,
 		PollInterval:            *poll,
 		CapacityInterval:        *capacityInterval,
 		Capabilities: controlplane.Capabilities{

@@ -53,6 +53,7 @@ from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
 from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.model_selection import (
     AUTO_MODEL,
+    explanation_headers,
     profile_for_audio,
     profile_for_json,
     rank_deployments,
@@ -103,8 +104,9 @@ class _CleanupStreamingResponse(StreamingResponse):
         content: AsyncIterator[bytes],
         *,
         cleanup: Callable[[], Awaitable[None]],
+        headers: dict[str, str] | None = None,
     ) -> None:
-        super().__init__(content, media_type="text/event-stream")
+        super().__init__(content, media_type="text/event-stream", headers=headers)
         self._cleanup = cleanup
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
@@ -543,17 +545,20 @@ def _resolve_json_deployment(
     account_id: uuid.UUID,
     payload: dict[str, Any],
     upstream_path: str,
-) -> Deployment:
+) -> tuple[Deployment, dict[str, str]]:
+    concrete: Deployment | None = None
     if model != AUTO_MODEL:
-        return plane.registry.resolve(model, account_id=account_id)
-
-    owned = plane.registry.for_account(account_id)
-    # Rolling compatibility: a real deployment already named "auto" keeps its exact
-    # alias semantics. The virtual selector is used only when the account has no such
-    # deployment.
-    concrete = next((item for item in owned if item.model_alias == AUTO_MODEL), None)
-    if concrete is not None:
-        return concrete
+        concrete = plane.registry.resolve(model, account_id=account_id)
+    else:
+        owned = plane.registry.for_account(account_id)
+        # Rolling compatibility: a real deployment already named "auto" keeps its exact
+        # alias semantics. The virtual selector is used only when the account has no such
+        # deployment.
+        concrete = next((item for item in owned if item.model_alias == AUTO_MODEL), None)
+    # Exact requests without the extension retain their existing path without prompt
+    # inspection. Extension validation happens after pinned-model ownership is checked.
+    if concrete is not None and "routing" not in payload:
+        return concrete, {}
 
     try:
         profile = profile_for_json(_JSON_OPERATIONS[upstream_path], payload)
@@ -562,7 +567,10 @@ def _resolve_json_deployment(
     # ``routing`` is a Fabric extension accepted through OpenAI SDK extra_body. Model
     # hosts do not know it and may reject unknown fields, so consume it at the router.
     payload.pop("routing", None)
-    return _pick_available_auto_deployment(plane, rank_deployments(owned, profile))
+    deployment = concrete or _pick_available_auto_deployment(
+        plane, rank_deployments(owned, profile)
+    )
+    return deployment, explanation_headers(deployment, profile, pinned=concrete is not None)
 
 
 def _resolve_audio_deployment(
@@ -677,7 +685,7 @@ async def _proxy(
     # Retire withdrawn pool/metric state before resolution, including the case where
     # this request names the removed deployment and resolution itself will fail.
     plane.reconcile_pools()
-    deployment = _resolve_json_deployment(
+    deployment, routing_headers = _resolve_json_deployment(
         plane,
         model=model,
         account_id=principal.account_id,
@@ -839,7 +847,9 @@ async def _proxy(
                 output_tokens=int((usage or {}).get("completion_tokens") or 0),
             )
             request_recorded = True
-            return JSONResponse(status_code=response.status_code, content=body)
+            return JSONResponse(
+                status_code=response.status_code, content=body, headers=routing_headers
+            )
         finally:
             if not request_recorded:
                 plane.metrics.request_finished(
@@ -1017,7 +1027,7 @@ async def _proxy(
             await cleanup_stream()
 
     # Usage is recorded in cleanup_stream, once the stream has actually reported it.
-    return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream)
+    return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream, headers=routing_headers)
 
 
 #: Form fields never taken from the caller. ``model`` is replaced with the deployment's

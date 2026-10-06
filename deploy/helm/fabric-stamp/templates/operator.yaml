@@ -48,13 +48,41 @@ spec:
             {{- with .Values.operator.managedModelHost }}
             {{- if .image }}
             - --model-host-image={{ .image }}
-            - --model-host-model={{ required "operator.managedModelHost.modelRef is required with an image" .modelRef }}
-            - --model-host-served-name={{ required "operator.managedModelHost.servedName is required with an image" .servedName }}
+            {{- with .modelRef }}
+            - {{ printf "--model-host-model=%s" . | quote }}
+            {{- end }}
+            {{- with .servedName }}
+            - {{ printf "--model-host-served-name=%s" . | quote }}
+            {{- end }}
             - --model-host-gpus={{ .gpus }}
             - --model-host-max-model-len={{ .maxModelLen }}
             - --model-host-max-num-seqs={{ .maxNumSeqs }}
             - --model-host-gpu-memory-utilization={{ .gpuMemoryUtilization }}
             - --model-host-dtype={{ .dtype }}
+            - {{ printf "--model-host-service-account=%s" (include "fabric-stamp.modelHostServiceAccount" $) | quote }}
+            {{- range .imagePullSecrets }}
+            - {{ printf "--model-host-image-pull-secret=%s" .name | quote }}
+            {{- end }}
+            {{- with .huggingFace.existingSecret }}
+            - {{ printf "--model-host-hf-secret=%s" . | quote }}
+            - {{ printf "--model-host-hf-token-key=%s" $.Values.operator.managedModelHost.huggingFace.tokenKey | quote }}
+            {{- end }}
+            {{- if .textOnly }}
+            - --model-host-text-only
+            {{- with .textOnlyModels }}
+            - {{ printf "--model-host-text-only-models=%s" (join "," .) | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .resources }}
+            {{- with .requests }}
+            {{- with .cpu }}
+            - {{ printf "--model-host-cpu-request=%s" (toString .) | quote }}
+            {{- end }}
+            {{- with .memory }}
+            - {{ printf "--model-host-memory-request=%s" (toString .) | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             - --model-host-port={{ .port }}
             {{- if .enforceEager }}
             - --model-host-enforce-eager

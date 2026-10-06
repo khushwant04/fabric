@@ -201,9 +201,8 @@ func (p *Publisher) Observed(ctx context.Context) (map[string]Status, error) {
 // ObservedConditions reports the operator's verdict per deployment, in the shape the
 // agent forwards to the control plane.
 //
-// Only the Applied condition is translated: it is the operator's single statement
-// about whether the cluster reflects the declaration, and inventing a richer mapping
-// would imply detail the operator does not produce.
+// Applied remains the release verdict. An explicit unavailable condition supplies the
+// reason/message for current serving health instead of calling a recovering host applied.
 func (p *Publisher) ObservedConditions(
 	ctx context.Context,
 ) (map[string]agentcontract.ObservedCondition, error) {
@@ -226,6 +225,28 @@ func (p *Publisher) ObservedConditions(
 				ObservedGeneration:  status.ObservedGeneration,
 				ReadyReplicas:       status.ReadyReplicas,
 				UnavailableReplicas: status.UnavailableReplicas,
+			}
+		}
+		for _, condition := range status.Conditions {
+			if condition.Type != ConditionAvailable {
+				continue
+			}
+			observed, present := conditions[deploymentID]
+			if present {
+				available := condition.Status == "True"
+				observed.Available = &available
+				if available {
+					conditions[deploymentID] = observed
+					continue
+				}
+				observed.Reason, observed.Message = condition.Reason, condition.Message
+				if observed.Phase == "ready" {
+					observed.Phase = "pending"
+					if observed.Applied {
+						observed.Phase = "degraded"
+					}
+				}
+				conditions[deploymentID] = observed
 			}
 		}
 	}

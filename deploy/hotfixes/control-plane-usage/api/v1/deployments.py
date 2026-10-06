@@ -1,0 +1,330 @@
+"""Deployment intent, placement, and reported-status endpoints."""
+
+from __future__ import annotations
+
+import datetime as dt
+import uuid
+
+from fastapi import APIRouter, Depends, Header, Path, Response, status
+from pydantic import BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core import scopes as scope_defs
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
+from app.core.database import get_db_session
+from app.core.security import PrincipalContext, account_scope
+from app.models import UsageEvent
+from app.schemas import (
+    DeploymentCreateRequest,
+    DeploymentResponse,
+    DeploymentStatusResponse,
+    DeploymentUpdateRequest,
+    DeploymentUsageResponse,
+    PlacementCreateRequest,
+    PlacementResponse,
+)
+from app.services import idempotency as idempotency_key_service
+from app.services.accounts import get_account
+from app.services.deployments import (
+    create_deployment,
+    create_placement,
+    delete_deployment,
+    get_deployment,
+    list_deployment_status,
+    list_deployments,
+    list_placements,
+    update_deployment,
+)
+from app.services.usage import summarize_deployment_usage
+
+router = APIRouter(tags=["deployments"])
+
+_BASE = "/v1/accounts/{account_id}/deployments"
+
+
+class AccountUsageResponse(BaseModel):
+    events: int
+    input_tokens: int
+    output_tokens: int
+    first_occurred_at: dt.datetime | None
+    last_occurred_at: dt.datetime | None
+
+
+@router.post(
+    _BASE,
+    response_model=DeploymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create deployment intent",
+)
+async def create(
+    payload: DeploymentCreateRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_WRITE)),
+    session: AsyncSession = Depends(get_db_session),
+) -> DeploymentResponse:
+    """Create deployment intent, once per idempotency key.
+
+    A caller that loses the response to this request has no safe move without a key:
+    retrying may create a second deployment, and not retrying may leave none. With a
+    key, the retry returns the first deployment instead of creating another.
+    """
+    key = idempotency_key_service.normalize(idempotency_key)
+
+    if key is not None:
+        reservation = await idempotency_key_service.reserve(
+            session,
+            account_id=principal.account_id,
+            principal_id=principal.principal_id or uuid.UUID(int=0),
+            operation="deployments.create",
+            key=key,
+        )
+        if reservation.replayed:
+            # The first request already created it, so this returns that rather than
+            # acting again. A caller cannot tell the difference, which is the point.
+            existing = await get_deployment(
+                session,
+                principal.account_id,
+                uuid.UUID(reservation.response_reference),
+            )
+            return DeploymentResponse.model_validate(existing)
+
+    deployment = await create_deployment(
+        session,
+        account_id=principal.account_id,
+        name=payload.name,
+        model_alias=payload.model_alias,
+        spec=payload.spec.model_dump(mode="json"),
+        actor_principal_id=principal.principal_id,
+    )
+
+    if key is not None:
+        # Recorded in the same transaction as the deployment, so a rollback takes the
+        # claim with it and the caller may retry for real.
+        await idempotency_key_service.record_result(
+            session,
+            account_id=principal.account_id,
+            principal_id=principal.principal_id or uuid.UUID(int=0),
+            operation="deployments.create",
+            key=key,
+            reference=str(deployment.id),
+        )
+
+    await commit_and_invalidate(session, [principal.account_id])
+    return DeploymentResponse.model_validate(deployment)
+
+
+@router.get(_BASE, response_model=list[DeploymentResponse], summary="List deployments")
+async def list_all(
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
+) -> list[DeploymentResponse]:
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[DeploymentResponse]:
+        records = await list_deployments(session, principal.account_id)
+        return [DeploymentResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="deployments",
+        response_type=list[DeploymentResponse],
+        loader=load,
+    )
+
+
+@router.get(
+    _BASE + "/usage",
+    response_model=AccountUsageResponse,
+    summary="Read reported usage totals across an account",
+)
+async def read_account_usage(
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> AccountUsageResponse:
+    """Read tenant-filtered usage, including history for removed deployments."""
+    totals = (
+        await session.execute(
+            select(
+                func.count(UsageEvent.id),
+                func.coalesce(func.sum(UsageEvent.input_tokens), 0),
+                func.coalesce(func.sum(UsageEvent.output_tokens), 0),
+                func.min(UsageEvent.occurred_at),
+                func.max(UsageEvent.occurred_at),
+            ).where(UsageEvent.account_id == principal.account_id)
+        )
+    ).one()
+    return AccountUsageResponse(
+        events=totals[0],
+        input_tokens=totals[1],
+        output_tokens=totals[2],
+        first_occurred_at=totals[3],
+        last_occurred_at=totals[4],
+    )
+
+
+@router.get(
+    _BASE + "/{deployment_id}",
+    response_model=DeploymentResponse,
+    summary="Read one deployment",
+)
+async def read_one(
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
+) -> DeploymentResponse:
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> DeploymentResponse:
+        deployment = await get_deployment(session, principal.account_id, deployment_id)
+        return DeploymentResponse.model_validate(deployment)
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="deployment",
+        parameters=(deployment_id,),
+        response_type=DeploymentResponse,
+        loader=load,
+    )
+
+
+@router.patch(
+    _BASE + "/{deployment_id}",
+    response_model=DeploymentResponse,
+    summary="Replace the desired spec and advance the generation",
+)
+async def update(
+    payload: DeploymentUpdateRequest,
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_WRITE)),
+    session: AsyncSession = Depends(get_db_session),
+) -> DeploymentResponse:
+    deployment = await update_deployment(
+        session,
+        account_id=principal.account_id,
+        deployment_id=deployment_id,
+        spec=payload.spec.model_dump(mode="json"),
+        actor_principal_id=principal.principal_id,
+    )
+    await commit_and_invalidate(session, [principal.account_id])
+    return DeploymentResponse.model_validate(deployment)
+
+
+@router.delete(
+    _BASE + "/{deployment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete deployment intent",
+)
+async def delete(
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_WRITE)),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await delete_deployment(
+        session,
+        account_id=principal.account_id,
+        deployment_id=deployment_id,
+        actor_principal_id=principal.principal_id,
+    )
+    await commit_and_invalidate(session, [principal.account_id])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    _BASE + "/{deployment_id}/placements",
+    response_model=PlacementResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Assign a deployment to a stamp that fits, or pick one",
+)
+async def assign_placement(
+    payload: PlacementCreateRequest | None = None,
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_WRITE)),
+    session: AsyncSession = Depends(get_db_session),
+) -> PlacementResponse:
+    """Place a deployment, refusing what the stamp cannot hold.
+
+    With no ``stamp_id`` the platform chooses one that fits. With one, it is authorized and
+    then checked: an assignment a stamp cannot serve used to answer ``201`` and then never
+    start (ADR 0013). The chosen stamp is on the response either way.
+    """
+    request = payload or PlacementCreateRequest()
+    record = await create_placement(
+        session,
+        account_id=principal.account_id,
+        deployment_id=deployment_id,
+        stamp_id=request.stamp_id,
+        region=request.region,
+        actor_principal_id=principal.principal_id,
+    )
+    await commit_and_invalidate(session, [principal.account_id])
+    return PlacementResponse.model_validate(record)
+
+
+@router.get(
+    _BASE + "/{deployment_id}/placements",
+    response_model=list[PlacementResponse],
+    summary="List placements",
+)
+async def read_placements(
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
+) -> list[PlacementResponse]:
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[PlacementResponse]:
+        records = await list_placements(session, principal.account_id, deployment_id)
+        return [PlacementResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="placements",
+        parameters=(deployment_id,),
+        response_type=list[PlacementResponse],
+        loader=load,
+    )
+
+
+@router.get(
+    _BASE + "/{deployment_id}/status",
+    response_model=list[DeploymentStatusResponse],
+    summary="Read reported status per stamp",
+)
+async def read_status(
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[DeploymentStatusResponse]:
+    records = await list_deployment_status(session, principal.account_id, deployment_id)
+    return [DeploymentStatusResponse.model_validate(record) for record in records]
+
+
+@router.get(
+    _BASE + "/{deployment_id}/usage",
+    response_model=DeploymentUsageResponse,
+    summary="Read reported usage totals",
+)
+async def read_usage(
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> DeploymentUsageResponse:
+    """Aggregate usage a collector reported for this deployment.
+
+    Usage is operational in MVP, not billing-grade accounting: records are
+    deduplicated per stamp but delivery is at-least-once and a stamp that never
+    reports simply contributes nothing.
+    """
+    # Confirms the deployment exists and belongs to the token's account.
+    await get_deployment(session, principal.account_id, deployment_id)
+    summary = await summarize_deployment_usage(
+        session, account_id=principal.account_id, deployment_id=deployment_id
+    )
+    return DeploymentUsageResponse.model_validate(summary)

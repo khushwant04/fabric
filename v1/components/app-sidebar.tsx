@@ -81,12 +81,6 @@ const sections: NavSection[] = [
         icon: <KeyRoundIcon />,
         scope: "api-keys:read",
       },
-      {
-        title: "Identity provider",
-        url: "/access/identity-provider",
-        icon: <NetworkIcon />,
-        scope: "members:read",
-      },
     ],
   },
   {

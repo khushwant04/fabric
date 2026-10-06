@@ -4,15 +4,19 @@ import { test } from "node:test"
 import vm from "node:vm"
 import ts from "typescript"
 
-function sessionModule({ authenticated = true, selectedAccount = "one", membership = "active", expiresIn = 3600 } = {}) {
+const FIXED_ACCOUNT = "4c0a0d13-70e5-4a98-9a61-0a278fdc831c"
+
+function sessionModule({ authenticated = true, selectedAccount = "one", membership = "active", expiresIn = 3600, singleTenantAccount, identityAccount, identityAudience = "fabric-control" } = {}) {
   const exchanges = []
-  const me = { user: { id: "operator" }, memberships: [{ account_id: "one", status: membership }] }
+  const writes = []
+  const account = singleTenantAccount || "one"
+  const me = { user: { id: "operator" }, memberships: [{ account_id: account, status: membership }] }
   const code = ts.transpileModule(readFileSync(new URL("../lib/fabric/session.ts", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const exports = {}
   const dependencies = {
     "server-only": {},
     react: { cache: (fn) => fn },
-    "next/headers": { cookies: async () => ({ get: () => selectedAccount ? { value: selectedAccount } : undefined }) },
+    "next/headers": { cookies: async () => ({ get: () => selectedAccount ? { value: selectedAccount } : undefined, set: (...args) => writes.push(args) }) },
     "next/navigation": { redirect: (path) => { throw new Error(`redirect:${path}`) } },
     "@/lib/auth0": { isAuth0Configured: true, auth0: { getSession: async () => authenticated ? { user: { sub: "auth0|operator" } } : null, getAccessToken: async () => ({ token: "assertion-for-test" }) } },
     "@/lib/fabric/client": { async controlPlaneRequest(path, options) {
@@ -22,16 +26,21 @@ function sessionModule({ authenticated = true, selectedAccount = "one", membersh
         return { access_token: `${body.account_id}:${body.audience}:token-${exchanges.length}`, expires_in: expiresIn }
       }
       if (path === "/v1/me") return me
-      if (path === "/v1/accounts/one") return { id: "one" }
-      if (path === "/v1/self") return { account_id: "one", scopes: ["deployments:read"] }
+      if (path === `/v1/accounts/${account}`) return { id: account }
+      if (path === "/v1/self") return { account_id: identityAccount || account, audience: identityAudience, scopes: ["deployments:read"] }
       throw new Error(`Unexpected path ${path}`)
     } },
   }
-  vm.runInNewContext(code, { exports, process: { env: {} }, require: (name) => {
+  const process = { env: singleTenantAccount ? { FABRIC_SINGLE_TENANT_ACCOUNT_ID: singleTenantAccount } : {} }
+  const tenantExports = {}
+  const tenantCode = ts.transpileModule(readFileSync(new URL("../lib/fabric/single-tenant.ts", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+  vm.runInNewContext(tenantCode, { exports: tenantExports, process, require: (name) => { assert.equal(name, "server-only"); return {} } })
+  dependencies["@/lib/fabric/single-tenant"] = tenantExports
+  vm.runInNewContext(code, { exports, process, require: (name) => {
     assert.ok(Object.hasOwn(dependencies, name), `Unexpected dependency ${name}`)
     return dependencies[name]
   } })
-  return { session: exports, exchanges }
+  return { session: exports, exchanges, writes }
 }
 
 test("control and inference tokens use separate account- and subject-scoped cache entries", async () => {
@@ -67,4 +76,41 @@ test("account selection requires an active membership before loading context", a
   }
   const { session } = sessionModule()
   assert.equal((await session.getConsoleContext()).account.id, "one")
+})
+
+test("a fixed workspace ignores foreign and missing browser account cookies", async () => {
+  for (const selectedAccount of ["other-account", null]) {
+    const { session, exchanges } = sessionModule({ selectedAccount, singleTenantAccount: FIXED_ACCOUNT })
+    assert.equal(await session.getSelectedAccountId(), FIXED_ACCOUNT)
+    const context = await session.getConsoleContext()
+    assert.equal(context.account.id, FIXED_ACCOUNT)
+    assert.equal(context.singleTenant, true)
+    assert.equal(exchanges.length, 1)
+    assert.equal(exchanges[0].account_id, FIXED_ACCOUNT)
+  }
+})
+
+test("fixed-workspace context and token exchange deny inactive membership", async () => {
+  for (const membership of ["revoked", "pending"]) {
+    const { session, exchanges } = sessionModule({ singleTenantAccount: FIXED_ACCOUNT, membership })
+    await assert.rejects(session.getConsoleContext(), /redirect:\/access-denied/)
+    await assert.rejects(session.getFabricInferenceToken(FIXED_ACCOUNT), /redirect:\/access-denied/)
+    assert.equal(exchanges.length, 0)
+  }
+})
+
+test("fixed-workspace tokens cannot target another account and selection cannot write a cookie", async () => {
+  const { session, exchanges, writes } = sessionModule({ singleTenantAccount: FIXED_ACCOUNT })
+  await assert.rejects(session.getFabricAccessToken("other-account"), /outside the configured workspace/)
+  await assert.rejects(session.getFabricInferenceToken("other-account"), /outside the configured workspace/)
+  await assert.rejects(session.setSelectedAccount(FIXED_ACCOUNT), /configured by its administrator/)
+  assert.equal(exchanges.length, 0)
+  assert.equal(writes.length, 0)
+})
+
+test("fixed-workspace context rejects upstream account and audience mismatches", async () => {
+  for (const options of [{ identityAccount: "other-account" }, { identityAudience: "fabric-inference" }]) {
+    const { session } = sessionModule({ singleTenantAccount: FIXED_ACCOUNT, ...options })
+    await assert.rejects(session.getConsoleContext(), /identity outside the configured workspace/)
+  }
 })

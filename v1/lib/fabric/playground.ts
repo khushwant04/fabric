@@ -85,6 +85,7 @@ export function readyPlacements(
 export type InferenceConfiguration = {
   configuredUrl?: string
   allowedOrigins?: string
+  allowedDomains?: string
   production: boolean
 }
 
@@ -125,11 +126,16 @@ export function resolveInferenceUrl(statuses: DeploymentStatus[], config: Infere
     if (url.pathname !== "/") throw new PlaygroundError(503, "Inference allowlist entries must be HTTPS origins.")
     return url.origin
   }))
+  const domains = (config.allowedDomains ?? "").split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean)
+  if (domains.some((domain) => !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(domain))) {
+    throw new PlaygroundError(503, "Inference domain configuration is invalid.")
+  }
   for (const status of statuses) {
     if (!status.endpoint) continue
     try {
       const url = validUrl(status.endpoint, false)
-      if (origins.has(url.origin)) return completionUrl(url).toString()
+      const domainApproved = url.port === "" && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))
+      if (origins.has(url.origin) || domainApproved) return completionUrl(url).toString()
     } catch {
       // A stamp-reported URL has no authority to bypass the server's allowlist.
     }

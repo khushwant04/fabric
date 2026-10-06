@@ -12,10 +12,12 @@ import dataclasses
 import re
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import quote
 
 from fabric_data_plane.registry import Deployment
 
 AUTO_MODEL = "auto"
+ROUTING_POLICY = "heuristic-v1"
 TASKS = frozenset({"general", "code", "reasoning"})
 _MAX_INSPECTED_CHARS = 200_000
 
@@ -37,6 +39,7 @@ class RoutingProfile:
     task: str = "general"
     requires_vision: bool = False
     estimated_tokens: int = 0
+    explain: bool = False
 
 
 def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
@@ -47,9 +50,9 @@ def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
 
     def add(value: Any) -> None:
         nonlocal remaining, requires_vision
-        if remaining <= 0:
-            return
         if isinstance(value, str):
+            if remaining <= 0:
+                return
             fragments.append(value[:remaining])
             remaining -= min(len(value), remaining)
             return
@@ -63,6 +66,9 @@ def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
         kind = value.get("type")
         if kind in {"image_url", "input_image", "image"}:
             requires_vision = True
+        # Text classification is bounded, but structural capability checks must still
+        # inspect subsequent content parts. A long text prefix cannot make a later image
+        # disappear and route a multimodal request to a text-only model host.
         # Only inspect fields that can contain prompt text. URLs and binary-like values
         # are intentionally excluded from both classification and token estimates.
         for name in ("text", "content", "prompt"):
@@ -78,19 +84,24 @@ def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
 
 def profile_for_json(operation: str, payload: dict[str, Any]) -> RoutingProfile:
     """Classify an OpenAI-compatible JSON request without retaining its content."""
-    routing = payload.get("routing")
     task_hint: str | None = None
-    if routing is not None:
+    explain = False
+    if "routing" in payload:
+        routing = payload["routing"]
         if not isinstance(routing, dict):
             raise ValueError("routing must be an object")
-        unknown = set(routing) - {"task"}
+        unknown = set(routing) - {"task", "explain"}
         if unknown:
             raise ValueError(f"unknown routing fields: {', '.join(sorted(unknown))}")
-        raw_task = routing.get("task")
-        if raw_task is not None:
+        if "task" in routing:
+            raw_task = routing["task"]
             if not isinstance(raw_task, str) or raw_task not in TASKS:
                 raise ValueError("routing.task must be one of: general, code, reasoning")
             task_hint = raw_task
+        if "explain" in routing:
+            if not isinstance(routing["explain"], bool):
+                raise ValueError("routing.explain must be a boolean")
+            explain = routing["explain"]
 
     text, requires_vision = _request_text(payload)
     if task_hint is not None:
@@ -115,7 +126,42 @@ def profile_for_json(operation: str, payload: dict[str, Any]) -> RoutingProfile:
         task=task,
         requires_vision=requires_vision,
         estimated_tokens=estimated_tokens,
+        explain=explain,
     )
+
+
+def explanation_headers(
+    deployment: Deployment, profile: RoutingProfile, *, pinned: bool
+) -> dict[str, str]:
+    """Return opt-in, bounded diagnostics without prompts or private backend metadata."""
+    if not profile.explain:
+        return {}
+    if pinned:
+        reason = "exact_model_pinned"
+    elif profile.requires_vision:
+        reason = "auto_capability_fit"
+    elif (profile.task == "code" and deployment.capabilities.code) or (
+        profile.task == "reasoning" and deployment.capabilities.reasoning
+    ):
+        reason = "auto_task_fit"
+    elif (
+        profile.task == "general"
+        and not deployment.capabilities.code
+        and not deployment.capabilities.reasoning
+    ):
+        reason = "auto_general_fit"
+    else:
+        reason = "auto_capability_fit"
+    # Aliases are public, but local configuration can predate API validation. Percent
+    # encoding keeps arbitrary Unicode/control characters out of HTTP header values;
+    # the source-length bound also handles a malformed, oversized local alias safely.
+    selected_model = quote(deployment.model_alias[:200], safe="-._~")
+    return {
+        "X-Fabric-Selected-Model": selected_model,
+        "X-Fabric-Routing-Task": profile.task,
+        "X-Fabric-Routing-Reason": reason,
+        "X-Fabric-Routing-Policy": ROUTING_POLICY,
+    }
 
 
 def profile_for_audio(operation: str) -> RoutingProfile:

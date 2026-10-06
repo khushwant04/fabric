@@ -38,6 +38,36 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default .Release.Name .Values.stamp.name -}}
 {{- end -}}
 
+{{- define "fabric-stamp.jwtIssuer" -}}
+{{- default (trimSuffix "/" .Values.controlPlane.url) .Values.controlPlane.jwtIssuer -}}
+{{- end -}}
+
+{{- define "fabric-stamp.exposureHost" -}}
+{{- if .Values.exposure.host -}}
+{{- .Values.exposure.host -}}
+{{- else if .Values.exposure.baseDomain -}}
+{{- printf "%s.%s" (include "fabric-stamp.stampName" .) .Values.exposure.baseDomain -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "fabric-stamp.inferenceUrl" -}}
+{{- if .Values.exposure.enabled -}}
+{{- printf "https://%s" (include "fabric-stamp.exposureHost" .) -}}
+{{- else if .Values.stamp.inferenceUrl -}}
+{{- .Values.stamp.inferenceUrl -}}
+{{- else if and .Values.istio.enabled (eq (len .Values.istio.hosts) 1) -}}
+{{- printf "https://%s" (first .Values.istio.hosts) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "fabric-stamp.exposureSecret" -}}
+{{- default (printf "%s-inference-tls" (include "fabric-stamp.fullname" .)) .Values.exposure.tls.secretName -}}
+{{- end -}}
+
+{{- define "fabric-stamp.modelHostServiceAccount" -}}
+{{- default (printf "%s-model-host" (include "fabric-stamp.fullname" .)) .Values.operator.managedModelHost.serviceAccount.name -}}
+{{- end -}}
+
 {{/* The JWKS URL follows the control-plane URL unless overridden. */}}
 {{- define "fabric-stamp.jwksUrl" -}}
 {{- if .Values.controlPlane.jwksUrl -}}
@@ -90,11 +120,26 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* Fail early on values that would otherwise produce a pod that cannot work. */}}
 {{- define "fabric-stamp.validate" -}}
+{{- if and (include "fabric-stamp.managesModelHost" .) (not .Values.operator.managedModelHost.serviceAccount.create) (not .Values.operator.managedModelHost.serviceAccount.name) -}}
+{{- fail "managed model hosts need a dedicated serviceAccount.name when serviceAccount.create is false" -}}
+{{- end -}}
 {{- if not .Values.controlPlane.url -}}
 {{- fail "controlPlane.url is required: the agent has nowhere to enrol" -}}
 {{- end -}}
-{{- if not .Values.controlPlane.jwtIssuer -}}
-{{- fail "controlPlane.jwtIssuer is required: the data plane cannot verify tokens without it" -}}
+{{- if and .Values.exposure.enabled .Values.istio.enabled -}}
+{{- fail "exposure.enabled and istio.enabled are mutually exclusive" -}}
+{{- end -}}
+{{- if .Values.exposure.enabled -}}
+{{- $host := include "fabric-stamp.exposureHost" . -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$" $host) -}}
+{{- fail "exposure.host or stamp.name plus exposure.baseDomain must produce a DNS hostname" -}}
+{{- end -}}
+{{- if and (not .Values.exposure.tls.secretName) (not .Values.exposure.tls.issuer.name) -}}
+{{- fail "exposure requires an existing TLS secretName or cert-manager issuer.name" -}}
+{{- end -}}
+{{- if not (has .Values.exposure.tls.issuer.kind (list "Issuer" "ClusterIssuer")) -}}
+{{- fail "exposure.tls.issuer.kind must be Issuer or ClusterIssuer" -}}
+{{- end -}}
 {{- end -}}
 {{- if and (not .Values.modelHost.url) (not (include "fabric-stamp.managesModelHost" .)) -}}
 {{- fail "modelHost.url is required: the data plane has nothing to proxy to, and no operator is managing a host" -}}

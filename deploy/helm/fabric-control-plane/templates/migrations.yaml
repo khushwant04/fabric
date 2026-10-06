@@ -22,6 +22,10 @@ spec:
       restartPolicy: Never
       serviceAccountName: {{ include "fabric-control-plane.serviceAccountName" . }}
       automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -33,6 +37,9 @@ spec:
             - |
               set -e
               python -m alembic upgrade head
+              {{- if .Values.singleTenant.enabled }}
+              python -m app.cli seed-single-tenant
+              {{- end }}
               {{- if .Values.migrations.seedSystemAccount }}
               # Idempotent: the system account that owns managed capacity must exist
               # before any managed stamp enrols.
@@ -40,6 +47,10 @@ spec:
               {{- end }}
           env:
             {{- include "fabric-control-plane.env" . | nindent 12 }}
+            {{- if .Values.singleTenant.enabled }}
+            - name: FABRIC_SINGLE_TENANT_ADMIN_SUBJECT
+              value: {{ .Values.singleTenant.adminSubject | quote }}
+            {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:

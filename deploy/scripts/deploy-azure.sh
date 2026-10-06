@@ -25,19 +25,42 @@ require_digest() {
 require_digest CONTROL_PLANE_DIGEST "$CONTROL_PLANE_DIGEST"
 require_digest AGENT_DIGEST "$AGENT_DIGEST"
 require_digest DATA_PLANE_DIGEST "$DATA_PLANE_DIGEST"
+if [[ -n ${CONSOLE_DIGEST:-} ]]; then
+  require_digest CONSOLE_DIGEST "$CONSOLE_DIGEST"
+fi
 
-for command in helm kubectl; do
+for command in helm kubectl python3; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 2; }
 done
 
+# Computed values can contain inline credentials as well as Secret references.
+# Files must be private from their creation, including before chmod could run.
+umask 077
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 chmod 700 "$work"
 
-# Preserve the live release's non-secret configuration. The spent enrollment token is
-# intentionally not reconstructed; the existing Secret and durable agent identity remain.
+# Preserve the resolved configuration of both installed releases. Resetting to the
+# current chart defaults and overlaying these values adds new optional settings
+# without reusing the old chart's defaults (which lack newly introduced maps).
+# Capture both before any mutation, so a missing release fails without upgrading one.
+helm get values "$CP_RELEASE" -n "$CP_NAMESPACE" -a -o yaml >"$work/control-values.yaml"
 helm get values "$STAMP_RELEASE" -n "$STAMP_NAMESPACE" -a -o yaml >"$work/stamp-values.yaml"
-chmod 600 "$work/stamp-values.yaml"
+
+# A chart-created enrollment Secret survives Helm uninstall. Keep its reference and
+# never restore a spent one-time token from Helm's historical values.
+stamp_enrollment_secret=$(helm template "$STAMP_RELEASE" "$STAMP_CHART" \
+  -n "$STAMP_NAMESPACE" -f "$work/stamp-values.yaml" \
+  --show-only templates/statefulset.yaml | python3 -c '
+import re,sys
+manifest=sys.stdin.read()
+match=re.search(r"name: FABRIC_AGENT_ENROLLMENT_TOKEN\s+valueFrom:\s+secretKeyRef:\s+name: ([^\s]+)", manifest)
+if match is None:
+    raise SystemExit("cannot determine the retained enrollment Secret")
+print(match.group(1).strip("\""))
+')
+stamp_upgrade_args=(--reset-values -f "$work/stamp-values.yaml" \
+  --set enrollment.token='' --set-string enrollment.existingSecret="$stamp_enrollment_secret")
 
 printf '1/4 Establishing CRD schema before any new agent can publish fields...\n'
 helm template "$STAMP_RELEASE" "$STAMP_CHART" \
@@ -47,14 +70,21 @@ kubectl wait --for=condition=Established --timeout=2m \
   crd/fabricmodeldeployments.fabric.khushwant.dev
 
 printf '2/4 Deploying control plane by digest...\n'
-helm upgrade "$CP_RELEASE" "$CP_CHART" -n "$CP_NAMESPACE" --reuse-values \
-  --set-string image.digest="$CONTROL_PLANE_DIGEST" --atomic --wait --timeout "$TIMEOUT"
+control_image_args=(--set-string image.digest="$CONTROL_PLANE_DIGEST")
+if [[ -n ${CONSOLE_DIGEST:-} ]]; then
+  # Preserve console.enabled and its runtime Secret/URL configuration. Existing
+  # control-plane-only installations do not acquire a console during an upgrade.
+  control_image_args+=(--set-string console.image.digest="$CONSOLE_DIGEST")
+fi
+helm upgrade "$CP_RELEASE" "$CP_CHART" -n "$CP_NAMESPACE" \
+  --reset-values -f "$work/control-values.yaml" \
+  "${control_image_args[@]}" --atomic --wait --timeout "$TIMEOUT"
 kubectl rollout status deployment/"$CP_RELEASE-fabric-control-plane" \
   -n "$CP_NAMESPACE" --timeout="$TIMEOUT"
 
 printf '3/4 Deploying agent and operator while retaining the current data plane...\n'
-helm upgrade "$STAMP_RELEASE" "$STAMP_CHART" -n "$STAMP_NAMESPACE" --reuse-values \
-  --set enrollment.token='' \
+helm upgrade "$STAMP_RELEASE" "$STAMP_CHART" -n "$STAMP_NAMESPACE" \
+  "${stamp_upgrade_args[@]}" \
   --set-string image.agent.digest="$AGENT_DIGEST" \
   --atomic --wait --timeout "$TIMEOUT"
 kubectl rollout status deployment/"$STAMP_RELEASE-fabric-stamp-operator" \
@@ -65,11 +95,11 @@ kubectl rollout status statefulset/"$STAMP_RELEASE-fabric-stamp" \
 # Unknown CR fields are silently pruned by Kubernetes. Refuse to continue unless the
 # authoritative verification pair survived storage after the agent upgrade.
 kubectl get fabricmodeldeployments.fabric.khushwant.dev -n "$STAMP_NAMESPACE" -o json \
-  | python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; assert items, "no FabricModelDeployments found"; bad=[x["metadata"]["name"] for x in items if not x.get("spec",{}).get("jwtIssuer","").startswith("https://") or not x.get("spec",{}).get("jwksUrl","").startswith("https://")]; assert not bad, f"missing HTTPS verification contract: {bad}"'
+  | python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; bad=[x["metadata"]["name"] for x in items if not x.get("spec",{}).get("jwtIssuer","").startswith("https://") or not x.get("spec",{}).get("jwksUrl","").startswith("https://")]; assert not bad, f"missing HTTPS verification contract: {bad}"'
 
 printf '4/4 Deploying data plane by digest and checking synchronized verification...\n'
-helm upgrade "$STAMP_RELEASE" "$STAMP_CHART" -n "$STAMP_NAMESPACE" --reuse-values \
-  --set enrollment.token='' \
+helm upgrade "$STAMP_RELEASE" "$STAMP_CHART" -n "$STAMP_NAMESPACE" \
+  "${stamp_upgrade_args[@]}" \
   --set-string image.agent.digest="$AGENT_DIGEST" \
   --set-string image.dataPlane.digest="$DATA_PLANE_DIGEST" \
   --atomic --wait --timeout "$TIMEOUT"

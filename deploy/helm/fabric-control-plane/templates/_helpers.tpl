@@ -65,6 +65,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ .Values.auth0.audience | quote }}
 - name: FABRIC_SYSTEM_ACCOUNT_SLUG
   value: {{ .Values.systemAccountSlug | quote }}
+{{- if .Values.singleTenant.enabled }}
+- name: FABRIC_SINGLE_TENANT_ACCOUNT_ID
+  value: {{ .Values.singleTenant.accountId | quote }}
+- name: FABRIC_SINGLE_TENANT_ACCOUNT_SLUG
+  value: {{ .Values.singleTenant.accountSlug | quote }}
+- name: FABRIC_SINGLE_TENANT_ACCOUNT_NAME
+  value: {{ .Values.singleTenant.accountName | quote }}
+{{- end }}
 - name: FABRIC_JWT_PRIVATE_KEY_PATH
   value: /etc/fabric/signing/{{ .Values.signingKey.existingSecretKey }}
 - name: FABRIC_DATABASE_URL
@@ -72,6 +80,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     secretKeyRef:
       name: {{ include "fabric-control-plane.databaseSecret" . }}
       key: {{ .Values.database.existingSecretKey }}
+{{- if .Values.cache.existingSecret }}
+- name: FABRIC_REDIS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.cache.existingSecret }}
+      key: {{ .Values.cache.existingSecretKey }}
+- name: FABRIC_API_CACHE_TTL_SECONDS
+  value: {{ .Values.cache.ttlSeconds | quote }}
+{{- end }}
 - name: FABRIC_CREDENTIAL_PEPPER
   valueFrom:
     secretKeyRef:
@@ -89,6 +106,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "fabric-control-plane.validate" -}}
+{{- if .Values.singleTenant.enabled -}}
+{{- if not (regexMatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" .Values.singleTenant.accountId) -}}
+{{- fail "singleTenant.accountId must be a UUID" -}}
+{{- end -}}
+{{- if not .Values.singleTenant.adminSubject -}}
+{{- fail "singleTenant.adminSubject is required: use the Auth0 administrator subject" -}}
+{{- end -}}
+{{- if not .Values.migrations.enabled -}}
+{{- fail "singleTenant bootstrap requires migrations.enabled=true" -}}
+{{- end -}}
+{{- end -}}
 {{- if not (or .Values.database.url .Values.database.existingSecret) -}}
 {{- fail "database.url or database.existingSecret is required" -}}
 {{- end -}}

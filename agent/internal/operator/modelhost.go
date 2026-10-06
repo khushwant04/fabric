@@ -39,10 +39,22 @@ type ModelHost struct {
 	// necessity: the fraction is of *total* memory, and anything else resident on the
 	// device is not accounted for, so asking for all of it fails at startup.
 	GPUMemoryUtilization string
-	// EnforceEager disables CUDA graph capture, which costs latency but saves the
-	// memory those graphs would hold.
+	// EnforceEager disables torch.compile and CUDA graph capture in vLLM 0.26,
+	// which costs latency but saves the memory those graphs would hold.
 	EnforceEager bool
 	DType        string
+	// TextOnly explicitly disables multimodal inputs and their startup profiling.
+	// TextOnlyModels optionally restricts this policy to exact release/model ids.
+	TextOnly       bool
+	TextOnlyModels []string
+	// CPU and memory requests protect startup from contention without imposing a CPU
+	// throttle or guessing an OOM limit. Empty preserves existing workload resources.
+	CPURequest          string
+	MemoryRequest       string
+	ServiceAccountName  string
+	ImagePullSecrets    []string
+	HuggingFaceSecret   string
+	HuggingFaceTokenKey string
 	// ExtraArgs are appended verbatim, for flags this type does not model.
 	ExtraArgs []string
 	// Port the server listens on.
@@ -287,6 +299,9 @@ func (m ModelHost) hostArgs() []string {
 	if m.EnforceEager {
 		args = append(args, "--enforce-eager")
 	}
+	if m.TextOnly {
+		args = append(args, "--language-model-only")
+	}
 	return append(args, m.ExtraArgs...)
 }
 
@@ -320,14 +335,9 @@ func (r *Reconciler) desiredHost(item ModelDeployment) deployment {
 	return r.desiredHostNamed(item, hostName(item))
 }
 
-// desiredHostNamed builds a model-host Deployment under an explicit workload name.
-//
-// During a weighted rollout the new release runs as a *separate* workload beside the old
-// (ADR 0011), so the name is a parameter rather than always hostName. A per-workload
-// label (fabric.khushwant.dev/host) is added to the pod template and the selector so each
-// workload's headless Service selects only its own pods, and the two releases do not end
-// up in one another's backend pool.
-func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deployment {
+// hostSettings derives the same effective model policy for workload arguments and
+// published routing capabilities. The customer alias is not the loaded model id.
+func (r *Reconciler) hostSettings(item ModelDeployment) ModelHost {
 	host := r.options.ModelHost
 	// The deployment's own device count, which is what the control plane admitted the
 	// placement against (ADR 0013). Falls back to the stamp's configured count for a
@@ -341,7 +351,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 	host.MaxNumSeqs = item.Spec.DesiredMaxNumSeqs(r.options.ModelHost.MaxNumSeqs)
 	host.EnforceEager = item.Spec.DesiredEnforceEager(r.options.ModelHost.EnforceEager)
 	// Clamped against the smallest device profiled, exactly as the stamp-wide value was.
-	// The stamp's own fraction was adjusted once at startup; a per-deployment fraction
+	// The stamp's own fraction follows its current hardware profile; a per-deployment fraction
 	// arrives afterwards, so without this it would be the one value that reaches the
 	// server unchecked and dies allocating instead of starting.
 	host.GPUMemoryUtilization = r.clampedMemory(
@@ -358,6 +368,53 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 			host.ModelRef = release
 		}
 	}
+	if host.TextOnly && len(host.TextOnlyModels) > 0 {
+		host.TextOnly = false
+		for _, model := range host.TextOnlyModels {
+			if model == release || model == host.ModelRef {
+				host.TextOnly = true
+				break
+			}
+		}
+	}
+	return host
+}
+
+// routedCapabilities narrows declared capabilities to the managed runtime policy.
+// During a rollout either release may serve traffic, so never advertise a modality
+// disabled by either host. Copy the declaration rather than changing the CR spec.
+func (r *Reconciler) routedCapabilities(item ModelDeployment, decision RolloutDecision) *ModelCapabilities {
+	if item.Spec.Capabilities == nil || !r.options.ModelHost.Enabled() {
+		return item.Spec.Capabilities
+	}
+	textOnly := r.hostSettings(item).TextOnly
+	for _, release := range []string{decision.ActiveRelease, decision.CandidateRelease} {
+		if release == "" {
+			continue
+		}
+		runtimeItem := item
+		runtimeItem.Spec.UpstreamModel = release
+		textOnly = textOnly || r.hostSettings(runtimeItem).TextOnly
+	}
+	if !textOnly {
+		return item.Spec.Capabilities
+	}
+	capabilities := *item.Spec.Capabilities
+	capabilities.Vision = false
+	capabilities.Transcription = false
+	capabilities.Translation = false
+	return &capabilities
+}
+
+// desiredHostNamed builds a model-host Deployment under an explicit workload name.
+//
+// During a weighted rollout the new release runs as a *separate* workload beside the old
+// (ADR 0011), so the name is a parameter rather than always hostName. A per-workload
+// label (fabric.khushwant.dev/host) is added to the pod template and the selector so each
+// workload's headless Service selects only its own pods, and the two releases do not end
+// up in one another's backend pool.
+func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deployment {
+	host := r.hostSettings(item)
 	appName := "fabric-model-host"
 	selector := map[string]string{
 		"fabric.khushwant.dev/deployment-id": item.Spec.DeploymentID,
@@ -442,7 +499,34 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 			// turned one overrunning startup into a loop of them.
 			{"name": "VLLM_CACHE_ROOT", "value": modelCacheMountPath + "/vllm"},
 			{"name": "TORCHINDUCTOR_CACHE_DIR", "value": modelCacheMountPath + "/inductor"},
+			// Eager mode still compiles Triton shapes. Its independent default lives
+			// in the container home and otherwise disappears on every replacement.
+			{"name": "TRITON_CACHE_DIR", "value": modelCacheMountPath + "/triton"},
 		}...),
+	}
+	requests := map[string]any{}
+	if host.HuggingFaceSecret != "" {
+		key := host.HuggingFaceTokenKey
+		if key == "" {
+			key = "token"
+		}
+		container["env"] = append(container["env"].([]map[string]any), map[string]any{
+			"name": "HF_TOKEN", "valueFrom": map[string]any{"secretKeyRef": map[string]any{
+				"name": host.HuggingFaceSecret, "key": key,
+			}},
+		})
+	}
+	if host.CPURequest != "" {
+		requests["cpu"] = host.CPURequest
+	}
+	if host.MemoryRequest != "" {
+		requests["memory"] = host.MemoryRequest
+	}
+	if len(requests) > 0 {
+		// GPU request must equal its extended-resource limit; explicit CPU/memory
+		// requests do not interfere with that allocation.
+		requests["nvidia.com/gpu"] = host.GPUs
+		container["resources"].(map[string]any)["requests"] = requests
 	}
 
 	volumes := []map[string]any{
@@ -455,6 +539,16 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 		"volumes":    volumes,
 		// The model host calls no Kubernetes API.
 		"automountServiceAccountToken": false,
+	}
+	if host.ServiceAccountName != "" {
+		podSpec["serviceAccountName"] = host.ServiceAccountName
+	}
+	if len(host.ImagePullSecrets) > 0 {
+		secrets := make([]map[string]string, 0, len(host.ImagePullSecrets))
+		for _, secret := range host.ImagePullSecrets {
+			secrets = append(secrets, map[string]string{"name": secret})
+		}
+		podSpec["imagePullSecrets"] = secrets
 	}
 	if host.RuntimeClassName != "" {
 		podSpec["runtimeClassName"] = host.RuntimeClassName

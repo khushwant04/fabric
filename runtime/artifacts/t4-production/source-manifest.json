@@ -1,0 +1,43 @@
+{
+  "run_utc": "2026-10-06T13:27Z",
+  "cluster": "aks-inference-cin-01",
+  "job": "fabric-packed-check-1006132501",
+  "image": "acrfabricinference.azurecr.io/fabric/model-host@sha256:fe3246f43f6525a734acbdbdfc07a2b13f5b48bcc8b7db832624d5c3d735af55",
+  "source_files": [
+    {
+      "key": "f00.py",
+      "path": "runtime/kernels/gated_delta_packed_decode.py",
+      "sha256": "099b535b3aa1af8ccd7f28170a0a2ce0dec7b154834caece03940a8ae0b48ee5"
+    },
+    {
+      "key": "f01.py",
+      "path": "runtime/harness/__init__.py",
+      "sha256": "18b200bc76a419ec1f749930d7ea9d0386258ca25fdf8e955eff187310a8aa1a"
+    },
+    {
+      "key": "f02.py",
+      "path": "runtime/harness/artifact.py",
+      "sha256": "0f08167bbcc2924c1378f2ef443f86de5720349cb0b9b2c7b3b3fb39d60d3da9"
+    },
+    {
+      "key": "f03.py",
+      "path": "runtime/harness/environment.py",
+      "sha256": "512bebb4783d18c5fd8c0bd8f67c6a136d2cec89f7aff897b5135203975a3027"
+    },
+    {
+      "key": "f04.py",
+      "path": "serving/fabric_serving/__init__.py",
+      "sha256": "be99bd6bb5be0b0f91a0a5a8b7fe74e0a769697cee0c2aa5f4d12eaa02f0e254"
+    },
+    {
+      "key": "f05.py",
+      "path": "serving/fabric_serving/vllm_ops.py",
+      "sha256": "fec502234977fdfa7b237acf07ab0059cc950c07ffcdae61a26c777bfe27bac1"
+    },
+    {
+      "key": "f06.py",
+      "path": "serving/fabric_serving/compare_packed.py",
+      "sha256": "79fad8bf7869139c0ed19eb4eb0ae72df8b22799d74e2083d7c0a666b680036f"
+    }
+  ]
+}

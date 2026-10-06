@@ -61,12 +61,12 @@ jobs:
           set -euo pipefail
           : "${ACR_NAME:?set AZURE_ACR_NAME on the production environment}"
           tag="git-${{ steps.source.outputs.sha }}"
-          for component in control-plane agent data-plane; do
+          for component in control-plane agent data-plane console; do
             az acr build --registry "$ACR_NAME" --platform linux/amd64 \
               --file "deploy/images/${component}.Dockerfile" \
               --image "fabric/${component}:${tag}" .
           done
-          for component in control-plane agent data-plane; do
+          for component in control-plane agent data-plane console; do
             digest=$(az acr repository show-manifests --name "$ACR_NAME" \
               --repository "fabric/${component}" \
               --query "[?contains(tags, '${tag}')].digest | [0]" -o tsv)
@@ -88,6 +88,7 @@ jobs:
           CONTROL_PLANE_DIGEST: ${{ steps.images.outputs.control_plane_digest }}
           AGENT_DIGEST: ${{ steps.images.outputs.agent_digest }}
           DATA_PLANE_DIGEST: ${{ steps.images.outputs.data_plane_digest }}
+          CONSOLE_DIGEST: ${{ steps.images.outputs.console_digest }}
           CP_RELEASE: ${{ vars.FABRIC_CONTROL_PLANE_RELEASE }}
           CP_NAMESPACE: ${{ vars.FABRIC_CONTROL_PLANE_NAMESPACE }}
           STAMP_RELEASE: ${{ vars.FABRIC_STAMP_RELEASE }}

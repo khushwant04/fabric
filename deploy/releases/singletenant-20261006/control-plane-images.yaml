@@ -1,0 +1,8 @@
+# Image-only overlay. Supply account, database, authentication, and ingress values separately.
+image:
+  repository: acrfabricinference.azurecr.io/fabric/control-plane
+  digest: sha256:4f77138f84bebbe076480df502428c299d57b63297c1d35cdb948d12384434b2
+console:
+  image:
+    repository: acrfabricinference.azurecr.io/fabric/console
+    digest: sha256:a196f563d16d3681eaf3451842fad4b680cba27d2e41c288c80c01597289eaf6

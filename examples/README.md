@@ -63,6 +63,15 @@ Curl examples require `curl` and `jq`. After exporting the same environment, run
 | Assistants | Unsupported | — |
 | Realtime | Unsupported | — |
 
+On chat and legacy completion requests, opt into routing diagnostics with OpenAI SDK
+`extra_body={"routing": {"explain": True}}` (optionally add `"task": "code"`, `"reasoning"`,
+or `"general"`). Response headers `X-Fabric-Selected-Model`, `X-Fabric-Routing-Task`,
+`X-Fabric-Routing-Reason`, and `X-Fabric-Routing-Policy` describe the local selection for
+streaming and non-streaming replies; response bodies remain unchanged. Exact model requests
+stay pinned and report `exact_model_pinned`. Diagnostics are absent by default and include
+no prompts or backend addresses. The selected public alias is percent-encoded and limited
+to its first 200 characters for safe HTTP transport; URL-decode it for display.
+
 ## Token lifecycle
 
 `fabric_examples.auth` posts to `<control>/v1/token` with an explicit `User-Agent`, `grant_type=api_key`, and either the `fabric-inference` or `fabric-control` audience. API-key exchange derives the account, so no account ID is requested. Its typed `AccessToken` retains the token type, account ID, scopes, and calculated expiry. Client helpers exchange a fresh inference token and create a fresh sync or async `OpenAI` client at `<inference>/v1`. Control examples use a separate control token. Never log the API key, exchanged token, request headers, or complete client configuration. Re-exchange when a long-running process approaches token expiry.

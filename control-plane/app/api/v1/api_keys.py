@@ -8,9 +8,11 @@ from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
 from app.core.database import get_db_session
 from app.core.security import PrincipalContext, account_scope
 from app.schemas import ApiKeyCreatedResponse, ApiKeyCreateRequest, ApiKeyResponse
+from app.services.accounts import get_account
 from app.services.api_keys import create_api_key, list_api_keys, revoke_api_key
 
 router = APIRouter(tags=["api-keys"])
@@ -38,7 +40,7 @@ async def create_key(
         service_principal_id=payload.service_principal_id,
         actor_user_id=actor_user_id,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return ApiKeyCreatedResponse(
         api_key=ApiKeyResponse.model_validate(record),
         secret=secret,
@@ -53,9 +55,21 @@ async def create_key(
 async def list_keys(
     principal: PrincipalContext = Depends(account_scope(scope_defs.API_KEYS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[ApiKeyResponse]:
-    records = await list_api_keys(session, principal.account_id)
-    return [ApiKeyResponse.model_validate(record) for record in records]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[ApiKeyResponse]:
+        records = await list_api_keys(session, principal.account_id)
+        return [ApiKeyResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="api-keys",
+        response_type=list[ApiKeyResponse],
+        loader=load,
+    )
 
 
 @router.delete(
@@ -75,5 +89,5 @@ async def revoke_key(
         actor_type=principal.principal_type,
         actor_id=principal.subject,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return ApiKeyResponse.model_validate(record)

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
+import { parseNewDeployment, parsePlacementStamp } from "@/lib/fabric/new-deployment"
 import {
   getConsoleContext,
   getFabricAccessToken,
@@ -14,7 +15,6 @@ import type {
   ApiKey,
   Deployment,
   Membership,
-  OidcProvider,
   ServicePrincipal,
 } from "@/lib/fabric/types"
 
@@ -42,45 +42,40 @@ async function mutationContext(scope: string) {
   return { context, token }
 }
 
-export async function createDeployment(formData: FormData) {
+export async function createDeployment(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const { context, token } = await mutationContext("deployments:write")
-  const name = value(formData, "name")
-  const modelAlias = value(formData, "modelAlias")
-  const release = value(formData, "release")
-  const replicas = Number(value(formData, "replicas"))
-  const gpuCount = Number(value(formData, "gpuCount"))
-  const gpuClass = value(formData, "gpuClass")
-  const region = value(formData, "region")
-
-  if (!/^[a-z0-9]([a-z0-9-]{0,198}[a-z0-9])?$/.test(name)) {
-    throw new Error("Deployment names must use lowercase letters, numbers, and hyphens")
-  }
-  if (!modelAlias || !release || !Number.isInteger(replicas) || replicas < 1 || replicas > 32) {
-    throw new Error("Complete all required deployment fields")
-  }
-
-  const deployment = await controlPlaneRequest<Deployment>(
+  let deployment: Deployment
+  let stampId: string | null
+  try {
+    const input = parseNewDeployment(formData)
+    stampId = input.stampId
+    deployment = await controlPlaneRequest<Deployment>(
     `/v1/accounts/${context.account.id}/deployments`,
     {
       method: "POST",
       token,
       headers: { "Idempotency-Key": randomUUID() },
       body: JSON.stringify({
-        name,
-        model_alias: modelAlias,
+        name: input.name,
+        model_alias: input.modelAlias,
         spec: {
           runtime: {
-            release,
-            kernel_mode: value(formData, "kernelMode") || "auto",
-            strategy: value(formData, "strategy") || "least_in_flight",
+            release: input.modelRef,
+            kernel_mode: "standard",
+            strategy: "least_in_flight",
+            ...(input.maxModelLen ? { max_model_len: input.maxModelLen } : {}),
+            ...(input.maxNumSeqs ? { max_num_seqs: input.maxNumSeqs } : {}),
+            ...(input.execution ? { execution: input.execution } : {}),
           },
-          replicas,
-          resources: { gpu_count: gpuCount, gpu_class: gpuClass },
-          limits_policy_ref: value(formData, "limitsPolicy") || null,
+          replicas: input.replicas,
+          resources: { gpu_count: input.gpuCount, gpu_class: input.gpuClass },
         },
       }),
     }
-  )
+    )
+  } catch (error) {
+    return { error: actionError(error) }
+  }
 
   let placementFailed = false
   try {
@@ -89,17 +84,42 @@ export async function createDeployment(formData: FormData) {
       {
         method: "POST",
         token,
-        body: JSON.stringify(region ? { region } : {}),
+        body: JSON.stringify(stampId ? { stamp_id: stampId } : {}),
       }
     )
-  } catch (error) {
-    if (!(error instanceof FabricApiError)) throw error
+  } catch {
     placementFailed = true
   }
   revalidatePath("/deployments")
   redirect(
     `/deployments/${deployment.id}${placementFailed ? "?placement=failed" : ""}`
   )
+}
+
+export async function assignDeployment(
+  deploymentId: string,
+  _previous: ActionState,
+  formData: FormData
+): Promise<ActionState> {
+  const { context, token } = await mutationContext("deployments:write")
+  try {
+    const stampId = parsePlacementStamp(formData)
+    const base = `/v1/accounts/${context.account.id}/deployments/${encodeURIComponent(deploymentId)}`
+    const deployment = await controlPlaneRequest<Deployment>(base, { token })
+    if (deployment.account_id !== context.account.id || ["terminating", "deleted"].includes(deployment.status)) {
+      return { error: "This deployment cannot be assigned." }
+    }
+    await controlPlaneRequest(`${base}/placements`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(stampId ? { stamp_id: stampId } : {}),
+    })
+    revalidatePath(`/deployments/${deployment.id}`)
+    revalidatePath("/deployments")
+    return { ok: true }
+  } catch (error) {
+    return { error: actionError(error) }
+  }
 }
 
 export async function createEnrollmentToken(
@@ -202,37 +222,6 @@ export async function createApiKey(
     )
     revalidatePath("/access/api-keys")
     return { ok: true, secret: result.secret }
-  } catch (error) {
-    return { error: actionError(error) }
-  }
-}
-
-export async function saveOidcProvider(
-  _previous: ActionState,
-  formData: FormData
-): Promise<ActionState> {
-  try {
-    const { context, token } = await mutationContext("members:write")
-    await controlPlaneRequest<OidcProvider>(
-      `/v1/accounts/${context.account.id}/oidc-provider`,
-      {
-        method: "PUT",
-        token,
-        body: JSON.stringify({
-          issuer: value(formData, "issuer"),
-          audience: value(formData, "audience"),
-          jwks_uri: value(formData, "jwksUri") || null,
-          subject_claim: value(formData, "subjectClaim") || "sub",
-          email_claim: value(formData, "emailClaim") || "email",
-          auto_provision_role:
-            value(formData, "autoProvisionRole") === "none"
-              ? null
-              : value(formData, "autoProvisionRole") || null,
-        }),
-      }
-    )
-    revalidatePath("/access/identity-provider")
-    return { ok: true }
   } catch (error) {
     return { error: actionError(error) }
   }

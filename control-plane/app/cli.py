@@ -25,11 +25,13 @@ import uuid
 from sqlalchemy import select
 
 from app.core import scopes as scope_defs
+from app.core.config import get_settings
 from app.core.database import dispose_engine, get_session_factory
 from app.core.tenancy import system_context
 from app.models import Account, User
 from app.services.accounts import create_account, ensure_system_account
 from app.services.api_keys import create_api_key
+from app.services.bootstrap import seed_single_tenant
 from app.services.entitlements import set_managed_capacity
 from app.services.service_principals import create_service_principal
 
@@ -42,6 +44,23 @@ async def _seed_system_account() -> None:
             await session.commit()
         print(f"system account ready id={account.id} slug={account.slug}")
     await dispose_engine()
+
+
+async def _seed_single_tenant() -> None:
+    settings = get_settings()
+    if settings.single_tenant_account_id is None:
+        raise ValueError("FABRIC_SINGLE_TENANT_ACCOUNT_ID is required for dedicated bootstrap")
+    try:
+        async with get_session_factory()() as session:
+            account, created = await seed_single_tenant(
+                session, account_id=settings.single_tenant_account_id,
+                slug=settings.single_tenant_account_slug, name=settings.single_tenant_account_name,
+                admin_subject=settings.single_tenant_admin_subject,
+            )
+            await session.commit()
+            print(f"installation account ready id={account.id} created={created}")
+    finally:
+        await dispose_engine()
 
 
 async def _bootstrap_account(
@@ -172,6 +191,7 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("seed-system-account")
+    commands.add_parser("seed-single-tenant")
 
     bootstrap = commands.add_parser("bootstrap-account")
     bootstrap.add_argument("--slug", required=True)
@@ -194,6 +214,8 @@ def main() -> None:
 
     if args.command == "seed-system-account":
         asyncio.run(_seed_system_account())
+    elif args.command == "seed-single-tenant":
+        asyncio.run(_seed_single_tenant())
     elif args.command == "bootstrap-account":
         asyncio.run(
             _bootstrap_account(

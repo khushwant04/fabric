@@ -2,8 +2,8 @@ apiVersion: v2
 name: fabric-control-plane
 description: |
   The Fabric control plane: accounts, credentials, deployment intent, stamp
-  enrollment, desired state, status, and usage ingestion. Fabric operates this
-  itself; a customer installing a stamp does not install this chart.
+  enrollment, desired state, status, and usage ingestion. Supports a self-hosted
+  single-tenant installation with an optional authenticated console.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

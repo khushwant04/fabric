@@ -50,6 +50,7 @@ type GPUGroup struct {
 	Count             int
 	MemoryBytes       int64
 	ComputeCapability string
+	Source            string
 }
 
 // Capacity is what one stamp can offer, as measured.
@@ -307,9 +308,19 @@ type aggregate struct {
 	memoryKnown     bool
 	capability      ComputeCapability
 	capabilityKnown bool
+	source          string
 }
 
 func (a *aggregate) add(profile Profile) {
+	source := profile.Source
+	if source == "" {
+		source = "unknown"
+	}
+	if a.source == "" {
+		a.source = source
+	} else if a.source != source {
+		a.source = "mixed node labels and inferred hardware"
+	}
 	a.count += profile.Count
 
 	if profile.MemoryMiB <= 0 {
@@ -351,7 +362,7 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 	groups := make([]GPUGroup, 0, len(order))
 	for _, product := range order {
 		entry := byProduct[product]
-		group := GPUGroup{Product: product, Count: entry.count}
+		group := GPUGroup{Product: product, Count: entry.count, Source: entry.source}
 		if entry.memoryKnown {
 			group.MemoryBytes = int64(entry.memoryMiB) * mibToBytes
 		}

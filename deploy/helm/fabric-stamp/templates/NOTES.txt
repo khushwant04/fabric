@@ -11,6 +11,12 @@ Inference is served in-cluster at:
 
 Callers present a Fabric inference token; the stamp serves only deployments the
 control plane has placed on it, and only for the account that owns them.
+{{- with (include "fabric-stamp.inferenceUrl" .) }}
+
+Public inference endpoint: {{ . }}/v1/chat/completions
+DNS, the ingress controller, and its TLS certificate must be ready before calling it.
+The agent publishes this endpoint with deployments after model-host availability is observed.
+{{- end }}
 
 {{ if and .Values.enrollment.token (not .Values.enrollment.existingSecret) }}
 The enrollment token is single use. Once the agent reports enrolment, delete it:
@@ -30,5 +36,15 @@ NOTE: the collector is disabled, so usage accumulates in the bounded data-plane 
 oldest unleased records are dropped when it fills. Nothing will be reported centrally.
 {{- end }}
 
-No Kubernetes resources are created for placed deployments: there is no operator
-yet, so the agent renders the data plane's configuration file instead.
+{{- if .Values.operator.enabled }}
+The agent publishes FabricModelDeployment resources. The operator reconciles those
+resources and publishes routes for ready model hosts.
+{{- if .Values.operator.managedModelHost.image }}
+Placed deployments use operator-managed model-host Deployments and Services.
+{{- else }}
+Model hosts are operated externally; the operator publishes their configured routes.
+{{- end }}
+{{- else }}
+The agent renders the data-plane configuration directly. It does not create model-host
+Deployments or Services without the operator.
+{{- end }}

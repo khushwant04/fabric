@@ -8,6 +8,7 @@ export function inferenceConfiguration(): InferenceConfiguration {
   return {
     configuredUrl: process.env.FABRIC_INFERENCE_URL,
     allowedOrigins: process.env.FABRIC_INFERENCE_ALLOWED_ORIGINS,
+    allowedDomains: process.env.FABRIC_INFERENCE_ALLOWED_DOMAINS,
     production: process.env.NODE_ENV === "production",
   }
 }

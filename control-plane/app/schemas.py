@@ -5,8 +5,9 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core import scopes as scope_defs
 
@@ -483,6 +484,7 @@ class GpuCapability(BaseModel):
     count: int = Field(ge=0, le=1024)
     memory_bytes: int = Field(default=0, ge=0)
     compute_capability: str | None = Field(default=None, max_length=16)
+    source: str | None = Field(default=None, max_length=100)
 
 
 class FabricGpuClaim(BaseModel):
@@ -506,6 +508,7 @@ class StampCapabilities(BaseModel):
     orchestrator: str = Field(max_length=32)
     orchestrator_version: str | None = Field(default=None, max_length=64)
     region: str | None = Field(default=None, max_length=64)
+    inference_url: str | None = Field(default=None, max_length=2000)
     gpus: list[GpuCapability] = Field(default_factory=list, max_length=64)
     allocatable_gpus: int = Field(default=0, ge=0)
     requested_gpus: int = Field(default=0, ge=0)
@@ -543,6 +546,24 @@ class StampCapabilities(BaseModel):
     operator_version: str | None = Field(default=None, max_length=64)
     collector_version: str | None = Field(default=None, max_length=64)
     runtime_version: str | None = Field(default=None, max_length=64)
+
+    @field_validator("inference_url")
+    @classmethod
+    def _public_inference_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        url = urlsplit(value)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in {"", "/", "/v1", "/v1/"}
+        ):
+            raise ValueError("inference_url must be an HTTPS gateway base URL without credentials")
+        return value.rstrip("/")
 
 
 class EnrollmentTokenCreateRequest(BaseModel):

@@ -7,7 +7,7 @@ hardware.
 Built around a strict control-plane/data-plane split: inference never traverses the control
 plane, so serving continues when the control plane does not.
 
-**Status.** Deployed and serving. Five NVIDIA T4 nodes on Azure Kubernetes Service currently host five model varieties with one replica each. PostgreSQL row-level security is enforced, three public HTTPS endpoints are live, and usage is metered per request. The frontend remains a scaffold and GPU autoscaling is not enabled. See [Current state](docs/context/current-state.md) for implementation details and the [technical paper](FABRIC-TECHNICAL-PAPER-LATEX.md) for the latest audited topology, evidence boundaries, and limitations.
+**Status.** Supports Helm-installed control planes and inference stamps, a single-tenant console, dashboard model deployment, GPU capacity reporting, and native Kubernetes gateway exposure. PostgreSQL row-level security protects account data; model readiness comes from observed workloads. Fabric does not provision GPU nodes or configure DNS providers. See the [single-tenant installation guide](docs/single-tenant-installation.md) for setup and the [technical paper](FABRIC-TECHNICAL-PAPER-LATEX.md) for the architecture and validation limits.
 
 ---
 
@@ -302,7 +302,7 @@ SQLite: only the PostgreSQL run proves isolation is enforced.
 | [`serving/`](serving/) | vLLM integration and kernel registration | Registered in a live host |
 | [`deploy/`](deploy/) | Images, Helm charts, observability, cluster scripts | Implemented |
 | [`docs/`](docs/) | Architecture, design, ADRs, project review | Living context |
-| [`v1/`](v1/) | Next.js frontend | Scaffold only |
+| [`v1/`](v1/) | Next.js console: live deployment state, themes, model comparison, architecture | Implemented |
 | [`utils/transformers/`](utils/transformers/) | Vendored model reference | Not a runtime integration |
 
 ---
@@ -327,10 +327,15 @@ Start with the [project review](docs/project-review.md) or the
 
 **Runtime and research**
 [Runtime design](docs/context/runtime-design.md) ·
-[Benchmark plan](docs/context/benchmark-research-plan.md)
+[Benchmark plan](docs/context/benchmark-research-plan.md) ·
+[T4 packed decode validation](docs/runtime-performance-validation.md)
 
 **Operations**
+[Single-tenant Helm installation](docs/single-tenant-installation.md) ·
+[Native Kubernetes stamp endpoints](docs/stamp-native-endpoint.md) ·
 [Packaging and deployment](docs/context/packaging-deployment.md) ·
+[Cluster connection and performance checks](docs/cluster-performance-validation.md) ·
+[Qwen3.5 startup diagnosis](docs/model-startup-diagnosis.md) ·
 [Observability and SLOs](docs/context/observability-slos.md) ·
 [Security and identity](docs/context/security-identity.md)
 

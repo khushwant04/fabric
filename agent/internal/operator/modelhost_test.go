@@ -296,6 +296,46 @@ func TestNoHostIsCreatedWithoutAnImage(t *testing.T) {
 	}
 }
 
+func TestEmptyStampStartsBeforeDashboardModelSelection(t *testing.T) {
+	state, client := newHostServer(t)
+	host := testHost()
+	host.ModelRef = ""
+	host.ServedName = ""
+	reconciler := hostReconciler(client, host)
+	result, err := reconciler.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("empty stamp reconcile: %v", err)
+	}
+	if len(state.deploys) != 0 || len(state.services) != 0 || result.HostsTotal != 0 {
+		t.Fatalf("an empty stamp started a model before placement: %+v", state.deploys)
+	}
+
+	item := resource("qwen", "dep-qwen", "acct-a", "qwen3.5-4b", 1)
+	item.Spec.UpstreamModel = "Qwen/Qwen3.5-4B"
+	state.resources[item.Metadata.Name] = &item
+	result, err = reconciler.ReconcileOnce(context.Background())
+	if err != nil {
+		t.Fatalf("placed model reconcile: %v", err)
+	}
+	workload, present := state.deploys["fabric-host-dep-qwen"]
+	if !present || result.HostsTotal != 1 {
+		t.Fatalf("placed model did not create exactly one host: %+v", state.deploys)
+	}
+	encoded, err := json.Marshal(workload.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(encoded)
+	for _, expected := range []string{"--model=Qwen/Qwen3.5-4B", "--served-model-name=Qwen/Qwen3.5-4B"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("dashboard-selected repository was not applied: missing %q in %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "--model=qwen3.5-4b") || strings.Contains(body, "--served-model-name=qwen3.5-4b") {
+		t.Fatal("customer alias replaced the selected repository")
+	}
+}
+
 func TestADeclaredDeploymentGetsAModelHost(t *testing.T) {
 	state, client := newHostServer(t, resource("alpha", "dep-a", "acct-a", "alpha-model", 1))
 

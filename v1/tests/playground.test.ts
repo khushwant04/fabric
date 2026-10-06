@@ -60,6 +60,15 @@ test("HTTP is restricted to explicitly configured local development and never st
   assert.throws(() => resolveInferenceUrl([{ ...status, endpoint: "http://localhost:9000/v1" }], { production: false, allowedOrigins: "http://localhost:9000" }))
 })
 
+test("Helm-configured domains allow new stamp subdomains with strict hostname and port boundaries", () => {
+  const config = { production: true, allowedDomains: "inference.example.com" }
+  assert.equal(resolveInferenceUrl([{ ...status, endpoint: "https://k3s.inference.example.com" }], config), "https://k3s.inference.example.com/v1/chat/completions")
+  for (const endpoint of ["https://inference.example.com.evil/", "https://evil-inference.example.com/", "https://k3s.inference.example.com:8443/", "https://169.254.169.254/", "http://k3s.inference.example.com/"]) {
+    assert.throws(() => resolveInferenceUrl([{ ...status, endpoint }], config))
+  }
+  assert.throws(() => resolveInferenceUrl([status], { production: true, allowedDomains: "*" }))
+})
+
 test("only bounded safe diagnostic headers are propagated", () => {
   const headers = new Headers({ "X-Fabric-Selected-Model": "qwen3.5-2b", "X-Fabric-Routing-Reason": "task_affinity", "X-Fabric-Routing-Policy": "<script>secret</script>", "Authorization": "secret", "X-Backend-URL": "private" })
   assert.deepEqual(routingDiagnostics(headers), { "X-Fabric-Selected-Model": "qwen3.5-2b", "X-Fabric-Routing-Reason": "task_affinity" })

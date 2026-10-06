@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getAuthSession, getMe, getSelectedAccountId } from "@/lib/fabric/session"
+import { getSingleTenantAccountId } from "@/lib/fabric/single-tenant"
 import { shortId } from "@/lib/format"
 
 export default async function OnboardingPage({ searchParams }: PageProps<"/onboarding">) {
@@ -19,6 +20,10 @@ export default async function OnboardingPage({ searchParams }: PageProps<"/onboa
   const me = await getMe()
   if (!me) redirect("/")
   const selected = await getSelectedAccountId()
+  if (getSingleTenantAccountId()) {
+    if (me.memberships.some((item) => item.account_id === selected && item.status === "active")) redirect("/dashboard")
+    redirect("/access-denied")
+  }
   if (
     !query.switch &&
     selected &&

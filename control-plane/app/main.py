@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.v1 import api_router
+from app.core.cache import configure_cache
 from app.core.config import get_settings
 from app.core.database import dispose_engine, get_session_factory
 from app.core.errors import ApiError, api_error_handler
@@ -50,6 +51,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # but the queue is small, the work is I/O bound, and one fewer moving part is worth
     # more than that tidiness until a real consumer exists. It is cancelled on shutdown
     # rather than left to be killed, so an in-flight batch finishes its transaction.
+    cache = configure_cache(settings)
     worker = OutboxWorker(get_session_factory())
     stopping = False
     delivery = asyncio.create_task(
@@ -63,6 +65,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         delivery.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await delivery
+        await cache.close()
         await dispose_engine()
         logger.info("control-plane stopped")
 

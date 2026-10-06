@@ -826,6 +826,18 @@
             "maxLength": 100,
             "title": "Product",
             "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           }
         },
         "required": [
@@ -1663,6 +1675,18 @@
             "maxItems": 64,
             "title": "Gpus",
             "type": "array"
+          },
+          "inference_url": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inference Url"
           },
           "max_free_gpus_per_node": {
             "default": 0,

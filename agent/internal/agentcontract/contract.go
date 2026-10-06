@@ -12,6 +12,7 @@ type ObservedCondition struct {
 	Reason              string
 	Message             string
 	Applied             bool
+	Available           *bool
 	ObservedGeneration  int64
 	ReadyReplicas       *int
 	UnavailableReplicas *int

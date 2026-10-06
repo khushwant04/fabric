@@ -167,4 +167,5 @@ export type ConsoleContext = {
   account: Account
   identity: FabricSelf
   me: Me
+  singleTenant?: boolean
 }

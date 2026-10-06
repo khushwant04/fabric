@@ -6,6 +6,11 @@ import { redirect } from "next/navigation"
 
 import { auth0, isAuth0Configured } from "@/lib/auth0"
 import { controlPlaneRequest } from "@/lib/fabric/client"
+import {
+  getSingleTenantAccountId,
+  requireAccountSelectionEnabled,
+  requireConfiguredAccount,
+} from "@/lib/fabric/single-tenant"
 import type {
   Account,
   ConsoleContext,
@@ -46,10 +51,11 @@ export const getMe = cache(async (): Promise<Me | null> => {
 })
 
 export async function getSelectedAccountId() {
-  return (await cookies()).get(ACCOUNT_COOKIE)?.value ?? null
+  return getSingleTenantAccountId() ?? (await cookies()).get(ACCOUNT_COOKIE)?.value ?? null
 }
 
 export async function setSelectedAccount(accountId: string) {
+  requireAccountSelectionEnabled()
   const cookieStore = await cookies()
   cookieStore.set(ACCOUNT_COOKIE, accountId, {
     httpOnly: true,
@@ -68,10 +74,18 @@ const getAudienceToken = cache(async (
   accountId: string,
   audience: "fabric-control" | "fabric-inference"
 ) => {
+  requireConfiguredAccount(accountId)
   if (!auth0) throw new Error("Auth0 is not configured")
 
   const session = await getAuthSession()
   if (!session) redirect("/auth/login?returnTo=/onboarding")
+
+  if (getSingleTenantAccountId()) {
+    const me = await getMe()
+    if (!me?.memberships.some((item) => item.account_id === accountId && item.status === "active")) {
+      redirect("/access-denied")
+    }
+  }
 
   const subject = String(session.user.sub ?? "")
   const cacheKey = `${subject}:${accountId}:${audience}`
@@ -120,7 +134,8 @@ export const getConsoleContext = cache(async (): Promise<ConsoleContext> => {
   const membership = me.memberships.find(
     (item) => item.account_id === accountId && item.status === "active"
   )
-  if (!accountId || !membership) redirect("/onboarding")
+  const singleTenant = Boolean(getSingleTenantAccountId())
+  if (!accountId || !membership) redirect(singleTenant ? "/access-denied" : "/onboarding")
 
   const token = await getFabricAccessToken(accountId)
   const [account, identity] = await Promise.all([
@@ -128,7 +143,10 @@ export const getConsoleContext = cache(async (): Promise<ConsoleContext> => {
     controlPlaneRequest<ConsoleContext["identity"]>("/v1/self", { token }),
   ])
 
-  return { account, identity, me }
+  if (singleTenant && (account.id !== accountId || identity.account_id !== accountId || identity.audience !== "fabric-control")) {
+    throw new Error("The control plane returned an identity outside the configured workspace")
+  }
+  return { account, identity, me, singleTenant }
 })
 
 export function hasScope(context: ConsoleContext, scope: string) {

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Header, Path, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
 from app.core.database import get_db_session
 from app.core.security import PrincipalContext, account_scope
 from app.schemas import (
@@ -21,6 +22,7 @@ from app.schemas import (
     PlacementResponse,
 )
 from app.services import idempotency as idempotency_key_service
+from app.services.accounts import get_account
 from app.services.deployments import (
     create_deployment,
     create_placement,
@@ -97,7 +99,7 @@ async def create(
             reference=str(deployment.id),
         )
 
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return DeploymentResponse.model_validate(deployment)
 
 
@@ -105,9 +107,37 @@ async def create(
 async def list_all(
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[DeploymentResponse]:
-    records = await list_deployments(session, principal.account_id)
-    return [DeploymentResponse.model_validate(record) for record in records]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[DeploymentResponse]:
+        records = await list_deployments(session, principal.account_id)
+        return [DeploymentResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="deployments",
+        response_type=list[DeploymentResponse],
+        loader=load,
+    )
+
+
+# Register literal paths before /{deployment_id}: FastAPI validates the UUID only
+# after matching a route, so the dynamic route would otherwise claim "usage".
+@router.get(
+    _BASE + "/usage",
+    response_model=AccountUsageResponse,
+    summary="Read account-wide reported usage totals",
+)
+async def read_account_usage(
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> AccountUsageResponse:
+    """Aggregate operational usage reported across all account deployments."""
+    summary = await summarize_account_usage(session, account_id=principal.account_id)
+    return AccountUsageResponse.model_validate(summary)
 
 
 @router.get(
@@ -119,9 +149,22 @@ async def read_one(
     deployment_id: uuid.UUID = Path(...),
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> DeploymentResponse:
-    deployment = await get_deployment(session, principal.account_id, deployment_id)
-    return DeploymentResponse.model_validate(deployment)
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> DeploymentResponse:
+        deployment = await get_deployment(session, principal.account_id, deployment_id)
+        return DeploymentResponse.model_validate(deployment)
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="deployment",
+        parameters=(deployment_id,),
+        response_type=DeploymentResponse,
+        loader=load,
+    )
 
 
 @router.patch(
@@ -142,7 +185,7 @@ async def update(
         spec=payload.spec.model_dump(mode="json"),
         actor_principal_id=principal.principal_id,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return DeploymentResponse.model_validate(deployment)
 
 
@@ -162,7 +205,7 @@ async def delete(
         deployment_id=deployment_id,
         actor_principal_id=principal.principal_id,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -193,7 +236,7 @@ async def assign_placement(
         region=request.region,
         actor_principal_id=principal.principal_id,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return PlacementResponse.model_validate(record)
 
 
@@ -206,9 +249,22 @@ async def read_placements(
     deployment_id: uuid.UUID = Path(...),
     principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[PlacementResponse]:
-    records = await list_placements(session, principal.account_id, deployment_id)
-    return [PlacementResponse.model_validate(record) for record in records]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[PlacementResponse]:
+        records = await list_placements(session, principal.account_id, deployment_id)
+        return [PlacementResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="placements",
+        parameters=(deployment_id,),
+        response_type=list[PlacementResponse],
+        loader=load,
+    )
 
 
 @router.get(
@@ -223,20 +279,6 @@ async def read_status(
 ) -> list[DeploymentStatusResponse]:
     records = await list_deployment_status(session, principal.account_id, deployment_id)
     return [DeploymentStatusResponse.model_validate(record) for record in records]
-
-
-@router.get(
-    _BASE + "/usage",
-    response_model=AccountUsageResponse,
-    summary="Read account-wide reported usage totals",
-)
-async def read_account_usage(
-    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
-    session: AsyncSession = Depends(get_db_session),
-) -> AccountUsageResponse:
-    """Aggregate operational usage reported across all account deployments."""
-    summary = await summarize_account_usage(session, account_id=principal.account_id)
-    return AccountUsageResponse.model_validate(summary)
 
 
 @router.get(

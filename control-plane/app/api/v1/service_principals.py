@@ -12,9 +12,11 @@ from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
 from app.core.database import get_db_session
 from app.core.security import PrincipalContext, account_scope
 from app.schemas import ServicePrincipalCreateRequest, ServicePrincipalResponse
+from app.services.accounts import get_account
 from app.services.service_principals import (
     create_service_principal,
     disable_service_principal,
@@ -45,7 +47,7 @@ async def create(
         actor_type=principal.principal_type,
         actor_user_id=actor_user_id,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return ServicePrincipalResponse.model_validate(record)
 
 
@@ -57,9 +59,21 @@ async def create(
 async def list_all(
     principal: PrincipalContext = Depends(account_scope(scope_defs.API_KEYS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[ServicePrincipalResponse]:
-    records = await list_service_principals(session, principal.account_id)
-    return [ServicePrincipalResponse.model_validate(record) for record in records]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[ServicePrincipalResponse]:
+        records = await list_service_principals(session, principal.account_id)
+        return [ServicePrincipalResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="service-principals",
+        response_type=list[ServicePrincipalResponse],
+        loader=load,
+    )
 
 
 @router.delete(
@@ -79,5 +93,5 @@ async def disable(
         actor_type=principal.principal_type,
         actor_id=principal.subject,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return ServicePrincipalResponse.model_validate(record)

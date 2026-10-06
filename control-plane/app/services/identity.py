@@ -12,6 +12,7 @@ from app.core.auth0 import Auth0Identity
 from app.core.config import get_settings
 from app.core.credentials import PREFIX_API_KEY, parse_credential, verify_credential
 from app.core.errors import BadRequest, Forbidden, Unauthorized
+from app.core.installation import require_installation_account
 from app.core.jwt_service import issue_token
 from app.core.tenancy import declare_system, elevated
 from app.core.timeutil import is_expired, utc_now
@@ -81,7 +82,11 @@ async def active_memberships(
             )
             .order_by(Account.slug)
         )
-    return [(membership, account) for membership, account in rows.all()]
+    fixed = get_settings().single_tenant_account_id
+    return [
+        (membership, account) for membership, account in rows.all()
+        if fixed is None or account.id == fixed
+    ]
 
 
 def _scopes_for_audience(audience: str, role_scopes: frozenset[str]) -> list[str]:
@@ -105,6 +110,8 @@ async def exchange_auth0_token(
     # Runs before an account is known: the caller's accounts are discovered from
     # memberships, which cannot be read under an account that is not yet known.
     await declare_system(session)
+    if requested_account_id is not None:
+        require_installation_account(requested_account_id)
     user = await ensure_user(session, identity)
     memberships = await active_memberships(session, user.id)
 
@@ -177,6 +184,7 @@ async def exchange_oidc_token(
     await declare_system(session)
 
     identity = await oidc.verify_token(session, token)
+    require_installation_account(identity.account_id)
     user = await oidc.ensure_user(session, identity)
 
     memberships = await active_memberships(session, user.id)
@@ -264,6 +272,7 @@ async def exchange_api_key(
     settings = get_settings()
     if not verify_credential(settings.credential_pepper, key_id, secret, record.secret_verifier):
         raise Unauthorized("invalid_api_key", "API key is not recognized")
+    require_installation_account(record.account_id)
 
     now = utc_now()
     if record.revoked_at is not None:

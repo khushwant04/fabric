@@ -46,7 +46,7 @@ export function AppHeader({ context }: { context: ConsoleContext }) {
     <Link href="/dashboard" aria-label="Fabric home" className="fabric-brand flex items-center gap-2.5 rounded-lg text-[17px] font-semibold tracking-[-0.045em] outline-none transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-ring">
       <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground"><LayersIcon className="size-4" strokeWidth={1.8} /></span>Fabric
     </Link>
-    <div className="min-w-0 max-w-64 flex-1 lg:flex-none"><AccountSwitcher context={context} /></div>
+    <div className="min-w-0 max-w-64 flex-1 lg:flex-none">{context.singleTenant ? <span className="block truncate px-2 text-[13px]" aria-label="Workspace">{context.account.name}</span> : <AccountSwitcher context={context} />}</div>
     <div className="ml-auto flex min-w-0 items-center gap-1.5">
       <div className="mr-3 hidden w-64 xl:block"><SearchCommand /></div>
       <SearchCommand compact /><ThemeMenu />

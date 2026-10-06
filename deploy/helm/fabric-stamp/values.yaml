@@ -1,7 +1,7 @@
 # Fabric inference stamp.
 #
 # Minimum required values:
-#   controlPlane.url, controlPlane.jwtIssuer, enrollment.token (first install only),
+#   controlPlane.url, enrollment.token (first install only),
 #   modelHost.url
 
 nameOverride: ""
@@ -42,6 +42,9 @@ enrollment:
 stamp:
   # Defaults to the release name.
   name: ""
+  # Optional public HTTPS base URL when exposure is managed outside this chart.
+  # Native exposure or a single Istio hostname supplies it automatically.
+  inferenceUrl: ""
   orchestrator: k3s
   # Reported as a capability and used to filter placement when a deployment asks for a
   # region. Empty means this stamp matches only region-agnostic requests.
@@ -90,7 +93,16 @@ operator:
   # in or mounted through cacheClaim.
   managedModelHost:
     image: ""
-    # What the server loads: a repository id, or a path inside the image.
+    serviceAccount:
+      create: true
+      name: ""
+    imagePullSecrets: []
+    huggingFace:
+      existingSecret: ""
+      tokenKey: token
+    # Optional legacy model defaults. Placements normally supply the model repository
+    # and served release name, so an empty stamp can be installed with only its image.
+    # A configured modelRef path is preserved for a placement matching servedName.
     modelRef: ""
     # The name the server answers to. This is the release, not a customer's alias.
     servedName: ""
@@ -102,13 +114,24 @@ operator:
     # A fraction of *total* device memory. Anything else resident on the GPU is not
     # accounted for, so asking for all of it fails at startup.
     gpuMemoryUtilization: "0.85"
-    # Disables CUDA graph capture: slower per token, but the graphs' memory is
-    # returned to the KV cache.
+    # vLLM 0.26 disables torch.compile and CUDA graph capture in eager mode;
+    # graphs use memory, while eager execution usually increases token latency.
     enforceEager: false
     # float16, not bfloat16. A T4 is compute capability 7.5 and has no bfloat16 support,
     # so a server asked for it refuses to start. Ampere and later (A10, A100, L4, H100)
     # can use bfloat16, which is closer to how the model was trained.
     dtype: float16
+    # Explicit text/chat-only policy. vLLM 0.26 supports --language-model-only;
+    # this rejects image/video/audio input and avoids multimodal startup profiling.
+    # Keep false for vision endpoints. A nonempty allowlist restricts it to those ids.
+    textOnly: false
+    textOnlyModels: []
+    # Optional host reservations; no CPU or memory limits are introduced. Empty
+    # retains existing scheduling. Size memory for weights, loading, and /dev/shm.
+    resources:
+      requests:
+        cpu: ""
+        memory: ""
     port: 8000
     # Where downloaded weights are kept.
     #
@@ -140,7 +163,7 @@ operator:
   # the rollout; without it the candidate remains Pending while the active release stays up.
   rollout:
     # Generous by necessity. A tight deadline rolls back releases that were about to
-    # succeed, and weight loading dominates this number.
+    # succeed. Scheduling, image pulls, weights, and engine warmup all contribute.
     readyTimeout: 15m
     # One at a time by default. Durable Preparing/Draining status survives operator
     # restart, so the budget cannot be forgotten mid-rollout.
@@ -221,6 +244,20 @@ dataPlane:
 # Public exposure of the inference listener through an existing Istio ingress gateway.
 # Only the inference listener is reachable: the administrative listener the collector
 # drains is not in the Service, so nothing here can route to it.
+exposure:
+  # Native Kubernetes Ingress; install an Ingress controller and cert-manager first.
+  # Configure DNS to its public address. Admin listeners are never exposed.
+  enabled: false
+  host: ""
+  baseDomain: ""
+  className: ""
+  annotations: {}
+  tls:
+    secretName: ""
+    issuer:
+      name: ""
+      kind: ClusterIssuer
+
 istio:
   enabled: false
   hosts: []

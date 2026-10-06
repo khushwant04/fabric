@@ -39,7 +39,6 @@ const items = [
   { label: "Members", href: "/access/members", icon: UsersIcon, group: "Identity & access" },
   { label: "Service principals", href: "/access/service-principals", icon: UserRoundCogIcon, group: "Identity & access" },
   { label: "API keys", href: "/access/api-keys", icon: KeyRoundIcon, group: "Identity & access" },
-  { label: "Identity provider", href: "/access/identity-provider", icon: NetworkIcon, group: "Identity & access" },
   { label: "Account settings", href: "/settings", icon: Settings2Icon, group: "Administration" },
 ]
 

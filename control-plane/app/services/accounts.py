@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
 from app.core.config import get_settings
-from app.core.errors import Conflict, NotFound
+from app.core.errors import Conflict, Forbidden, NotFound
 from app.core.tenancy import declare_system, elevated
 from app.models import Account, AccountMembership, User
 from app.services.audit import record_audit
@@ -59,6 +59,10 @@ async def create_account(
     session: AsyncSession, *, slug: str, name: str, owner: User
 ) -> tuple[Account, AccountMembership]:
     """Create a customer account and its owner membership."""
+    if get_settings().single_tenant_account_id is not None:
+        raise Forbidden(
+            "account_creation_disabled", "This installation uses its configured account"
+        )
     # Runs in system context: creating a tenant precedes tenancy: the account being inserted cannot
     # already be the declared context, and its first membership belongs to it.
     await declare_system(session)

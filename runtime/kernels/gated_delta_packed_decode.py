@@ -31,6 +31,8 @@ with less to overlap.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import triton
 import triton.language as tl
@@ -124,7 +126,9 @@ def _fused_packed_decode_kernel(
     x = a_value + dt_bias_value
     softplus_x = tl.where(x <= THRESHOLD, tl.log(1.0 + tl.exp(x)), x)
     decay = -tl.exp(A_log_value) * softplus_x
-    write_strength = tl.sigmoid(b_value)
+    # vLLM rounds the sigmoid to b's dtype before using it in the FP32 recurrence.
+    # Retaining FP32 here changes every next-state update when b is FP16/BF16.
+    write_strength = tl.sigmoid(b_value).to(b.dtype.element_ty).to(tl.float32)
 
     # The delta rule: decay the state, subtract what it already predicts for this key,
     # scale that error by the write strength, and accumulate it against the key.
@@ -138,6 +142,126 @@ def _fused_packed_decode_kernel(
     p_final = ht + state_index * stride_ht_token + i_hv * V * K
     p_final = p_final + o_v[:, None] * K + o_k[None, :]
     tl.store(p_final, state.to(p_final.dtype.element_ty), mask=mask_state)
+
+
+def validate_packed_inputs(
+    mixed_qkv: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    scale: float,
+    initial_state: torch.Tensor,
+    out: torch.Tensor,
+    ssm_state_indices: torch.Tensor,
+) -> tuple[int, int, int, int, int]:
+    """Check host-visible metadata before any in-place kernel launch.
+
+    Outer token/slot strides may contain padding; the packed inner dimensions may
+    not. Device index values remain vLLM's responsibility, avoiding a per-token
+    synchronization in serving. The reference checks their bounds separately.
+    """
+    tensors = (mixed_qkv, a, b, A_log, dt_bias, initial_state, out, ssm_state_indices)
+    if any(tensor.device != mixed_qkv.device for tensor in tensors):
+        raise ValueError("all packed decode inputs must be on the same device")
+    supported = (torch.float16, torch.bfloat16, torch.float32)
+    if any(tensor.dtype not in supported for tensor in tensors[:5]) or out.dtype not in supported:
+        raise ValueError("packed decode floating inputs must be FP16, BF16, or FP32")
+    if initial_state.dtype != torch.float32:
+        raise ValueError("packed recurrent state must be FP32")
+    if ssm_state_indices.dtype not in (torch.int32, torch.int64):
+        raise ValueError("ssm_state_indices must be int32 or int64")
+    if not isinstance(scale, int | float) or not math.isfinite(scale) or scale <= 0:
+        raise ValueError("scale must be finite and positive")
+    if mixed_qkv.ndim != 2 or mixed_qkv.stride(-1) != 1:
+        raise ValueError("mixed_qkv must be 2D and contiguous in its last dimension")
+    if initial_state.ndim != 4:
+        raise ValueError("initial_state must be 4D")
+    batch = mixed_qkv.shape[0]
+    HV, V, K = initial_state.shape[-3:]
+    if min(initial_state.shape) <= 0 or max(K, V) > 256:
+        raise ValueError("state dimensions must be positive and K/V at most 256")
+    if (
+        initial_state.stride(-1) != 1
+        or initial_state.stride(-2) != K
+        or initial_state.stride(-3) != V * K
+    ):
+        raise ValueError("state head/value/key dimensions must be contiguous")
+    if not out.is_contiguous() or out.shape != (batch, 1, HV, V):
+        raise ValueError(f"out must be contiguous with shape {(batch, 1, HV, V)}")
+    if a.shape != (batch, HV) or b.shape != (batch, HV) or a.stride(-1) != 1 or b.stride(-1) != 1:
+        raise ValueError(f"a and b must be [{batch}, {HV}] with contiguous heads")
+    if A_log.ndim != 1 or dt_bias.ndim != 1 or A_log.shape != (HV,) or dt_bias.shape != (HV,):
+        raise ValueError(f"A_log and dt_bias must be 1D with {HV} elements")
+    if A_log.stride(0) != 1 or dt_bias.stride(0) != 1:
+        raise ValueError("A_log and dt_bias must be contiguous")
+    if ssm_state_indices.shape != (batch,):
+        raise ValueError(f"ssm_state_indices must be [{batch}]")
+    qk_dim = mixed_qkv.shape[1] - HV * V
+    if qk_dim <= 0 or qk_dim % (2 * K) != 0:
+        raise ValueError("packed width is not q|k|v for this state geometry")
+    H = qk_dim // (2 * K)
+    if H <= 0 or HV % H != 0:
+        raise ValueError(f"inferred head counts do not group: H={H}, HV={HV}")
+    return batch, H, HV, K, V
+
+
+def torch_packed_decode_reference(
+    mixed_qkv: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    scale: float,
+    initial_state: torch.Tensor,
+    out: torch.Tensor,
+    ssm_state_indices: torch.Tensor,
+    use_qk_l2norm_in_kernel: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Independent eager oracle for packed decode, including complete next state.
+
+    This is a correctness oracle, not a serving fallback. It reads index values
+    and synchronizes CUDA. Null/nonpositive indices produce zero output and leave
+    every state slot untouched. Positive indices must be unique and in bounds.
+    """
+    batch, H, HV, K, V = validate_packed_inputs(
+        mixed_qkv,
+        a,
+        b,
+        A_log,
+        dt_bias,
+        scale,
+        initial_state,
+        out,
+        ssm_state_indices,
+    )
+    valid = ssm_state_indices > 0
+    slots = ssm_state_indices[valid].long()
+    if slots.numel() and (
+        slots.max().item() >= initial_state.shape[0] or slots.unique().numel() != slots.numel()
+    ):
+        raise ValueError("positive state indices must be unique and in bounds")
+    out.zero_()
+    if not slots.numel():
+        return out, initial_state
+    q, k, v = torch.split(mixed_qkv, [H * K, H * K, HV * V], dim=-1)
+    q = q.reshape(batch, H, K)[valid].float().repeat_interleave(HV // H, dim=1)
+    k = k.reshape(batch, H, K)[valid].float().repeat_interleave(HV // H, dim=1)
+    v = v.reshape(batch, HV, V)[valid].float()
+    if use_qk_l2norm_in_kernel:
+        q = q / torch.sqrt((q * q).sum(-1, keepdim=True) + L2NORM_EPS)
+        k = k / torch.sqrt((k * k).sum(-1, keepdim=True) + L2NORM_EPS)
+    q = q * scale
+    x = a[valid].float() + dt_bias.float()
+    softplus = torch.where(x <= SOFTPLUS_THRESHOLD, torch.log(1.0 + torch.exp(x)), x)
+    decay = torch.exp(-torch.exp(A_log.float()) * softplus)
+    strength = torch.sigmoid(b[valid].float()).to(b.dtype).float()
+    state = initial_state[slots].float() * decay[..., None, None]
+    delta = (v - (state * k[..., None, :]).sum(-1)) * strength[..., None]
+    state = state + delta[..., None] * k[..., None, :]
+    out[valid, 0] = (state * q[..., None, :]).sum(-1).to(out.dtype)
+    initial_state.index_copy_(0, slots, state)
+    return out, initial_state
 
 
 def fused_packed_decode(
@@ -164,36 +288,21 @@ def fused_packed_decode(
     algorithm, and picking one by reasoning rather than measurement is how a kernel ends
     up slower than the one it replaces.
     """
-    if mixed_qkv.ndim != 2:
-        raise ValueError(f"mixed_qkv must be 2D, got {mixed_qkv.ndim}D")
-    if mixed_qkv.stride(-1) != 1:
-        raise ValueError("mixed_qkv must be contiguous in its last dimension")
-    if initial_state.ndim != 4:
-        raise ValueError(f"initial_state must be 4D, got {initial_state.ndim}D")
-    if not out.is_contiguous():
-        raise ValueError("out must be contiguous")
-
-    batch = mixed_qkv.shape[0]
-    HV, V, K = initial_state.shape[-3:]
-
-    if a.shape != (batch, HV) or b.shape != (batch, HV):
-        raise ValueError(f"a and b must be [{batch}, {HV}], got {tuple(a.shape)} and {tuple(b.shape)}")
-    if A_log.numel() != HV or dt_bias.numel() != HV:
-        raise ValueError(f"A_log and dt_bias must hold {HV} elements")
-    if out.shape != (batch, 1, HV, V):
-        raise ValueError(f"out must be {(batch, 1, HV, V)}, got {tuple(out.shape)}")
-    if ssm_state_indices.ndim != 1 or ssm_state_indices.shape[0] != batch:
-        raise ValueError(f"ssm_state_indices must be [{batch}]")
-
-    qk_dim = mixed_qkv.shape[1] - HV * V
-    if qk_dim <= 0 or qk_dim % 2 != 0:
-        raise ValueError(f"packed width {mixed_qkv.shape[1]} is not q|k|v for HV={HV}, V={V}")
-    q_dim = qk_dim // 2
-    if q_dim % K != 0:
-        raise ValueError(f"packed q width {q_dim} is not a multiple of K={K}")
-    H = q_dim // K
-    if H <= 0 or HV % H != 0:
-        raise ValueError(f"inferred head counts do not group: H={H}, HV={HV}")
+    batch, H, HV, K, V = validate_packed_inputs(
+        mixed_qkv,
+        a,
+        b,
+        A_log,
+        dt_bias,
+        scale,
+        initial_state,
+        out,
+        ssm_state_indices,
+    )
+    if not mixed_qkv.is_cuda:
+        raise ValueError("fused packed decode requires a CUDA device")
+    if batch == 0:
+        return out, initial_state
 
     BK = triton.next_power_of_2(K)
     if triton.cdiv(K, BK) != 1:
@@ -202,9 +311,15 @@ def fused_packed_decode(
     # The default matches vLLM's, so an unconfigured call is a like-for-like comparison
     # rather than an accidental one.
     BV = block_v if block_v is not None else min(triton.next_power_of_2(V), 32)
+    if not isinstance(BV, int) or BV <= 0 or BV & (BV - 1):
+        raise ValueError("block_v must be a positive power of two")
     if BV > triton.next_power_of_2(V):
         BV = triton.next_power_of_2(V)
     warps = num_warps if num_warps is not None else max(1, BV // 32)
+    if warps not in (1, 2, 4, 8):
+        raise ValueError("num_warps must be 1, 2, 4, or 8")
+    if not isinstance(num_stages, int) or not 1 <= num_stages <= 6:
+        raise ValueError("num_stages must be between 1 and 6")
 
     grid = (triton.cdiv(V, BV), batch * HV)
     _fused_packed_decode_kernel[grid](

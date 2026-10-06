@@ -67,6 +67,9 @@ spec:
             - --region={{ . }}
             {{- end }}
             - --upstream={{ include "fabric-stamp.modelHostUrl" . }}
+            {{- with (include "fabric-stamp.inferenceUrl" .) }}
+            - {{ printf "--inference-url=%s" . | quote }}
+            {{- end }}
             - --gpus={{ .Values.stamp.gpus }}
             - --poll={{ .Values.agent.pollInterval }}
             {{- if .Values.stamp.measureCapacity }}
@@ -142,7 +145,7 @@ spec:
             - name: FABRIC_DP_LOG_LEVEL
               value: {{ .Values.dataPlane.logLevel | quote }}
             - name: FABRIC_DP_JWT_ISSUER
-              value: {{ .Values.controlPlane.jwtIssuer | quote }}
+              value: {{ include "fabric-stamp.jwtIssuer" . | quote }}
             - name: FABRIC_DP_JWKS_URL
               value: {{ include "fabric-stamp.jwksUrl" . | quote }}
             - name: FABRIC_DP_DEPLOYMENTS_FILE

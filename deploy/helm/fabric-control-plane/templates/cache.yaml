@@ -1,0 +1,129 @@
+{{- if .Values.cache.internal.enabled }}
+{{- if not .Values.cache.existingSecret }}
+{{- fail "cache.existingSecret is required when cache.internal.enabled=true" }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}-cache
+  labels:
+    app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: fabric
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}-cache
+  labels:
+    app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: fabric
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/part-of: fabric
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: valkey
+          image: {{ printf "%s@%s" .Values.cache.internal.image.repository .Values.cache.internal.image.digest | quote }}
+          imagePullPolicy: {{ .Values.cache.internal.image.pullPolicy }}
+          command: ["sh", "-ec"]
+          args:
+            - exec valkey-server --bind 0.0.0.0 --protected-mode yes --requirepass "$VALKEY_PASSWORD" --appendonly no --save "" --maxmemory 192mb --maxmemory-policy allkeys-lru
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cache.existingSecret }}
+                  key: {{ .Values.cache.passwordSecretKey }}
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cache.existingSecret }}
+                  key: {{ .Values.cache.passwordSecretKey }}
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["sh", "-ec", "valkey-cli ping | grep -qx PONG"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-ec", "valkey-cli ping | grep -qx PONG"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.cache.internal.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fabric-control-plane.fullname" . }}-cache
+  labels:
+    app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: fabric
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "fabric-control-plane.fullname" . }}-cache
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "fabric-control-plane.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: redis
+          protocol: TCP
+{{- end }}

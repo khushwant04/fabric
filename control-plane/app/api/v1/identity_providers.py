@@ -15,10 +15,12 @@ from fastapi import APIRouter, Depends, Path, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
 from app.core.database import get_db_session
 from app.core.security import PrincipalContext, account_scope
 from app.schemas import OIDCProviderRequest, OIDCProviderResponse
 from app.services import oidc
+from app.services.accounts import get_account
 from app.services.audit import record_audit
 
 router = APIRouter(tags=["identity-providers"])
@@ -70,7 +72,7 @@ async def put_provider(
             "auto_provision_role": provider.auto_provision_role,
         },
     )
-    await session.commit()
+    await commit_and_invalidate(session, [account_id])
     await session.refresh(provider)
     return OIDCProviderResponse.model_validate(provider)
 
@@ -84,9 +86,21 @@ async def read_provider(
     account_id: uuid.UUID = Path(...),
     _principal: PrincipalContext = Depends(account_scope(scope_defs.MEMBERS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> OIDCProviderResponse:
-    provider = await oidc.get_provider(session, account_id=account_id)
-    return OIDCProviderResponse.model_validate(provider)
+    account = await get_account(session, account_id)
+
+    async def load() -> OIDCProviderResponse:
+        provider = await oidc.get_provider(session, account_id=account_id)
+        return OIDCProviderResponse.model_validate(provider)
+
+    return await cache.get_or_load(
+        account_id=account_id,
+        version=account.cache_version,
+        resource="oidc-provider",
+        response_type=OIDCProviderResponse,
+        loader=load,
+    )
 
 
 @router.delete(
@@ -116,5 +130,5 @@ async def remove_provider(
         action="oidc_provider.removed",
         resource_type="oidc_provider",
     )
-    await session.commit()
+    await commit_and_invalidate(session, [account_id])
     return Response(status_code=status.HTTP_204_NO_CONTENT)

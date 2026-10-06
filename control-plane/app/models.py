@@ -62,6 +62,9 @@ class Account(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     managed_capacity_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cache_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[dt.datetime] = _created_at()
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),

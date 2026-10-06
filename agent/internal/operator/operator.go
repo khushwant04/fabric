@@ -5,10 +5,6 @@
 // cluster, and it is deliberately narrow: it renders the data plane's configuration
 // into a ConfigMap and reports what it observed on each resource's status.
 //
-// It does not create the model host. No vLLM host exists in this project yet, and an
-// operator that shipped a Deployment for one would be asserting a component that has
-// never run. When that host exists, this is where it belongs.
-//
 // The split matters for a reason beyond tidiness: the agent holds central credentials
 // and no Kubernetes permissions, while the operator holds Kubernetes permissions and
 // no central credentials. Neither component can both talk to Fabric and mutate the
@@ -295,10 +291,11 @@ type Options struct {
 type Reconciler struct {
 	client  *kube.Client
 	options Options
-	// profiled records that the hardware has been described. Capability does not change
-	// while a node runs, so listing nodes every pass would spend a cluster read per
-	// interval on an answer that does not move.
-	profiled bool
+	// Hardware changes when nodes join, leave, or advertise their device plugin. Keep
+	// the original settings so a weaker pool's adjustments do not become permanent.
+	configuredModelHost ModelHost
+	profileFingerprint  string
+	nextProfileAt       time.Time
 	// smallestMemoryMiB is the smallest frame buffer profiled in the pool, retained so a
 	// per-deployment memory fraction can be clamped against the same device the
 	// stamp-wide value was. Zero means the pool could not be described for memory, in
@@ -328,7 +325,7 @@ func New(client *kube.Client, options Options) *Reconciler {
 	if options.Rollout.ReadyTimeout == 0 {
 		options.Rollout = DefaultRollout()
 	}
-	return &Reconciler{client: client, options: options}
+	return &Reconciler{client: client, options: options, configuredModelHost: options.ModelHost}
 }
 
 func (r *Reconciler) resourcePath() string {
@@ -532,6 +529,7 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 				return result, fmt.Errorf("deployment %s has no routable backend", item.Spec.DeploymentID)
 			}
 			backends[item.Spec.DeploymentID] = pool
+			serving[index].Spec.Capabilities = r.routedCapabilities(item, decision)
 			if strategy != "" {
 				serving[index].Spec.Strategy = strategy
 			}
@@ -844,10 +842,10 @@ func (r *Reconciler) reportApplied(
 	})
 
 	phase := "pending"
-	if applied {
+	if applied && available {
 		phase = "ready"
 	}
-	if decision.RolledBack && available {
+	if applied && (!available || readiness.Ready < readiness.Desired) || decision.RolledBack && available {
 		phase = "degraded"
 	}
 	readyReplicas := readiness.Ready
@@ -956,13 +954,17 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) error {
 
 // applyHardwareProfile adjusts host settings to the GPUs this stamp actually has.
 //
-// Profiled once and remembered, because nodes do not change capability while running and
-// listing them on every pass would add a cluster read per interval for an answer that does
-// not move. A pool that is replaced changes the node names, which is what invalidates it.
+// A bounded refresh catches nodes joining or changing their advertised devices. Empty
+// and failed reads remain retryable, and never discard a previously observed safe profile.
 func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
-	if r.profiled {
+	r.applyHardwareProfileAt(ctx, time.Now())
+}
+
+func (r *Reconciler) applyHardwareProfileAt(ctx context.Context, now time.Time) {
+	if now.Before(r.nextProfileAt) {
 		return
 	}
+	r.nextProfileAt = now.Add(15 * time.Second)
 
 	profiles, err := ProfileGPUNodes(ctx, r.client, r.options.ModelHost.NodeSelector)
 	if err != nil {
@@ -970,16 +972,24 @@ func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
 		// turn a missing permission into an outage, and the configured values may well be
 		// correct. It is logged loudly because an unprofiled stamp is one where a wrong
 		// setting will surface as a crash loop instead.
-		r.options.Log.Warn("could not profile gpu nodes; using configured settings unchanged",
+		r.options.Log.Warn("could not profile gpu nodes; keeping previous settings and retrying",
 			"error", err)
-		r.profiled = true
 		return
 	}
 
 	if len(profiles) == 0 {
 		r.options.Log.Warn("no gpu nodes advertise an allocatable device",
 			"selector", r.options.ModelHost.NodeSelector)
-		r.profiled = true
+		return
+	}
+	r.nextProfileAt = now.Add(time.Minute)
+	// API list ordering does not describe a pool change. Include the actual capability,
+	// memory, and count, so device-plugin and hardware-label changes are also noticed.
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Node < profiles[j].Node })
+	encoded, _ := json.Marshal(profiles)
+	digest := sha256.Sum256(encoded)
+	fingerprint := hex.EncodeToString(digest[:])
+	if fingerprint == r.profileFingerprint {
 		return
 	}
 
@@ -993,7 +1003,7 @@ func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
 
 	r.smallestMemoryMiB = smallestMemory(profiles)
 
-	adjusted, changes := applyProfile(r.options.ModelHost, profiles)
+	adjusted, changes := applyProfile(r.configuredModelHost, profiles)
 	for _, change := range changes {
 		// Recorded at warning level: the platform is overriding what someone asked for,
 		// and doing that silently is its own kind of failure.
@@ -1002,5 +1012,6 @@ func (r *Reconciler) applyHardwareProfile(ctx context.Context) {
 			"applied", change.To, "reason", change.Reason)
 	}
 	r.options.ModelHost = adjusted
-	r.profiled = true
+	r.profileFingerprint = fingerprint
+	r.clampWarned = nil
 }

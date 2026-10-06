@@ -351,3 +351,53 @@ async def test_usage_read_is_account_scoped(client: AsyncClient) -> None:
     )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "account_mismatch"
+
+
+async def test_account_usage_route_aggregates_only_its_own_deployments(
+    client: AsyncClient,
+) -> None:
+    """The literal /usage path must win over the UUID deployment-detail route."""
+    account_a, token_a = await onboard(client, "aggregate-a", "aggregate-a-account")
+    account_b, token_b = await onboard(client, "aggregate-b", "aggregate-b-account")
+    for account_id, token, names_and_counts in (
+        (account_a, token_a, (("first", (10, 5)), ("second", (7, 3)))),
+        (account_b, token_b, (("other", (100, 50)),)),
+    ):
+        enrolled = await enroll_stamp(client, account_id, token)
+        records = []
+        for name, counts in names_and_counts:
+            deployment = await create_deployment(client, account_id, token, name=name)
+            await place(client, account_id, token, deployment["id"], enrolled["stamp"]["id"])
+            records.append(record(deployment["id"], f"aggregate-{name}-record", tokens=counts))
+        reported = await client.post(
+            USAGE, json={"records": records}, headers=bearer(enrolled["telemetry_credential"])
+        )
+        assert reported.status_code == 200, reported.text
+        assert reported.json()["accepted"] == len(records), reported.text
+
+    own = await client.get(
+        f"/v1/accounts/{account_a}/deployments/usage", headers=bearer(token_a)
+    )
+    assert own.status_code == 200, own.text
+    body = own.json()
+    assert set(body) == {
+        "events", "input_tokens", "output_tokens", "first_occurred_at", "last_occurred_at"
+    }
+    assert body["events"] == 2
+    assert body["input_tokens"] == 17
+    assert body["output_tokens"] == 8
+    assert body["first_occurred_at"] and body["last_occurred_at"]
+
+    other = await client.get(
+        f"/v1/accounts/{account_b}/deployments/usage", headers=bearer(token_b)
+    )
+    assert other.status_code == 200, other.text
+    assert other.json()["events"] == 1
+    assert other.json()["input_tokens"] == 100
+    assert other.json()["output_tokens"] == 50
+
+    forbidden = await client.get(
+        f"/v1/accounts/{account_a}/deployments/usage", headers=bearer(token_b)
+    )
+    assert forbidden.status_code == 403, forbidden.text
+    assert forbidden.json()["error"]["code"] == "account_mismatch"

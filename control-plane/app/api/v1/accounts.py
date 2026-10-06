@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
 from app.core.auth0 import Auth0Identity
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
 from app.core.database import get_db_session
 from app.core.security import (
     PrincipalContext,
@@ -21,6 +22,7 @@ from app.core.security import (
     require_auth0_user,
     require_control_principal,
 )
+from app.core.tenancy import elevated
 from app.models import Account
 from app.schemas import (
     AccountCreateRequest,
@@ -45,9 +47,7 @@ router = APIRouter(tags=["accounts"])
 
 
 def _membership_response(account_id: uuid.UUID, user_id: uuid.UUID, role: str, statusv: str):
-    return MembershipResponse(
-        account_id=account_id, user_id=user_id, role=role, status=statusv
-    )
+    return MembershipResponse(account_id=account_id, user_id=user_id, role=role, status=statusv)
 
 
 @router.get(
@@ -117,9 +117,20 @@ async def create_account_endpoint(
 async def read_account(
     principal: PrincipalContext = Depends(account_scope(scope_defs.ACCOUNTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> AccountResponse:
     account: Account = await get_account(session, principal.account_id)
-    return AccountResponse.model_validate(account)
+
+    async def load() -> AccountResponse:
+        return AccountResponse.model_validate(account)
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="account",
+        response_type=AccountResponse,
+        loader=load,
+    )
 
 
 @router.get(
@@ -130,11 +141,23 @@ async def read_account(
 async def list_account_members(
     principal: PrincipalContext = Depends(account_scope(scope_defs.MEMBERS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[MembershipResponse]:
-    memberships = await list_members(session, principal.account_id)
-    return [
-        _membership_response(m.account_id, m.user_id, m.role, m.status) for m in memberships
-    ]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[MembershipResponse]:
+        memberships = await list_members(session, principal.account_id)
+        return [
+            _membership_response(m.account_id, m.user_id, m.role, m.status) for m in memberships
+        ]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="members",
+        response_type=list[MembershipResponse],
+        loader=load,
+    )
 
 
 @router.post(
@@ -156,7 +179,7 @@ async def upsert_account_member(
         role=payload.role,
         actor_id=principal.subject,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return _membership_response(
         membership.account_id, membership.user_id, membership.role, membership.status
     )
@@ -171,6 +194,7 @@ async def read_entitlements(
     account_id: uuid.UUID = Path(...),
     principal: PrincipalContext = Depends(account_scope(scope_defs.ACCOUNTS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> EntitlementResponse:
     """Report whether this account may place onto managed capacity.
 
@@ -178,10 +202,21 @@ async def read_entitlements(
     will be accepted before attempting one. ``account_scope`` already refuses a token
     issued for a different account.
     """
-    entitlement = await read_entitlement(session, principal.account_id)
-    return EntitlementResponse(
-        account_id=entitlement.account_id,
-        managed_capacity_enabled=entitlement.managed_capacity_enabled,
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> EntitlementResponse:
+        entitlement = await read_entitlement(session, principal.account_id)
+        return EntitlementResponse(
+            account_id=entitlement.account_id,
+            managed_capacity_enabled=entitlement.managed_capacity_enabled,
+        )
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="entitlements",
+        response_type=EntitlementResponse,
+        loader=load,
     )
 
 
@@ -206,14 +241,17 @@ async def set_managed_capacity_entitlement(
     principal.require_scopes(scope_defs.CAPACITY_WRITE)
     await require_fabric_operator(session, caller_account_id=principal.account_id)
 
-    entitlement = await set_managed_capacity(
-        session,
-        account_id=account_id,
-        enabled=payload.enabled,
-        actor_id=str(principal.principal_id) if principal.principal_id else principal.subject,
-        reason=payload.reason,
-    )
-    await session.commit()
+    # This authorized system operation changes a customer's account, including its
+    # response-cache generation. Keep both writes in the same elevation and commit.
+    async with elevated(session):
+        entitlement = await set_managed_capacity(
+            session,
+            account_id=account_id,
+            enabled=payload.enabled,
+            actor_id=str(principal.principal_id) if principal.principal_id else principal.subject,
+            reason=payload.reason,
+        )
+        await commit_and_invalidate(session, [account_id])
 
     return EntitlementResponse(
         account_id=entitlement.account_id,

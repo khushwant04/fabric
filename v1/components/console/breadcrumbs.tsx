@@ -25,7 +25,6 @@ const labels: Record<string, string> = {
   members: "Members",
   "service-principals": "Service principals",
   "api-keys": "API keys",
-  "identity-provider": "Identity provider",
   settings: "Account settings",
 }
 

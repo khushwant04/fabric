@@ -66,6 +66,7 @@ type GPU struct {
 	Count             int    `json:"count"`
 	MemoryBytes       int64  `json:"memory_bytes"`
 	ComputeCapability string `json:"compute_capability,omitempty"`
+	Source            string `json:"source,omitempty"`
 }
 
 // GPUClaim is the devices one deployment's model hosts are holding on this stamp.
@@ -110,6 +111,7 @@ type Capabilities struct {
 	DriverVersion     string `json:"driver_version,omitempty"`
 	AgentVersion      string `json:"agent_version,omitempty"`
 	RuntimeVersion    string `json:"runtime_version,omitempty"`
+	InferenceURL      string `json:"inference_url,omitempty"`
 }
 
 // Stamp is the registered stamp record.

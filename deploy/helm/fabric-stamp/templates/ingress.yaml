@@ -1,0 +1,48 @@
+{{- if .Values.exposure.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-inference
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+  {{- with .Values.exposure.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.exposure.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ include "fabric-stamp.exposureHost" . | quote }}
+      secretName: {{ include "fabric-stamp.exposureSecret" . }}
+  rules:
+    - host: {{ include "fabric-stamp.exposureHost" . | quote }}
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "fabric-stamp.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- if .Values.exposure.tls.issuer.name }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-inference
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "fabric-stamp.exposureSecret" . }}
+  dnsNames:
+    - {{ include "fabric-stamp.exposureHost" . | quote }}
+  issuerRef:
+    name: {{ .Values.exposure.tls.issuer.name | quote }}
+    kind: {{ .Values.exposure.tls.issuer.kind }}
+    group: cert-manager.io
+{{- end }}
+{{- end }}

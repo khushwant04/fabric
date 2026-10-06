@@ -168,8 +168,15 @@ type node struct {
 		Name   string            `json:"name"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
+	Spec struct {
+		Unschedulable bool `json:"unschedulable"`
+	} `json:"spec"`
 	Status struct {
 		Allocatable map[string]string `json:"allocatable"`
+		Conditions  []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
 	} `json:"status"`
 }
 
@@ -205,6 +212,15 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 
 	profiles := make([]Profile, 0, len(nodes.Items))
 	for _, item := range nodes.Items {
+		ready := false
+		for _, condition := range item.Status.Conditions {
+			if condition.Type == "Ready" {
+				ready = condition.Status == "True"
+			}
+		}
+		if item.Spec.Unschedulable || !ready {
+			continue
+		}
 		count := 0
 		if raw, ok := item.Status.Allocatable[GPUResource]; ok {
 			count, _ = strconv.Atoi(raw)
@@ -257,13 +273,9 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 				profile.MemoryMiB = memory
 			}
 		}
-		if raw := item.Metadata.Labels["nvidia.com/cuda.compute-capability.major"]; raw != "" {
-			major, majorErr := strconv.Atoi(raw)
-			minor, minorErr := strconv.Atoi(item.Metadata.Labels["nvidia.com/cuda.compute-capability.minor"])
-			if majorErr == nil && minorErr == nil {
-				profile.Capability = ComputeCapability{Major: major, Minor: minor}
-				profile.Source = "node label"
-			}
+		if capability, ok := computeCapabilityLabels(item.Metadata.Labels); ok {
+			profile.Capability = capability
+			profile.Source = "node label"
 		}
 
 		profiles = append(profiles, profile)
@@ -271,6 +283,19 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 
 	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Node < profiles[j].Node })
 	return profiles, nil
+}
+
+// GPU Feature Discovery emits gpu.compute.major/minor. The older Fabric label pair
+// remains accepted, but must not override a valid device-discovered capability.
+func computeCapabilityLabels(labels map[string]string) (ComputeCapability, bool) {
+	for _, prefix := range []string{"nvidia.com/gpu.compute.", "nvidia.com/cuda.compute-capability."} {
+		major, majorErr := strconv.Atoi(labels[prefix+"major"])
+		minor, minorErr := strconv.Atoi(labels[prefix+"minor"])
+		if majorErr == nil && minorErr == nil && major > 0 && minor >= 0 {
+			return ComputeCapability{Major: major, Minor: minor}, true
+		}
+	}
+	return ComputeCapability{}, false
 }
 
 func normaliseModel(label string) string {

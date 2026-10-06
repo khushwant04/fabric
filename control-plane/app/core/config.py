@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import pathlib
+import uuid
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     database_url: str = "postgresql+asyncpg://fabric:fabric@localhost:5432/fabric"
+    redis_url: str | None = None
+    api_cache_ttl_seconds: int = Field(default=60, ge=1, le=3600)
 
     #: How often the outbox worker looks for undelivered events. Short enough that a
     #: placement is announced promptly, long enough that an idle deployment is not
@@ -57,6 +60,12 @@ class Settings(BaseSettings):
 
     credential_pepper: str = LOCAL_CREDENTIAL_PEPPER
     system_account_slug: str = "fabric-system"
+    # Set only for a dedicated installation. Authentication and membership checks
+    # remain mandatory; this limits which account the installation will serve.
+    single_tenant_account_id: uuid.UUID | None = None
+    single_tenant_account_slug: str = "fabric"
+    single_tenant_account_name: str = "Fabric"
+    single_tenant_admin_subject: str = ""
 
     @field_validator("auth0_issuer", "jwt_issuer")
     @classmethod

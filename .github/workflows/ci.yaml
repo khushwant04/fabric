@@ -54,11 +54,49 @@ jobs:
       - name: Test
         run: go test ./...
 
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: v1/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint and typecheck
+        run: |
+          npm run lint
+          npx next typegen
+          npx tsc --noEmit
+      - name: Test account isolation, deployment actions, and observed state
+        run: |
+          for test_file in tests/*.test.mjs; do
+            node "$test_file"
+          done
+          npx tsc --target es2022 --module commonjs --moduleResolution node \
+            --esModuleInterop --skipLibCheck --outDir /tmp/fabric-console-tests tests/*.test.ts
+          for test_file in /tmp/fabric-console-tests/tests/*.test.js; do
+            node "$test_file"
+          done
+      - name: Build the standalone console image
+        working-directory: .
+        run: docker build -f deploy/images/console.Dockerfile -t fabric/console:ci .
+
   packaging:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install chart test dependency
+        run: python -m pip install PyYAML==6.0.3
       - name: Lint charts
         run: |
           helm lint deploy/helm/fabric-control-plane \
@@ -76,3 +114,9 @@ jobs:
         run: |
           bash deploy/scripts/test-shared-limits-chart.sh
           bash deploy/scripts/test-usage-spool-chart.sh
+      - name: Assert console and native stamp exposure packaging
+        run: |
+          python deploy/scripts/test_console_chart.py
+          bash deploy/scripts/test-stamp-exposure-chart.sh
+      - name: Verify upgrades from legacy release values
+        run: python deploy/scripts/test_upgrade_automation.py

@@ -1,0 +1,19 @@
+# An allowlist keeps all backend files, kubeconfig and credentials out of the context.
+**
+!v1/
+!v1/**
+v1/.env
+v1/.env.*
+v1/node_modules
+v1/.next
+v1/.git
+v1/.vercel
+v1/*.log
+v1/tsconfig.tsbuildinfo
+v1/**/.env
+v1/**/.env.*
+v1/**/*.pem
+v1/**/*.key
+v1/**/.aws
+v1/**/.azure
+v1/**/.kube

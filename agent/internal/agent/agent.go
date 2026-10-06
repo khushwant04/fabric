@@ -85,6 +85,8 @@ type Config struct {
 	// UpstreamURL is the model host this stamp serves from. The agent records it
 	// in the data plane's configuration; it does not start the host.
 	UpstreamURL string
+	// InferenceURL is the public HTTPS gateway, independent of private model hosts.
+	InferenceURL string
 
 	// Capabilities is what this stamp reports about itself. The GPU fields are a
 	// fallback: when Capacity can read the cluster, the measurement replaces them.
@@ -303,6 +305,7 @@ func (a *Agent) refreshCapacity(ctx context.Context) {
 // its cluster still reports what it was told.
 func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 	capabilities := a.config.Capabilities
+	capabilities.InferenceURL = a.config.InferenceURL
 	if capabilities.FabricGPUClaims == nil {
 		capabilities.FabricGPUClaims = []controlplane.GPUClaim{}
 	}
@@ -323,6 +326,7 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 			Count:             group.Count,
 			MemoryBytes:       group.MemoryBytes,
 			ComputeCapability: group.ComputeCapability,
+			Source:            group.Source,
 		})
 	}
 	capabilities.GPUs = gpus
@@ -598,6 +602,16 @@ func (a *Agent) reportStatus(ctx context.Context, assignment controlplane.Desire
 	if assignment.Deleted {
 		report.ReadyReplicas = 0
 	}
+	if observationPresent && observed.Available != nil {
+		available := *observed.Available && !assignment.Deleted && readyReplicas > 0
+		report.Conditions = append(report.Conditions, map[string]any{
+			"type": "Available", "status": map[bool]string{true: "True", false: "False"}[available],
+			"reason": map[bool]string{true: "ModelHostServing", false: "NoReadyModelHost"}[available],
+		})
+		if available {
+			report.Endpoint = a.config.InferenceURL
+		}
+	}
 	return a.client.ReportStatus(ctx, a.credentials.StampID, report)
 }
 
@@ -654,10 +668,14 @@ func (a *Agent) observationFingerprint(deploymentID string) string {
 	if observed.UnavailableReplicas != nil {
 		unavailable = *observed.UnavailableReplicas
 	}
+	available := "unknown"
+	if observed.Available != nil {
+		available = fmt.Sprint(*observed.Available)
+	}
 	return fmt.Sprintf(
-		"%s|%s|%t|%d|%d|%d",
+		"%s|%s|%t|%d|%d|%d|%s|%s",
 		observed.Phase, observed.Reason, observed.Applied,
-		observed.ObservedGeneration, ready, unavailable,
+		observed.ObservedGeneration, ready, unavailable, available, a.config.InferenceURL,
 	)
 }
 

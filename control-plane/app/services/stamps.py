@@ -23,6 +23,7 @@ from app.core.credentials import (
     verify_credential,
 )
 from app.core.errors import BadRequest, Forbidden, NotFound, Unauthorized
+from app.core.installation import require_installation_account
 from app.core.tenancy import declare_system
 from app.core.timeutil import is_expired, utc_now
 from app.models import (
@@ -114,6 +115,7 @@ async def _consume_enrollment_token(
         settings.credential_pepper, token_id, secret, record.token_verifier
     ):
         raise Unauthorized("invalid_enrollment_token", "Enrollment token is not recognized")
+    require_installation_account(record.account_id)
 
     now = utc_now()
     if record.revoked_at is not None:

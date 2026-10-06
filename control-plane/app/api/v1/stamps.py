@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
+from app.core.cache import ResponseCache, commit_and_invalidate, get_cache
 from app.core.database import get_db_session
 from app.core.security import (
     PrincipalContext,
@@ -107,9 +108,21 @@ async def revoke_token(
 async def list_account_stamps(
     principal: PrincipalContext = Depends(account_scope(scope_defs.STAMPS_READ)),
     session: AsyncSession = Depends(get_db_session),
+    cache: ResponseCache = Depends(get_cache),
 ) -> list[StampResponse]:
-    records = await list_stamps(session, principal.account_id)
-    return [StampResponse.model_validate(record) for record in records]
+    account = await get_account(session, principal.account_id)
+
+    async def load() -> list[StampResponse]:
+        records = await list_stamps(session, principal.account_id)
+        return [StampResponse.model_validate(record) for record in records]
+
+    return await cache.get_or_load(
+        account_id=principal.account_id,
+        version=account.cache_version,
+        resource="stamps",
+        response_type=list[StampResponse],
+        loader=load,
+    )
 
 
 @router.delete(
@@ -134,7 +147,7 @@ async def revoke_account_stamp(
         actor_type=principal.principal_type,
         actor_id=principal.subject,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [principal.account_id])
     return StampResponse.model_validate(stamp)
 
 
@@ -155,7 +168,7 @@ async def enroll(
         name=payload.name,
         capabilities=payload.capabilities,
     )
-    await session.commit()
+    await commit_and_invalidate(session, [stamp.account_id])
     return StampEnrollResponse(
         stamp=StampResponse.model_validate(stamp),
         agent_credential=agent_credential,

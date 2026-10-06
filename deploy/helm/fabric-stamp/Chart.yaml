@@ -2,8 +2,8 @@ apiVersion: v2
 name: fabric-stamp
 description: |
   A Fabric inference stamp: cluster agent, inference data plane, and usage
-  collector. Installs no CRD and no operator, because neither exists yet; the
-  agent renders the data plane's configuration directly.
+  collector, with an optional Kubernetes operator and FabricModelDeployment CRD
+  for creating model hosts from control-plane placements.
 type: application
 # Chart version tracks the packaging; appVersion tracks the images it defaults to.
 version: 0.1.0

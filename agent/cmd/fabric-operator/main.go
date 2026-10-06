@@ -71,10 +71,19 @@ func main() {
 		hostGPUMemory = flag.String("model-host-gpu-memory-utilization", "",
 			"fraction of total device memory the server may use")
 		hostEager = flag.Bool("model-host-enforce-eager", false,
-			"disable CUDA graph capture, trading latency for the memory it holds")
-		hostDType = flag.String("model-host-dtype", "", "weight dtype, for example bfloat16")
-		hostPort  = flag.Int("model-host-port", 8000, "port the server listens on")
-		hostCache = flag.String("model-host-cache-claim", envOr("FABRIC_OPERATOR_CACHE_CLAIM", ""),
+			"disable torch.compile and CUDA graph capture, trading latency for the memory it holds")
+		hostDType    = flag.String("model-host-dtype", "", "weight dtype, for example bfloat16")
+		hostTextOnly = flag.Bool("model-host-text-only", false,
+			"disable multimodal inputs and profiling; requires a compatible vLLM image")
+		hostTextOnlyModels = flag.String("model-host-text-only-models", "",
+			"optional comma-separated exact model ids limiting the text-only policy")
+		hostCPURequest     = flag.String("model-host-cpu-request", "", "model host CPU request, empty leaves it unset")
+		hostMemoryRequest  = flag.String("model-host-memory-request", "", "model host memory request, empty leaves it unset")
+		hostServiceAccount = flag.String("model-host-service-account", "", "dedicated ServiceAccount for model hosts, without mounted API credentials")
+		hostHFSecret       = flag.String("model-host-hf-secret", "", "existing namespace Secret providing the Hugging Face token")
+		hostHFTokenKey     = flag.String("model-host-hf-token-key", "token", "key in the Hugging Face Secret")
+		hostPort           = flag.Int("model-host-port", 8000, "port the server listens on")
+		hostCache          = flag.String("model-host-cache-claim", envOr("FABRIC_OPERATOR_CACHE_CLAIM", ""),
 			"PersistentVolumeClaim for the weight cache when the mode is pvc")
 		kernelBlockV = flag.Int("model-host-kernel-block-v",
 			envInt("FABRIC_OPERATOR_KERNEL_BLOCK_V", 0),
@@ -110,7 +119,8 @@ func main() {
 
 	// Repeatable, so a cluster's GPU labels and taints are expressed as they are rather
 	// than squeezed into one string.
-	var nodeSelectorEntries, tolerationEntries multiFlag
+	var nodeSelectorEntries, tolerationEntries, pullSecretEntries multiFlag
+	flag.Var(&pullSecretEntries, "model-host-image-pull-secret", "existing image pull Secret; repeat for several")
 	flag.Var(&nodeSelectorEntries, "model-host-node-selector",
 		"node selector as key=value; repeat for several")
 	flag.Var(&tolerationEntries, "model-host-toleration",
@@ -148,6 +158,13 @@ func main() {
 		GPUMemoryUtilization: *hostGPUMemory,
 		EnforceEager:         *hostEager,
 		DType:                *hostDType,
+		TextOnly:             *hostTextOnly,
+		CPURequest:           *hostCPURequest,
+		MemoryRequest:        *hostMemoryRequest,
+		ServiceAccountName:   *hostServiceAccount,
+		ImagePullSecrets:     pullSecretEntries,
+		HuggingFaceSecret:    *hostHFSecret,
+		HuggingFaceTokenKey:  *hostHFTokenKey,
 		Port:                 *hostPort,
 		KernelBlockV:         *kernelBlockV,
 		KernelNumWarps:       *kernelNumWarps,
@@ -156,6 +173,11 @@ func main() {
 		CacheClaim:           *hostCache,
 		RuntimeClassName:     *hostRuntimeClass,
 		SpreadAcrossNodes:    *hostSpread,
+	}
+	for _, model := range strings.Split(*hostTextOnlyModels, ",") {
+		if model = strings.TrimSpace(model); model != "" {
+			host.TextOnlyModels = append(host.TextOnlyModels, model)
+		}
 	}
 
 	selector, err := operator.ParseNodeSelector(nodeSelectorEntries)
@@ -172,13 +194,9 @@ func main() {
 	}
 	host.Tolerations = tolerations
 	if host.Enabled() {
-		// Checked here rather than discovered by a server that starts and then fails:
-		// without these the container would either load nothing or answer to a name
-		// the data plane never asks for.
-		if host.ModelRef == "" || host.ServedName == "" {
-			log.Error("--model-host-image needs --model-host-model and --model-host-served-name")
-			os.Exit(1)
-		}
+		// An enrolled stamp can start before any model is chosen. Each placement's
+		// release supplies the loaded repository and served name; optional configured
+		// values retain support for an existing baked-in model path.
 		if *routerStatusURL == "" {
 			log.Error("--model-host-image needs --router-status-url for acknowledged drain")
 			os.Exit(1)

@@ -9,10 +9,12 @@ import {
   setSelectedAccount,
 } from "@/lib/fabric/session"
 import type { Account } from "@/lib/fabric/types"
+import { requireAccountSelectionEnabled } from "@/lib/fabric/single-tenant"
 
 const ACCOUNT_ID_PATTERN = /^[a-zA-Z0-9_-]{3,128}$/
 
 export async function selectAccount(formData: FormData) {
+  requireAccountSelectionEnabled()
   const accountId = String(formData.get("accountId") ?? "")
   if (!ACCOUNT_ID_PATTERN.test(accountId)) throw new Error("Invalid account")
 
@@ -28,6 +30,7 @@ export async function selectAccount(formData: FormData) {
 }
 
 export async function createAccount(formData: FormData) {
+  requireAccountSelectionEnabled()
   const name = String(formData.get("name") ?? "").trim()
   const slug = String(formData.get("slug") ?? "").trim().toLowerCase()
   if (name.length < 1 || name.length > 200) throw new Error("Invalid account name")

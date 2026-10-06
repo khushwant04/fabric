@@ -15,6 +15,28 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
+# Optional account response cache. PostgreSQL remains authoritative; the deployed
+# runtime advances durable account generations in the same mutation transaction.
+# Existing installations can provide a Redis/Valkey URL in an existing Secret.
+cache:
+  existingSecret: ""
+  existingSecretKey: redis-url
+  passwordSecretKey: password
+  ttlSeconds: 60
+  internal:
+    enabled: false
+    image:
+      repository: valkey/valkey
+      digest: sha256:5d586b6d9574ce96954142cdca85f4903a0efdbd4d04d4fe27c9fb245cdf91d4
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
 nameOverride: ""
 fullnameOverride: ""
 
@@ -58,6 +80,15 @@ auth0:
 appEnv: production
 logLevel: INFO
 systemAccountSlug: fabric-system
+
+# Dedicated installation bootstrap. The administrator must log in through the
+# configured Auth0 application; this grants membership, not a login bypass.
+singleTenant:
+  enabled: false
+  accountId: ""
+  accountSlug: fabric
+  accountName: Fabric
+  adminSubject: ""
 
 migrations:
   # Runs the Alembic history as a pre-install and pre-upgrade hook, so the schema is
@@ -144,3 +175,47 @@ tolerations: []
 affinity: {}
 podAnnotations: {}
 extraLabels: {}
+
+# Optional self-hosted console. Authentication remains required; this chart reads
+# the IdP client and session credentials from a Secret created by the administrator.
+console:
+  enabled: false
+  replicas: 1
+  image:
+    repository: fabric/console
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Public HTTPS origin registered as the Auth0 application callback/logout origin.
+  # No path or trailing slash. The callback is /auth/callback.
+  baseUrl: ""
+  # Defaults to this release's in-cluster control-plane Service.
+  controlPlaneUrl: ""
+  # Optional fixed gateway. Otherwise approved ready stamp endpoints are used.
+  inferenceUrl: ""
+  inferenceAllowedOrigins: []
+  inference:
+    # DNS suffixes administered by you, for stamp-created inference hostnames.
+    # HTTPS on the default port is mandatory. Never use public shared suffixes.
+    allowedDomains: []
+  auth:
+    existingSecret: ""
+    keys:
+      domain: auth0-domain
+      clientId: auth0-client-id
+      clientSecret: auth0-client-secret
+      sessionSecret: auth0-session-secret
+      audience: auth0-audience
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    tls:
+      enabled: false
+      secretName: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 1, memory: 1Gi}

@@ -1,0 +1,8 @@
+# Image-only overlay. Supply cluster URLs, enrollment, storage, and exposure values separately.
+image:
+  agent:
+    repository: acrfabricinference.azurecr.io/fabric/agent
+    digest: sha256:1fc1e9c614e0d54aa2a127b10d0342b6627fabccada214d0010055ddbcc6d74c
+  dataPlane:
+    repository: acrfabricinference.azurecr.io/fabric/data-plane
+    digest: sha256:73f606436cf150e116ddad43ed35cf69fa2df52d46f4eddf78d77db1789d28ad

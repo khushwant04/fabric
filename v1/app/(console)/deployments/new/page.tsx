@@ -1,30 +1,50 @@
 import Link from "next/link"
 import { ArrowLeftIcon, RocketIcon } from "lucide-react"
 
-import { createDeployment } from "@/app/(console)/actions"
+import { DeploymentForm, DeployModelSubmit } from "@/components/console/deployment-form"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { listStamps } from "@/lib/fabric/data"
+import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
 
-const gpuClasses = ["t4", "l4", "a10g", "a100", "a100-80gb", "l40s", "h100"]
+const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100"]
 
 export default async function NewDeploymentPage() {
   const context = await getConsoleContext()
   const canWrite = hasScope(context, "deployments:write")
-  return <PageContainer><PageHeader title="Create deployment" description="Define desired model-serving state. Fabric will select compatible capacity and begin reconciliation." actions={<Button variant="outline" render={<Link href="/deployments" />}><ArrowLeftIcon /> Back</Button>} />
-    {!canWrite ? <Alert><RocketIcon /><AlertTitle>Read-only access</AlertTitle><AlertDescription>Your account role does not allow creating deployments.</AlertDescription></Alert> : null}
-    <form action={createDeployment} className="grid gap-5 xl:grid-cols-[1fr_320px]">
-      <Card><CardHeader><CardTitle>Deployment configuration</CardTitle><CardDescription>Required fields are validated again by the control plane.</CardDescription></CardHeader><CardContent><FieldGroup>
-        <FieldSet><FieldLegend>Identity</FieldLegend><div className="grid gap-5 md:grid-cols-2"><Field><FieldLabel htmlFor="name">Deployment name</FieldLabel><Input id="name" name="name" placeholder="support-copilot" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" required disabled={!canWrite} /><FieldDescription>Lowercase letters, numbers, and hyphens.</FieldDescription></Field><Field><FieldLabel htmlFor="modelAlias">Model alias</FieldLabel><Input id="modelAlias" name="modelAlias" placeholder="llama-3.1-8b-instruct" required disabled={!canWrite} /></Field></div></FieldSet>
-        <FieldSet><FieldLegend>Runtime</FieldLegend><div className="grid gap-5 md:grid-cols-3"><Field><FieldLabel htmlFor="release">Runtime release</FieldLabel><Input id="release" name="release" placeholder="v0.9.4" required disabled={!canWrite} /></Field><Field><FieldLabel>Kernel mode</FieldLabel><Select name="kernelMode" defaultValue="auto" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{["auto", "fabric", "standard"].map((value) => <SelectItem value={value} key={value}>{value}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel>Load strategy</FieldLabel><Select name="strategy" defaultValue="least_in_flight" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{["least_in_flight", "round_robin", "session_affinity", "weighted"].map((value) => <SelectItem value={value} key={value}>{value.replaceAll("_", " ")}</SelectItem>)}</SelectContent></Select></Field></div></FieldSet>
-        <FieldSet><FieldLegend>Resources and placement</FieldLegend><div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4"><Field><FieldLabel htmlFor="replicas">Replicas</FieldLabel><Input id="replicas" name="replicas" type="number" min={1} max={32} defaultValue={1} required disabled={!canWrite} /></Field><Field><FieldLabel htmlFor="gpuCount">GPUs per replica</FieldLabel><Input id="gpuCount" name="gpuCount" type="number" min={1} max={8} defaultValue={1} required disabled={!canWrite} /></Field><Field><FieldLabel>Minimum GPU</FieldLabel><Select name="gpuClass" defaultValue="t4" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{gpuClasses.map((value) => <SelectItem value={value} key={value}>{value.toUpperCase()}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="region">Region (optional)</FieldLabel><Input id="region" name="region" placeholder="us-east-1" disabled={!canWrite} /></Field></div><Field><FieldLabel htmlFor="limitsPolicy">Limits policy reference (optional)</FieldLabel><Input id="limitsPolicy" name="limitsPolicy" placeholder="standard-production" disabled={!canWrite} /></Field></FieldSet>
+  const result = await Promise.allSettled([hasScope(context, "stamps:read") ? listStamps() : Promise.resolve([])])
+  const stamps = result[0].status === "fulfilled" ? result[0].value : []
+  const active = stamps.filter((stamp) => stampState(stamp).status === "active")
+  return <PageContainer>
+    <PageHeader title="Deploy a model" description="Choose a model and enrolled infrastructure. Fabric creates and manages its GPU workload." actions={<Button variant="outline" render={<Link href="/deployments" />}><ArrowLeftIcon /> Back</Button>} />
+    {!canWrite ? <Alert><RocketIcon /><AlertTitle>Read-only access</AlertTitle><AlertDescription>Your account role does not allow deploying models.</AlertDescription></Alert> : null}
+    {result[0].status === "rejected" ? <Alert variant="destructive"><RocketIcon /><AlertTitle>Infrastructure could not be checked</AlertTitle><AlertDescription>Refresh before deploying. No capacity has been assumed available.</AlertDescription></Alert> : null}
+    <DeploymentForm>
+      <Card><CardHeader><CardTitle>Model and infrastructure</CardTitle><CardDescription>Authentication, TLS, and gateway settings come from your Helm installation.</CardDescription></CardHeader><CardContent><FieldGroup>
+        <Field><FieldLabel htmlFor="modelRef">Model repository</FieldLabel><Input id="modelRef" name="modelRef" placeholder="Qwen/Qwen3.5-4B" required maxLength={200} disabled={!canWrite} /><FieldDescription>The model-host image must support this model architecture. Gated models need a download credential configured on the cluster.</FieldDescription></Field>
+        <div className="grid gap-5 md:grid-cols-2">
+          <Field><FieldLabel htmlFor="name">Deployment name</FieldLabel><Input id="name" name="name" placeholder="qwen-4b" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" maxLength={200} required disabled={!canWrite} /></Field>
+          <Field><FieldLabel htmlFor="modelAlias">API model name</FieldLabel><Input id="modelAlias" name="modelAlias" placeholder="qwen3.5-4b" pattern="[a-zA-Z0-9_.-]+" maxLength={200} required disabled={!canWrite} /><FieldDescription>Use this name in the OpenAI request’s model field.</FieldDescription></Field>
+        </div>
+        <Field><FieldLabel>Infrastructure</FieldLabel><Select name="stampId" defaultValue="auto" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">Automatic placement</SelectItem>{active.map((stamp) => <SelectItem key={stamp.id} value={stamp.id}>{stamp.name} · {stamp.orchestrator || "Kubernetes"} · {gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "Unknown"} GPUs</SelectItem>)}</SelectContent></Select><FieldDescription>{active.length ? "Only recently connected clusters appear here. The control plane checks available capacity before assigning the model." : "No active account-owned cluster is visible. Enroll a stamp first, or use entitled managed capacity through automatic placement."}</FieldDescription></Field>
+        <div className="grid gap-5 sm:grid-cols-3">
+          <Field><FieldLabel htmlFor="replicas">Replicas</FieldLabel><Input id="replicas" name="replicas" type="number" min={1} max={32} defaultValue={1} required disabled={!canWrite} /></Field>
+          <Field><FieldLabel htmlFor="gpuCount">GPUs per replica</FieldLabel><Input id="gpuCount" name="gpuCount" type="number" min={1} max={8} defaultValue={1} required disabled={!canWrite} /><FieldDescription>All GPUs for one replica must fit on one node.</FieldDescription></Field>
+          <Field><FieldLabel>Minimum GPU class</FieldLabel><Select name="gpuClass" defaultValue="t4" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{gpuClasses.map((value) => <SelectItem value={value} key={value}>{value.toUpperCase()}</SelectItem>)}</SelectContent></Select></Field>
+        </div>
+        <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Serving settings</summary><div className="mt-5 grid gap-5 sm:grid-cols-3">
+          <Field><FieldLabel htmlFor="maxModelLen">Context limit</FieldLabel><Input id="maxModelLen" name="maxModelLen" type="number" min={64} max={1048576} placeholder="Cluster default" disabled={!canWrite} /></Field>
+          <Field><FieldLabel htmlFor="maxNumSeqs">Concurrent sequences</FieldLabel><Input id="maxNumSeqs" name="maxNumSeqs" type="number" min={1} max={1024} placeholder="Cluster default" disabled={!canWrite} /></Field>
+          <Field><FieldLabel>Execution</FieldLabel><Select name="execution" defaultValue="default" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Cluster default</SelectItem><SelectItem value="eager">Eager</SelectItem><SelectItem value="cuda_graph">CUDA graphs</SelectItem></SelectContent></Select></Field>
+        </div><p className="mt-4 text-xs text-muted-foreground">The operator selects a supported dtype from the GPU profile. Model memory fit still depends on model size, context, and serving settings.</p></details>
       </FieldGroup></CardContent></Card>
-      <Card className="h-fit"><CardHeader><CardTitle>Review</CardTitle><CardDescription>Creation is idempotent. Placement begins immediately after the intent is accepted.</CardDescription></CardHeader><CardContent><div className="space-y-3 rounded-lg border p-3 text-xs text-muted-foreground"><p>• Deployment specs are account-scoped.</p><p>• Automatic placement checks entitlement, region, liveness, GPU class, and available capacity.</p><p>• Usage reporting is operational, not billing-grade.</p></div><Button className="w-full" type="submit" disabled={!canWrite}><RocketIcon /> Create and place</Button></CardContent></Card>
-    </form>
+      <Card className="h-fit"><CardHeader><CardTitle>What happens next</CardTitle></CardHeader><CardContent className="space-y-5"><ol className="list-decimal space-y-3 pl-4 text-sm text-muted-foreground"><li>The control plane validates and assigns the deployment.</li><li>The stamp agent delivers it to the operator.</li><li>The operator starts the model host on a compatible GPU node.</li><li>The gateway routes requests when the host is ready.</li></ol><p className="text-xs text-muted-foreground">The inference URL appears on the deployment when the stamp reports readiness. A single-GPU node can start one single-GPU model; replacing an occupied model requires spare capacity or stopping it first.</p><DeployModelSubmit disabled={!canWrite || result[0].status === "rejected"} /></CardContent></Card>
+    </DeploymentForm>
   </PageContainer>
 }
