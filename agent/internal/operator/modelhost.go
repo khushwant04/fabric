@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +49,12 @@ type ModelHost struct {
 	// TextOnlyModels optionally restricts this policy to exact release/model ids.
 	TextOnly       bool
 	TextOnlyModels []string
+	// Defaults are limited to verified exact model ids. Model-scoped overrides let
+	// an installation supply the native format of its own approved release.
+	DisableToolCallingModelDefaults bool
+	ToolCallParsers                 map[string]string
+	EnableAutoToolChoice            bool
+	ToolCallParser                  string
 	// CPU and memory requests protect startup from contention without imposing a CPU
 	// throttle or guessing an OOM limit. Empty preserves existing workload resources.
 	CPURequest          string
@@ -240,14 +248,18 @@ func hostNameForRelease(item ModelDeployment, release string) string {
 }
 
 type deployment struct {
-	APIVersion string         `json:"apiVersion,omitempty"`
-	Kind       string         `json:"kind,omitempty"`
-	Metadata   Metadata       `json:"metadata"`
-	Spec       map[string]any `json:"spec"`
-	Status     *struct {
-		ReadyReplicas int `json:"readyReplicas,omitempty"`
-		Replicas      int `json:"replicas,omitempty"`
-	} `json:"status,omitempty"`
+	APIVersion string            `json:"apiVersion,omitempty"`
+	Kind       string            `json:"kind,omitempty"`
+	Metadata   Metadata          `json:"metadata"`
+	Spec       map[string]any    `json:"spec"`
+	Status     *deploymentStatus `json:"status,omitempty"`
+}
+
+type deploymentStatus struct {
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	ReadyReplicas      int   `json:"readyReplicas,omitempty"`
+	Replicas           int   `json:"replicas,omitempty"`
+	UpdatedReplicas    int   `json:"updatedReplicas,omitempty"`
 }
 
 type service struct {
@@ -301,6 +313,9 @@ func (m ModelHost) hostArgs() []string {
 	}
 	if m.TextOnly {
 		args = append(args, "--language-model-only")
+	}
+	if m.EnableAutoToolChoice && m.ToolCallParser != "" {
+		args = append(args, "--enable-auto-tool-choice", "--tool-call-parser="+m.ToolCallParser)
 	}
 	return append(args, m.ExtraArgs...)
 }
@@ -377,6 +392,7 @@ func (r *Reconciler) hostSettings(item ModelDeployment) ModelHost {
 			}
 		}
 	}
+	host.EnableAutoToolChoice, host.ToolCallParser = host.toolCallingSettings(item.Spec)
 	return host
 }
 
@@ -449,10 +465,9 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 		},
 		"resources": map[string]any{
 			"limits": map[string]any{
-				// Requests are omitted deliberately: for an extended resource
-				// Kubernetes requires request and limit to be equal, and setting only
-				// the limit makes that explicit rather than relying on defaulting.
-				"nvidia.com/gpu": host.GPUs,
+				// Resource quantities use the API's string representation so an
+				// unchanged device count does not cause a patch on every poll.
+				"nvidia.com/gpu": strconv.Itoa(host.GPUs),
 			},
 		},
 		// Readiness gates traffic on the server being able to answer, which for a
@@ -504,7 +519,10 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 			{"name": "TRITON_CACHE_DIR", "value": modelCacheMountPath + "/triton"},
 		}...),
 	}
-	requests := map[string]any{}
+	// Declare the device request even without CPU/memory reservations. Kubernetes
+	// requires extended-resource request == limit; a previous defaulted request
+	// must not survive a change to the desired device count.
+	requests := map[string]any{"nvidia.com/gpu": strconv.Itoa(host.GPUs)}
 	if host.HuggingFaceSecret != "" {
 		key := host.HuggingFaceTokenKey
 		if key == "" {
@@ -522,12 +540,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 	if host.MemoryRequest != "" {
 		requests["memory"] = host.MemoryRequest
 	}
-	if len(requests) > 0 {
-		// GPU request must equal its extended-resource limit; explicit CPU/memory
-		// requests do not interfere with that allocation.
-		requests["nvidia.com/gpu"] = host.GPUs
-		container["resources"].(map[string]any)["requests"] = requests
-	}
+	container["resources"].(map[string]any)["requests"] = requests
 
 	volumes := []map[string]any{
 		{"name": "shm", "emptyDir": map[string]any{"medium": "Memory"}},
@@ -934,8 +947,8 @@ func (r *Reconciler) observeReleaseWorkload(
 		}
 		return false, "", readiness, fmt.Errorf("read model host status %s: %w", name, err)
 	}
-	if current.Status != nil {
-		readiness.Ready = current.Status.ReadyReplicas
+	if current.Status != nil && current.Status.ObservedGeneration >= current.Metadata.Generation {
+		readiness.Ready = min(current.Status.ReadyReplicas, current.Status.UpdatedReplicas)
 	}
 	return true, current.Metadata.Annotations[annotationRelease], readiness, nil
 }
@@ -951,8 +964,8 @@ func (r *Reconciler) observeNamedWorkload(
 		}
 		return readiness, fmt.Errorf("read model host status %s: %w", name, err)
 	}
-	if current.Status != nil {
-		readiness.Ready = current.Status.ReadyReplicas
+	if current.Status != nil && current.Status.ObservedGeneration >= current.Metadata.Generation {
+		readiness.Ready = min(current.Status.ReadyReplicas, current.Status.UpdatedReplicas)
 	}
 	return readiness, nil
 }
@@ -988,10 +1001,23 @@ func (r *Reconciler) applyWorkload(ctx context.Context, name string, desired dep
 	case err != nil:
 		return fmt.Errorf("read model host %s: %w", name, err)
 	default:
+		// Compare only the desired fields. API defaults and injected sidecars must
+		// neither cause a patch on every poll nor disappear during a flags update.
+		spec, specChanged := managedWorkloadSpec(existing.Spec, desired.Spec)
+		metadataChanged := false
+		for key, value := range desired.Metadata.Labels {
+			metadataChanged = metadataChanged || existing.Metadata.Labels[key] != value
+		}
+		for key, value := range desired.Metadata.Annotations {
+			metadataChanged = metadataChanged || existing.Metadata.Annotations[key] != value
+		}
+		if !specChanged && !metadataChanged {
+			return nil
+		}
 		// Patched rather than replaced, so fields defaulted by the API server and
 		// anything a cluster admission controller added are left alone.
 		patch := map[string]any{
-			"spec": desired.Spec,
+			"spec": spec,
 			"metadata": map[string]any{
 				"labels":      desired.Metadata.Labels,
 				"annotations": desired.Metadata.Annotations,
@@ -1001,6 +1027,123 @@ func (r *Reconciler) applyWorkload(ctx context.Context, name string, desired dep
 			return fmt.Errorf("update model host %s: %w", name, err)
 		}
 		return nil
+	}
+}
+
+// managedWorkloadSpec overlays declared fields on the stored JSON shape. Named
+// Kubernetes lists retain items and fields outside the operator's declaration;
+// scalar lists such as container args are replaced so removing a flag works.
+func managedWorkloadSpec(existing, desired map[string]any) (map[string]any, bool) {
+	normalize := func(value map[string]any) map[string]any {
+		encoded, _ := json.Marshal(value)
+		var normalized map[string]any
+		_ = json.Unmarshal(encoded, &normalized)
+		return normalized
+	}
+	current := normalize(existing)
+	declared := normalize(desired)
+	// These env names are owned by this operator. Remove a previous kernel or
+	// token binding when the desired host no longer declares it, without dropping
+	// environment settings supplied by admission controllers.
+	cleaned := normalize(current)
+	pruneManagedHostEnvironment(cleaned, declared)
+	merged := mergeManagedValue(cleaned, declared).(map[string]any)
+	return merged, !reflect.DeepEqual(current, merged)
+}
+
+func pruneManagedHostEnvironment(current, desired map[string]any) {
+	modelContainer := func(spec map[string]any) map[string]any {
+		template, _ := spec["template"].(map[string]any)
+		pod, _ := template["spec"].(map[string]any)
+		containers, _ := pod["containers"].([]any)
+		for _, entry := range containers {
+			container, _ := entry.(map[string]any)
+			if container["name"] == "model-host" {
+				return container
+			}
+		}
+		return nil
+	}
+	stored, declared := modelContainer(current), modelContainer(desired)
+	if stored == nil || declared == nil {
+		return
+	}
+	declaredEnv, _ := declared["env"].([]any)
+	keep := map[string]bool{}
+	for _, entry := range declaredEnv {
+		item, _ := entry.(map[string]any)
+		name, _ := item["name"].(string)
+		keep[name] = true
+	}
+	storedEnv, _ := stored["env"].([]any)
+	filtered := make([]any, 0, len(storedEnv))
+	for _, entry := range storedEnv {
+		item, _ := entry.(map[string]any)
+		name, _ := item["name"].(string)
+		owned := name == "FABRIC_KERNEL" || name == "FABRIC_KERNEL_BLOCK_V" ||
+			name == "FABRIC_KERNEL_NUM_WARPS" || name == "HF_TOKEN"
+		if !owned || keep[name] {
+			filtered = append(filtered, entry)
+		}
+	}
+	stored["env"] = filtered
+}
+
+func mergeManagedValue(existing, desired any) any {
+	switch declared := desired.(type) {
+	case map[string]any:
+		merged := make(map[string]any)
+		if current, ok := existing.(map[string]any); ok {
+			for key, value := range current {
+				merged[key] = value
+			}
+		}
+		for key, value := range declared {
+			merged[key] = mergeManagedValue(merged[key], value)
+		}
+		return merged
+	case []any:
+		if len(declared) == 0 {
+			return declared
+		}
+		for _, value := range declared {
+			item, ok := value.(map[string]any)
+			if !ok {
+				return declared
+			}
+			if name, ok := item["name"].(string); !ok || name == "" {
+				return declared
+			}
+		}
+		current, _ := existing.([]any)
+		merged := append([]any(nil), current...)
+		for _, value := range declared {
+			item := value.(map[string]any)
+			found := false
+			for index, stored := range merged {
+				storedItem, ok := stored.(map[string]any)
+				if ok && storedItem["name"] == item["name"] {
+					_, image := item["image"]
+					_, args := item["args"]
+					if image || args {
+						merged[index] = mergeManagedValue(storedItem, item)
+					} else {
+						// Env value/valueFrom and volume sources are alternatives,
+						// not maps to combine. Replace declared named items while
+						// retaining admission-added entries with different names.
+						merged[index] = item
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				merged = append(merged, item)
+			}
+		}
+		return merged
+	default:
+		return desired
 	}
 }
 

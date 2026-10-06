@@ -201,6 +201,9 @@ console:
   baseUrl: ""
   # Defaults to this release's in-cluster control-plane Service.
   controlPlaneUrl: ""
+  # Address copied into stamp enrollment commands. Defaults to the HTTPS ingress
+  # host when TLS is enabled; separate from the console's in-cluster API address.
+  publicControlPlaneUrl: ""
   # Optional fixed gateway. Otherwise approved ready stamp endpoints are used.
   inferenceUrl: ""
   inferenceAllowedOrigins: []

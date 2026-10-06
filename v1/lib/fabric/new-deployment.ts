@@ -9,6 +9,8 @@ export type NewDeploymentInput = {
   maxModelLen: number | null
   maxNumSeqs: number | null
   execution: "eager" | "cuda_graph" | null
+  enableAutoToolChoice: boolean | null
+  toolCallParser: string | null
 }
 
 function optionalInteger(form: FormData, key: string, minimum: number, maximum: number) {
@@ -31,6 +33,8 @@ export function parseNewDeployment(form: FormData): NewDeploymentInput {
   const gpuClass = read("gpuClass")
   const stampId = read("stampId")
   const execution = read("execution")
+  const autoToolChoice = read("autoToolChoice")
+  const toolCallParser = read("toolCallParser")
   if (!/^[a-z0-9]([a-z0-9-]{0,198}[a-z0-9])?$/.test(name)) {
     throw new Error("Deployment names must use lowercase letters, numbers, and hyphens.")
   }
@@ -49,12 +53,23 @@ export function parseNewDeployment(form: FormData): NewDeploymentInput {
   if (execution && !["default", "eager", "cuda_graph"].includes(execution)) {
     throw new Error("Choose a supported execution mode.")
   }
+  if (autoToolChoice && !["default", "enabled", "disabled"].includes(autoToolChoice)) {
+    throw new Error("Choose a supported automatic tool calling mode.")
+  }
+  if (toolCallParser && !/^[a-z][a-z0-9_-]{0,63}$/.test(toolCallParser)) {
+    throw new Error("Enter a supported tool parser identifier, such as hermes or qwen3_xml.")
+  }
+  if (autoToolChoice === "disabled" && toolCallParser) {
+    throw new Error("Clear the tool parser to disable automatic tool calling.")
+  }
   return {
     name, modelAlias, modelRef, replicas, gpuCount, gpuClass,
     stampId: stampId && stampId !== "auto" ? stampId : null,
     maxModelLen: optionalInteger(form, "maxModelLen", 64, 1_048_576),
     maxNumSeqs: optionalInteger(form, "maxNumSeqs", 1, 1024),
     execution: execution === "eager" || execution === "cuda_graph" ? execution : null,
+    enableAutoToolChoice: autoToolChoice === "enabled" ? true : autoToolChoice === "disabled" ? false : null,
+    toolCallParser: toolCallParser || null,
   }
 }
 

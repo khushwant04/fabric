@@ -106,6 +106,10 @@ type Deployment struct {
 	// means the stamp's configured behaviour, which is what keeps "no opinion"
 	// distinguishable from "explicitly do not capture".
 	Execution string `json:"execution,omitempty"`
+	// Nil inherits the exact model profile. A pointer preserves an explicit false
+	// through persistence and publishing rather than dropping it as an empty value.
+	EnableAutoToolChoice *bool  `json:"enable_auto_tool_choice,omitempty"`
+	ToolCallParser       string `json:"tool_call_parser,omitempty"`
 	// Verification is stamp-wide, carried here because this struct is what flows through
 	// both delivery paths: the agent writes the file directly, or declares custom
 	// resources the operator renders. It is deliberately not serialised per entry — both

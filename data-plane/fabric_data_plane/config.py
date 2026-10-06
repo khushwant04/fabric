@@ -71,6 +71,9 @@ class Settings(BaseSettings):
 
     #: Upstream request timeout for the model host.
     upstream_timeout_seconds: float = 300.0
+    #: Responses inputs may contain inline images. Bound JSON before decoding so
+    #: a public request cannot allocate an unbounded body on the gateway.
+    responses_max_body_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
 
     #: Maximum audio file bytes accepted by transcription and translation routes. The
     #: multipart parser may spool uploads to disk, but forwarding requires bytes in memory,

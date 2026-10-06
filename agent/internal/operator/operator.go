@@ -109,6 +109,9 @@ type Spec struct {
 	// Execution is "eager" or "cuda_graph"; empty means the operator's configured
 	// behaviour. A mode rather than a boolean so absent and false stay distinct.
 	Execution string `json:"execution,omitempty"`
+	// Nil uses the model's verified native tool format; false explicitly disables.
+	EnableAutoToolChoice *bool  `json:"enableAutoToolChoice,omitempty"`
+	ToolCallParser       string `json:"toolCallParser,omitempty"`
 	// JWTIssuer and JWKSURL are how the data plane must verify tokens. They describe the
 	// stamp rather than this deployment, and they are here because the operator renders the
 	// data plane's configuration from these resources and has no other channel to read
@@ -489,7 +492,15 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) (Result, error) {
 				activeReadiness = state.CandidateReadiness
 				activeExists = state.CandidateExists
 			}
-			if decision.EnsureActive && decision.ActiveWorkload != "" && !activeExists {
+			// Same-release runtime settings must reach an existing host too. Keep the
+			// old host untouched while a different release is preparing or draining.
+			// An initial host can be repaired before its first successful startup.
+			initialPreparing := decision.Phase == rolloutPhasePreparing &&
+				decision.CandidateWorkload == "" && !decision.RollbackDrain && !decision.RolledBack
+			reconcileActive := !activeExists ||
+				(decision.ActiveRelease == releaseOf(item) &&
+					(decision.Phase == rolloutPhaseServing || initialPreparing))
+			if decision.EnsureActive && decision.ActiveWorkload != "" && reconcileActive {
 				observed, hostErr := r.ensureNamedWorkload(
 					ctx, item, decision.ActiveRelease, decision.ActiveWorkload,
 				)

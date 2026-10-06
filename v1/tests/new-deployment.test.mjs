@@ -39,6 +39,20 @@ test("server-side validation rejects URLs, process flags, invalid cluster ids, a
   }
 })
 
+test("tool calling keeps model defaults distinct from an explicit disable and parser selection", () => {
+  const defaults = parseNewDeployment(form())
+  assert.equal(defaults.enableAutoToolChoice, null)
+  assert.equal(defaults.toolCallParser, null)
+  const disabled = parseNewDeployment(form({ autoToolChoice: "disabled" }))
+  assert.equal(disabled.enableAutoToolChoice, false)
+  const enabled = parseNewDeployment(form({ autoToolChoice: "enabled", toolCallParser: "qwen3_xml" }))
+  assert.equal(enabled.enableAutoToolChoice, true)
+  assert.equal(enabled.toolCallParser, "qwen3_xml")
+  for (const values of [{ autoToolChoice: "disabled", toolCallParser: "hermes" }, { autoToolChoice: "yes" }, { toolCallParser: "hermes --trust-remote-code" }, { toolCallParser: "../../parser" }]) {
+    assert.throws(() => parseNewDeployment(form(values)))
+  }
+})
+
 test("the real creation action sends the model repository and chosen stamp without issuer or gateway configuration", async () => {
   const calls = []
   const redirects = []
@@ -60,6 +74,27 @@ test("the real creation action sends the model repository and chosen stamp witho
   assert.deepEqual(JSON.parse(calls[1].init.body), { stamp_id: stampId })
   assert.ok(calls.every(({ path, init }) => path.startsWith("/v1/accounts/tenant-one/") && init.token === "tenant-one-token"))
   assert.deepEqual(redirects, ["/deployments/deployment-one"])
+})
+
+test("the creation action preserves explicit disabled tool calling and sends a selected parser", async () => {
+  const bodies = []
+  const actions = compile("../app/(console)/actions.ts", {
+    "node:crypto": { randomUUID: () => "idempotency-test" },
+    "next/cache": { revalidatePath() {} },
+    "next/navigation": { redirect() {} },
+    "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { if (!path.endsWith("/placements")) bodies.push(JSON.parse(init.body)); return { id: "deployment-one" } } },
+    "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
+  })
+  await actions.createDeployment({}, form({ autoToolChoice: "disabled" }))
+  assert.equal(bodies[0].spec.runtime.enable_auto_tool_choice, false)
+  assert.equal(Object.hasOwn(bodies[0].spec.runtime, "tool_call_parser"), false)
+  await actions.createDeployment({}, form({ autoToolChoice: "enabled", toolCallParser: "qwen3_xml" }))
+  assert.equal(bodies[1].spec.runtime.enable_auto_tool_choice, true)
+  assert.equal(bodies[1].spec.runtime.tool_call_parser, "qwen3_xml")
+  await actions.createDeployment({}, form())
+  assert.equal(Object.hasOwn(bodies[2].spec.runtime, "enable_auto_tool_choice"), false)
+  assert.equal(Object.hasOwn(bodies[2].spec.runtime, "tool_call_parser"), false)
 })
 
 test("placement retries read account-owned intent, preserve errors, and refuse deleted or foreign deployments", async () => {

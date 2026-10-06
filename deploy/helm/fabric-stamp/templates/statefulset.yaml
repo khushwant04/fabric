@@ -156,6 +156,8 @@ spec:
               value: /var/lib/fabric-usage/private/usage.db
             - name: FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS
               value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
+            - name: FABRIC_DP_RESPONSES_MAX_BODY_BYTES
+              value: {{ .Values.dataPlane.responses.maxBodyBytes | quote }}
             - name: FABRIC_DP_RATE_LIMIT_REQUESTS_PER_MINUTE
               value: {{ .Values.dataPlane.limits.requestsPerMinute | quote }}
             - name: FABRIC_DP_RATE_LIMIT_BURST

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -511,7 +512,8 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.MaxNumSeqs = maxNumSeqsFromSpec(assignment.Spec)
 		entry.GPUMemoryUtilization = gpuMemoryUtilizationFromSpec(assignment.Spec)
 		entry.Execution = executionFromSpec(assignment.Spec)
-		if previous, present := a.known[assignment.DeploymentID]; !present || previous != entry {
+		entry.EnableAutoToolChoice, entry.ToolCallParser = toolCallingFromSpec(assignment.Spec)
+		if previous, present := a.known[assignment.DeploymentID]; !present || !reflect.DeepEqual(previous, entry) {
 			changed = true
 			a.log.Info("configured deployment",
 				"deployment_id", assignment.DeploymentID,
@@ -970,6 +972,20 @@ func executionFromSpec(spec map[string]any) string {
 	default:
 		return ""
 	}
+}
+
+// toolCallingFromSpec keeps absent and explicit false distinct. The control plane
+// validates the parser; the operator chooses the matching native model profile.
+func toolCallingFromSpec(spec map[string]any) (*bool, string) {
+	runtime, ok := spec["runtime"].(map[string]any)
+	if !ok {
+		return nil, ""
+	}
+	parser, _ := runtime["tool_call_parser"].(string)
+	if enabled, ok := runtime["enable_auto_tool_choice"].(bool); ok {
+		return &enabled, parser
+	}
+	return nil, parser
 }
 
 // verificationFrom reads the control plane's reported verification contract.

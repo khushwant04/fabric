@@ -3,6 +3,10 @@
 {{- $name := printf "%s-console" (include "fabric-control-plane.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- $authSecret := required "console.auth.existingSecret is required; console credentials must come from an existing Secret" $console.auth.existingSecret -}}
 {{- $baseUrl := required "console.baseUrl is required for sign-in callbacks and request origin validation" $console.baseUrl -}}
+{{- $publicControlPlaneUrl := $console.publicControlPlaneUrl | default "" -}}
+{{- if and (not $publicControlPlaneUrl) .Values.ingress.enabled .Values.ingress.tls.enabled .Values.ingress.host -}}
+{{- $publicControlPlaneUrl = printf "https://%s" .Values.ingress.host -}}
+{{- end -}}
 {{- $hostnamePattern := "[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*" -}}
 {{- if not (regexMatch (printf "^https://%s(:[0-9]{1,5})?$" $hostnamePattern) $baseUrl) }}
 {{- fail "console.baseUrl must be an HTTPS origin without a path or trailing slash" -}}
@@ -40,7 +44,7 @@ spec:
         app.kubernetes.io/component: console
         app.kubernetes.io/part-of: fabric
       annotations:
-        checksum/config: {{ printf "%s|%s|%s|%s|%s|%s|%s|%s" $baseUrl $console.controlPlaneUrl $console.inferenceUrl $accountId (toJson $console.inferenceAllowedOrigins) (toJson $console.inference.allowedDomains) $authSecret (toJson $console.auth.keys) | sha256sum }}
+        checksum/config: {{ printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" $baseUrl $console.controlPlaneUrl $console.inferenceUrl $accountId (toJson $console.inferenceAllowedOrigins) (toJson $console.inference.allowedDomains) $authSecret (toJson $console.auth.keys) $publicControlPlaneUrl .Values.jwt.issuer | sha256sum }}
     spec:
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
@@ -73,6 +77,12 @@ spec:
               value: {{ $baseUrl | quote }}
             - name: FABRIC_CONTROL_PLANE_URL
               value: {{ $console.controlPlaneUrl | default (printf "http://%s:%v" (include "fabric-control-plane.fullname" .) .Values.service.port) | quote }}
+            {{- if $publicControlPlaneUrl }}
+            - name: FABRIC_CONTROL_PLANE_PUBLIC_URL
+              value: {{ $publicControlPlaneUrl | quote }}
+            {{- end }}
+            - name: FABRIC_CONTROL_PLANE_JWT_ISSUER
+              value: {{ .Values.jwt.issuer | quote }}
             {{- if $accountId }}
             - name: FABRIC_SINGLE_TENANT_ACCOUNT_ID
               value: {{ $accountId | quote }}

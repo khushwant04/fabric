@@ -77,6 +77,8 @@ func main() {
 			"disable multimodal inputs and profiling; requires a compatible vLLM image")
 		hostTextOnlyModels = flag.String("model-host-text-only-models", "",
 			"optional comma-separated exact model ids limiting the text-only policy")
+		hostToolCallingModelDefaults = flag.Bool("model-host-tool-calling-model-defaults", true,
+			"enable automatic tool calling only for exact models with verified native parser profiles")
 		hostCPURequest     = flag.String("model-host-cpu-request", "", "model host CPU request, empty leaves it unset")
 		hostMemoryRequest  = flag.String("model-host-memory-request", "", "model host memory request, empty leaves it unset")
 		hostServiceAccount = flag.String("model-host-service-account", "", "dedicated ServiceAccount for model hosts, without mounted API credentials")
@@ -119,7 +121,9 @@ func main() {
 
 	// Repeatable, so a cluster's GPU labels and taints are expressed as they are rather
 	// than squeezed into one string.
-	var nodeSelectorEntries, tolerationEntries, pullSecretEntries multiFlag
+	var nodeSelectorEntries, tolerationEntries, pullSecretEntries, toolCallParserEntries multiFlag
+	flag.Var(&toolCallParserEntries, "model-host-tool-call-parser",
+		"exact model-id=parser tool calling profile; repeat for several models")
 	flag.Var(&pullSecretEntries, "model-host-image-pull-secret", "existing image pull Secret; repeat for several")
 	flag.Var(&nodeSelectorEntries, "model-host-node-selector",
 		"node selector as key=value; repeat for several")
@@ -179,6 +183,13 @@ func main() {
 			host.TextOnlyModels = append(host.TextOnlyModels, model)
 		}
 	}
+	host.DisableToolCallingModelDefaults = !*hostToolCallingModelDefaults
+	toolCallParsers, err := operator.ParseToolCallParsers(toolCallParserEntries)
+	if err != nil {
+		log.Error("invalid model tool calling profile", "error", err)
+		os.Exit(1)
+	}
+	host.ToolCallParsers = toolCallParsers
 
 	selector, err := operator.ParseNodeSelector(nodeSelectorEntries)
 	if err != nil {

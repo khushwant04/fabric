@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["bom1"],
+  "ignoreCommand": "git log -1 --format=%B | grep -Fq '[skip ci]'",
   "env": {
     "FABRIC_INFERENCE_ALLOWED_ORIGINS": "https://inference.hexelstudio.com"
   }

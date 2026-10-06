@@ -4,6 +4,8 @@
 # Ubuntu 22.04 LTS server image with no NVIDIA driver installed.
 #
 # Target host: Standard_NV72ads_A10_v5 (2 x A10-24Q vGPU, 24 GiB each).
+# For a k3s serving node, use prepare-a10-host.sh and install-k3s-gpu.sh instead.
+# See docs/a10-k3s-installation.md; this research workflow runs package tests.
 #
 # Phases, in order. Each is idempotent, so re-running skips completed work:
 #

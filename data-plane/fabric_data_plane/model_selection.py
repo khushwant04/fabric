@@ -64,7 +64,7 @@ def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
             return
 
         kind = value.get("type")
-        if kind in {"image_url", "input_image", "image"}:
+        if isinstance(kind, str) and kind in {"image_url", "input_image", "image"}:
             requires_vision = True
         # Text classification is bounded, but structural capability checks must still
         # inspect subsequent content parts. A long text prefix cannot make a later image
@@ -79,6 +79,9 @@ def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
         add(payload["messages"])
     elif "prompt" in payload:
         add(payload["prompt"])
+    elif "input" in payload:
+        add(payload.get("instructions"))
+        add(payload["input"])
     return "\n".join(fragments), requires_vision
 
 
@@ -117,7 +120,9 @@ def profile_for_json(operation: str, payload: dict[str, Any]) -> RoutingProfile:
     # only used to rule out obviously incompatible deployments; the model host remains
     # authoritative and tokenizes the actual request.
     estimated_tokens = (len(text) + 3) // 4
-    requested_output = payload.get("max_completion_tokens", payload.get("max_tokens", 0))
+    requested_output = payload.get(
+        "max_output_tokens", payload.get("max_completion_tokens", payload.get("max_tokens", 0))
+    )
     if isinstance(requested_output, int) and not isinstance(requested_output, bool):
         estimated_tokens += max(0, requested_output)
 

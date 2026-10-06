@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import math
 import threading
@@ -69,7 +70,7 @@ from fabric_data_plane.shared_limits import (
 from fabric_data_plane.shared_limits import (
     authorized as limit_authorized,
 )
-from fabric_data_plane.streaming import UsageMeter, streaming_upstream_payload
+from fabric_data_plane.streaming import UsageMeter, response_usage, streaming_upstream_payload
 from fabric_data_plane.usage import (
     UsageBuffer,
     UsageLeaseMismatch,
@@ -83,12 +84,14 @@ logger = logging.getLogger("fabric.data_plane")
 #: Upstream paths this ingress proxies, keyed by the route it exposes.
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 COMPLETIONS_PATH = "/v1/completions"
+RESPONSES_PATH = "/v1/responses"
 TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
 TRANSLATIONS_PATH = "/v1/audio/translations"
 
 _JSON_OPERATIONS = {
     CHAT_COMPLETIONS_PATH: "chat",
     COMPLETIONS_PATH: "completion",
+    RESPONSES_PATH: "chat",
 }
 _AUDIO_OPERATIONS = {
     TRANSCRIPTIONS_PATH: "transcription",
@@ -504,14 +507,45 @@ class DataPlane:
             ) from exc
 
 
-async def _read_json(request: Request) -> dict[str, Any]:
+async def _read_json(request: Request, *, maximum_bytes: int | None = None) -> dict[str, Any]:
+    bounded_body: bytes | None = None
+    if maximum_bytes is not None:
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > maximum_bytes:
+                raise PayloadTooLarge(
+                    "request_too_large", "Responses request exceeds the JSON body limit"
+                )
+            body.extend(chunk)
+        bounded_body = bytes(body)
     try:
-        payload = await request.json()
-    except ValueError as exc:
+        payload = json.loads(bounded_body) if bounded_body is not None else await request.json()
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise BadRequest("invalid_json", "Request body is not valid JSON") from exc
     if not isinstance(payload, dict):
         raise BadRequest("invalid_body", "Request body must be a JSON object")
     return payload
+
+
+def _stateless_responses_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep response history account-safe across interchangeable model replicas."""
+    if payload.get("stream") is not None and not isinstance(payload["stream"], bool):
+        raise BadRequest("invalid_stream", "Responses stream must be a boolean")
+    if payload.get("previous_response_id") is not None or payload.get("conversation") is not None:
+        raise BadRequest(
+            "responses_state_unsupported",
+            "Send the full input history; stored response/conversation IDs are not supported",
+        )
+    if payload.get("background") is not None and payload.get("background") is not False:
+        raise BadRequest(
+            "responses_background_unsupported", "Background Responses jobs are not supported"
+        )
+    if payload.get("store") is not None and payload.get("store") is not False:
+        raise BadRequest("responses_store_unsupported", "Stored Responses are not supported on this gateway")
+    normalized = {**payload, "store": False}
+    if "stream" in normalized and normalized["stream"] is None:
+        normalized["stream"] = False
+    return normalized
 
 
 def _requested_model(payload: dict[str, Any]) -> str:
@@ -677,7 +711,13 @@ async def _proxy(
     """Authenticate, authorize, then forward to the deployment's model host."""
     started = time.perf_counter()
     principal = plane.authenticate(request.headers.get("authorization"))
-    payload = await _read_json(request)
+    is_responses = upstream_path == RESPONSES_PATH
+    payload = await _read_json(
+        request,
+        maximum_bytes=plane.settings.responses_max_body_bytes if is_responses else None,
+    )
+    if is_responses:
+        payload = _stateless_responses_payload(payload)
     model = _requested_model(payload)
 
     # Ownership comes from the verified token plus local configuration; the model
@@ -692,6 +732,8 @@ async def _proxy(
         payload=payload,
         upstream_path=upstream_path,
     )
+    if is_responses:
+        routing_headers = {**routing_headers, "cache-control": "no-store"}
 
     # A failed durable spool is known before another expensive model invocation. The request that
     # first discovers an I/O fault may already have completed upstream, but every later request
@@ -735,7 +777,7 @@ async def _proxy(
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
     client_wants_usage_frame = False
-    if streaming:
+    if streaming and not is_responses:
         # Ask the host to report its own token counts. Without this a streamed request is
         # unmetered, and streaming is what chat clients do by default (M6).
         upstream_payload, client_wants_usage_frame = streaming_upstream_payload(
@@ -835,16 +877,34 @@ async def _proxy(
                 }
 
             usage = body.get("usage") if isinstance(body, dict) else None
+            totals = response_usage(usage) if is_responses else None
             if response.is_success and isinstance(body, dict):
-                plane.record_usage(principal, deployment, body, streamed=False)
+                if not is_responses or totals is not None:
+                    plane.record_usage(
+                        principal,
+                        deployment,
+                        totals.as_payload() if totals is not None else body,
+                        streamed=False,
+                    )
+                else:
+                    logger.warning(
+                        "Responses usage missing or invalid for deployment %s; no usage record written",
+                        deployment_label,
+                    )
                 body = {**body, "model": deployment.model_alias}
             plane.metrics.request_finished(
                 deployment=deployment_label,
                 account=account_label,
                 outcome="ok" if response.is_success else "upstream_error",
                 duration_seconds=time.perf_counter() - started,
-                input_tokens=int((usage or {}).get("prompt_tokens") or 0),
-                output_tokens=int((usage or {}).get("completion_tokens") or 0),
+                input_tokens=(
+                    totals.input_tokens if totals is not None
+                    else 0 if is_responses else int((usage or {}).get("prompt_tokens") or 0)
+                ),
+                output_tokens=(
+                    totals.output_tokens if totals is not None
+                    else 0 if is_responses else int((usage or {}).get("completion_tokens") or 0)
+                ),
             )
             request_recorded = True
             return JSONResponse(
@@ -876,10 +936,29 @@ async def _proxy(
     placement_released = False
     concurrency_release: asyncio.Task[None] | None = None
     request_outcome = "cancelled_streamed"
-    meter = UsageMeter(forward_usage_frame=client_wants_usage_frame)
+    meter = UsageMeter(
+        forward_usage_frame=client_wants_usage_frame or is_responses, responses=is_responses
+    )
     #: Whether a host accepted the request. Usage is only trusted from an accepted stream, which
     #: is the same rule the non-streaming path applies with ``response.is_success``.
     upstream_ok = False
+    # Responses must see the host's initial HTTP status before this gateway sends
+    # response-start. Keep its opened connection owned by the same cleanup that
+    # releases account/placement leases, including disconnect before iteration.
+    responses_upstream: httpx.Response | None = None
+    responses_backend: Backend | None = None
+    responses_attempt_outcome = "cancelled"
+    responses_close_task: asyncio.Task[None] | None = None
+
+    async def close_responses_upstream() -> None:
+        try:
+            if responses_upstream is not None:
+                await responses_upstream.aclose()
+        finally:
+            if responses_backend is not None:
+                _release_backend(
+                    plane, pool, responses_backend, deployment_label, responses_attempt_outcome
+                )
 
     async def cleanup_stream() -> None:
         """Account once and release both leases, even if disconnect cancellation interrupts.
@@ -890,6 +969,7 @@ async def _proxy(
         the same task without duplicating usage, metrics, or decrementing the limiter twice.
         """
         nonlocal cleanup_accounted, cleanup_error, placement_released, concurrency_release
+        nonlocal responses_close_task
         if not cleanup_accounted:
             # Only from a stream the host accepted, which is the rule the non-streaming path
             # applies with response.is_success. The meter itself withholds usage it cannot vouch
@@ -929,9 +1009,107 @@ async def _proxy(
             concurrency_release = asyncio.create_task(
                 plane.limits.release(admission)
             )
+        if responses_backend is not None and responses_close_task is None:
+            responses_close_task = asyncio.create_task(close_responses_upstream())
         await asyncio.shield(concurrency_release)
+        if responses_close_task is not None:
+            await asyncio.shield(responses_close_task)
         if cleanup_error is not None:
             raise cleanup_error
+
+    if is_responses:
+        tried: set[str] = set()
+        max_attempts = min(plane.settings.backend_max_attempts, len(pool))
+        try:
+            for _ in range(max_attempts):
+                backend = pool.select(exclude=tried, session_key=session_key)
+                if backend is None:
+                    break
+                _acquire_backend(plane, pool, backend, deployment_label)
+                responses_backend = backend
+                try:
+                    upstream_request = plane.client.build_request(
+                        "POST", f"{backend.url}{upstream_path}", json=upstream_payload,
+                        headers=headers, timeout=plane.settings.upstream_timeout_seconds,
+                    )
+                    responses_upstream = await plane.client.send(upstream_request, stream=True)
+                except httpx.HTTPError as exc:
+                    logger.warning("backend %s Responses connection failed: %s", backend.backend_id, exc)
+                    _record_backend_failure(plane, pool, backend, deployment_label)
+                    _release_backend(plane, pool, backend, deployment_label, "transport_error")
+                    responses_backend = None
+                    if _safe_to_retry_transport_failure(exc):
+                        tried.add(backend.backend_id)
+                        continue
+                    raise UpstreamUnavailable(
+                        "upstream_unavailable",
+                        "The model host connection failed after the request may have started",
+                    ) from exc
+
+                if not responses_upstream.is_success:
+                    if responses_upstream.status_code >= 500:
+                        _record_backend_failure(plane, pool, backend, deployment_label)
+                    else:
+                        pool.health.record_success(backend)
+                        _sync_backend_health(plane, pool, deployment_label)
+                    responses_attempt_outcome = "upstream_error"
+                    request_outcome = "upstream_error_streamed"
+                    try:
+                        body = await _read_upstream_error(responses_upstream)
+                    except httpx.HTTPError as exc:
+                        responses_attempt_outcome = "transport_error"
+                        raise UpstreamUnavailable(
+                            "upstream_unavailable", "The model host rejection could not be read"
+                        ) from exc
+                    status_code = responses_upstream.status_code
+                    await cleanup_stream()
+                    return JSONResponse(status_code=status_code, content=body, headers=routing_headers)
+
+                upstream_ok = True
+                break
+            else:
+                responses_upstream = None
+
+            if responses_upstream is None:
+                request_outcome = "upstream_error_streamed"
+                raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
+        except BaseException:
+            await cleanup_stream()
+            raise
+
+        async def responses_stream() -> AsyncIterator[bytes]:
+            nonlocal request_outcome, responses_attempt_outcome
+            # The connection and backend are acquired before response-start; this
+            # iterator never retries once the host has accepted the inference.
+            assert responses_upstream is not None and responses_backend is not None
+            try:
+                async for chunk in responses_upstream.aiter_bytes():
+                    forward = meter.feed(chunk)
+                    if forward:
+                        yield forward
+                trailing = meter.finish(complete=True)
+                if trailing:
+                    yield trailing
+                pool.health.record_success(responses_backend)
+                _sync_backend_health(plane, pool, deployment_label)
+                responses_attempt_outcome = "upstream_error" if meter.response_failed else "ok"
+                request_outcome = "upstream_error_streamed" if meter.response_failed else "ok_streamed"
+            except httpx.HTTPError as exc:
+                logger.warning("backend %s Responses stream failed: %s", responses_backend.backend_id, exc)
+                _record_backend_failure(plane, pool, responses_backend, deployment_label)
+                responses_attempt_outcome = "transport_error"
+                request_outcome = "upstream_error_streamed"
+                trailing = meter.finish(complete=False)
+                if trailing:
+                    yield trailing
+                yield _stream_failure_event(True)
+            finally:
+                await cleanup_stream()
+
+        return _CleanupStreamingResponse(
+            responses_stream(), cleanup=cleanup_stream,
+            headers={**routing_headers, "x-accel-buffering": "no"},
+        )
 
     async def stream() -> AsyncIterator[bytes]:
         nonlocal request_outcome, upstream_ok
@@ -1006,7 +1184,7 @@ async def _proxy(
                         trailing = meter.finish(complete=False)
                         if trailing:
                             yield trailing
-                        yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
+                        yield _stream_failure_event(is_responses)
                         return
                 finally:
                     _release_backend(
@@ -1022,12 +1200,34 @@ async def _proxy(
                     continue
 
             request_outcome = "upstream_error_streamed"
-            yield b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
+            yield _stream_failure_event(is_responses)
         finally:
             await cleanup_stream()
 
     # Usage is recorded in cleanup_stream, once the stream has actually reported it.
     return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream, headers=routing_headers)
+
+
+def _stream_failure_event(responses: bool) -> bytes:
+    if responses:
+        return (
+            b'event: error\ndata: {"type":"error","code":"upstream_unavailable",'
+            b'"message":"The model host stream could not complete"}\n\n'
+        )
+    return b'data: {"error":{"code":"upstream_unavailable"}}\n\n'
+
+
+async def _read_upstream_error(response: httpx.Response) -> Any:
+    """Preserve a host rejection without letting an error body buffer indefinitely."""
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(body) + len(chunk) > (1 << 20):
+            return {"error": {"code": "upstream_invalid_response", "message": "Oversized error reply"}}
+        body.extend(chunk)
+    try:
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return {"error": {"code": "upstream_invalid_response", "message": "Non-JSON error reply"}}
 
 
 #: Form fields never taken from the caller. ``model`` is replaced with the deployment's
@@ -1306,6 +1506,10 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
     @router.post(COMPLETIONS_PATH, summary="Text completion")
     async def completions(request: Request):
         return await _proxy(plane, request, COMPLETIONS_PATH)
+
+    @router.post(RESPONSES_PATH, summary="Create a stateless OpenAI Response")
+    async def responses(request: Request):
+        return await _proxy(plane, request, RESPONSES_PATH)
 
     @router.post(TRANSCRIPTIONS_PATH, summary="Transcribe audio to text")
     async def transcriptions(request: Request):

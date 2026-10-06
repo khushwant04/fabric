@@ -66,6 +66,7 @@ manages it.
 | Key cache seeded from a local file | Implemented |
 | Client ownership headers stripped before proxying | Implemented |
 | OpenAI-compatible chat and text completions, streaming | Implemented |
+| Stateless Responses JSON/SSE and input/output usage | Implemented in source; requires an updated data-plane image and a supporting model host |
 | Customer-facing model alias in replies | Implemented |
 | Separate administrative listener | Implemented |
 | Durable bounded usage spool with lease/ack export | Implemented |
@@ -147,6 +148,7 @@ inference listener
   GET  /v1/models
   POST /v1/chat/completions
   POST /v1/completions
+  POST /v1/responses
 
 administrative listener
   GET  /healthz

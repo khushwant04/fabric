@@ -1398,6 +1398,14 @@
       "RuntimeSpec": {
         "additionalProperties": false,
         "properties": {
+          "enable_auto_tool_choice": {
+            "anyOf": [
+              { "type": "boolean" },
+              { "type": "null" }
+            ],
+            "default": null,
+            "title": "Enable Auto Tool Choice"
+          },
           "execution": {
             "anyOf": [
               {
@@ -1478,6 +1486,27 @@
             ],
             "title": "Strategy",
             "type": "string"
+          },
+          "tool_call_parser": {
+            "anyOf": [
+              {
+                "enum": [
+                  "deepseek_v3", "deepseek_v31", "deepseek_v32", "deepseek_v4",
+                  "cohere_command3", "cohere_command4", "ernie45", "glm45", "glm47",
+                  "granite-20b-fc", "granite", "granite4", "hermes", "poolside_v1",
+                  "hunyuan_a13b", "hy_v3", "internlm", "jamba", "lfm2", "kimi_k2",
+                  "llama3_json", "llama4_json", "llama4_pythonic", "longcat", "mimo",
+                  "minimax_m2", "minimax_m3", "minicpm5", "mistral", "olmo3", "openai",
+                  "phi4_mini_json", "pythonic", "qwen3_coder", "qwen3_xml", "seed_oss",
+                  "step3", "step3p5", "inkling", "xlam", "gigachat3", "functiongemma",
+                  "gemma4", "apertus"
+                ],
+                "type": "string"
+              },
+              { "type": "null" }
+            ],
+            "default": null,
+            "title": "Tool Call Parser"
           }
         },
         "required": [

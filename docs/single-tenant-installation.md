@@ -4,6 +4,11 @@ Install the control plane and console in one Kubernetes cluster, then install a 
 in each Kubernetes cluster that will serve models. The same workflow works for an AKS
 GPU pool or a single-node k3s cluster with a usable NVIDIA GPU.
 
+For an Azure Ubuntu 22.04 VM with two A10-24Q devices, follow the
+[A10 k3s preparation and enrollment guide](a10-k3s-installation.md). It provides
+driver cleanup, NVIDIA runtime installation, GPU discovery, and a CUDA 12.8
+model-host image suitable for the pinned Azure GRID driver.
+
 The stamp enrolls its infrastructure before any model is deployed. Creating a model
 from the dashboard records the desired model and requests a placement; the stamp agent
 receives that placement, and its operator creates the model-host Deployment and Service.
@@ -277,7 +282,18 @@ console:
 
 Use your controller's actual class and annotations; k3s commonly ships Traefik.
 `console.controlPlaneUrl` defaults to the release's internal Service. The console
-uses ready placement endpoints automatically only within the Helm-configured
+fills stamp enrollment commands from the public TLS control-plane ingress. Set
+`console.publicControlPlaneUrl` explicitly when stamps use a different HTTPS
+address. Outside Helm, set `FABRIC_CONTROL_PLANE_PUBLIC_URL` on the console;
+the issuer is detected from the authenticated control-plane token exchange.
+The **Enroll stamp** dialog shows VM/k3s setup above a Helm chart reference,
+then generates a copyable Helm command with the single-use enrollment token.
+For an existing cluster, select its explicit kubectl context instead of VM setup.
+The token clears when the dialog closes; Helm stores it in the release and
+enrollment Secret. The VM setup script requires working NVIDIA drivers before
+`--nvidia` can add container support and measured GPU capacity.
+
+The console uses ready placement endpoints automatically only within the Helm-configured
 `console.inference.allowedDomains`. Restrict these suffixes to DNS zones you control.
 For one externally managed gateway, set `console.inferenceUrl` instead. Additional
 approved exact origins can be listed in `console.inferenceAllowedOrigins`.
@@ -475,6 +491,98 @@ or approved ready stamp endpoint automatically.
 kubectl --context "$FABRIC_DP_CONTEXT" -n fabric-stamp get fabricmodeldeployments
 kubectl --context "$FABRIC_DP_CONTEXT" -n fabric-stamp get deployments,pods
 ```
+
+### Configure automatic tool calling
+
+The managed vLLM 0.26 runtime needs both `--enable-auto-tool-choice` and a parser
+matching the model's native chat template. Fabric carries these settings from the
+deployment API through the agent's `FabricModelDeployment` to the model-host arguments.
+The dashboard's serving settings offer **Model default**, **Enabled**, and **Disabled**;
+an optional parser can be supplied for another approved tool-capable release.
+
+The built-in profiles use exact repository ids:
+
+| Model release | Native parser |
+|---|---|
+| `Qwen/Qwen3-VL-4B-Instruct` | `hermes` |
+| `Qwen/Qwen2.5-Coder-3B-Instruct` | `hermes` |
+| `Qwen/Qwen3.5-4B` | `qwen3_xml` |
+
+Other releases keep automatic tool choice disabled unless a parser is explicitly
+declared for the deployment or its exact repository is configured on the stamp.
+Explicit **Disabled** overrides either default. Explicit **Enabled** without a parser
+requires a known model profile; otherwise the API rejects it. Incompatible parser
+choices for known releases are rejected. `qwen3_coder` is also accepted for Qwen3.5
+because it names the same parser class as `qwen3_xml` in vLLM 0.26. Keep each model's
+native chat template; a replacement text-only template can break vision and tool history.
+
+Use model-scoped Helm configuration for another approved model:
+
+```yaml
+operator:
+  managedModelHost:
+    toolCalling:
+      modelDefaults: true
+      modelParsers:
+        your-org/tool-model: hermes
+```
+
+Set `modelDefaults: false` to disable automatic built-in profiles for deployments
+that express no opinion. A model-scoped chart entry or an explicit deployment setting
+still enables its selected parser. The chart never applies one global parser to all hosts.
+
+For an existing deployment, `PATCH /v1/accounts/{account_id}/deployments/{deployment_id}`
+replaces the **entire** desired spec. Read its current `desired_spec`, retain the release,
+replicas, resources, capabilities and other runtime settings, then update these fields:
+
+```json
+{
+  "spec": {
+    "runtime": {
+      "release": "Qwen/Qwen3-VL-4B-Instruct",
+      "kernel_mode": "standard",
+      "max_model_len": 4096,
+      "max_num_seqs": 8,
+      "gpu_memory_utilization": 0.85,
+      "execution": "eager",
+      "enable_auto_tool_choice": true,
+      "tool_call_parser": "hermes"
+    },
+    "replicas": 1,
+    "resources": {"gpu_count": 1, "gpu_class": "t4"},
+    "capabilities": {"vision": true}
+  }
+}
+```
+
+Same-release flag changes restart the existing model process with its configured
+`Recreate` strategy, so that model has a startup outage. Status remains unready until
+the Kubernetes controller observes the new workload generation. A different release's
+active host stays untouched during candidate preparation and drain.
+
+Install the updated control-plane and agent/operator images and upgrade the stamp's
+CRD before using the new API fields; a Helm values change alone cannot add flags to an
+older operator binary. Helm does not automatically update a CRD stored in a chart's
+`crds/` directory; this chart renders its CRD as a template when `operator.installCRD`
+is enabled so the upgrade carries these fields.
+
+On 2026-10-06 the existing AKS Qwen3-VL host received a targeted configuration update
+adding its two Hermes flags, without an image build. Its restarted vLLM 0.26 host
+returned a parsed `get_weather` call with `tool_choice: "auto"`. That update survives
+ordinary reconciles by the older operator, but is lost if the host is deleted and
+recreated before the updated operator is installed.
+
+The same `computer-use` deployment now declares `max_model_len: 32768` and
+`gpu_memory_utilization: 0.9` in control-plane desired state. Its T4 previously
+provided 32,240 KV-cache tokens at 0.85, below the requested context; at 0.9 it
+reports 37,904 cache tokens. This accommodates one full 32,768-token sequence,
+including generated output. The configured eight concurrent sequences share that
+cache and cannot all hold a full-length context at once.
+
+Profile references: [vLLM 0.26 tool calling](https://docs.vllm.ai/en/v0.26.0/features/tool_calling/),
+[vLLM parser registry](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/tool_parsers/__init__.py),
+[Qwen3-VL native template](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct/blob/ebb281ec70b05090aa6165b016eac8ec08e71b17/tokenizer_config.json),
+[Qwen3.5 native template](https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/chat_template.jinja).
 
 A single GPU k3s node can run the initial one-replica model when the hardware and
 memory requirements fit. A release update prepares its candidate beside the serving

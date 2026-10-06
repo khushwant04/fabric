@@ -284,6 +284,8 @@ async def test_runtime_settings_are_stored_and_reach_desired_state(
                     "max_num_seqs": 16,
                     "gpu_memory_utilization": 0.85,
                     "execution": "cuda_graph",
+                    "enable_auto_tool_choice": True,
+                    "tool_call_parser": "hermes",
                 }
             },
         },
@@ -295,6 +297,8 @@ async def test_runtime_settings_are_stored_and_reach_desired_state(
     assert runtime["max_num_seqs"] == 16
     assert runtime["gpu_memory_utilization"] == 0.85
     assert runtime["execution"] == "cuda_graph"
+    assert runtime["enable_auto_tool_choice"] is True
+    assert runtime["tool_call_parser"] == "hermes"
 
     # The agent reads these out of desired state, so they have to survive the trip.
     deployment_id = created.json()["id"]
@@ -315,6 +319,8 @@ async def test_runtime_settings_are_stored_and_reach_desired_state(
     assignment = desired.json()["deployments"][0]
     assert assignment["spec"]["runtime"]["max_model_len"] == 448
     assert assignment["spec"]["runtime"]["execution"] == "cuda_graph"
+    assert assignment["spec"]["runtime"]["enable_auto_tool_choice"] is True
+    assert assignment["spec"]["runtime"]["tool_call_parser"] == "hermes"
 
 
 async def test_runtime_settings_are_optional(client: AsyncClient) -> None:

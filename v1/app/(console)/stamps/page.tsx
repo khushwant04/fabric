@@ -1,6 +1,6 @@
 import { CpuIcon, GaugeIcon, RadioIcon } from "lucide-react"
 
-import { EnrollmentTokenDialog } from "@/components/console/resource-dialogs"
+import { EnrollmentTokenDialog } from "@/components/console/stamp-enrollment"
 import { LiveRefresh } from "@/components/console/live-refresh"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { StatusBadge } from "@/components/console/status-badge"
@@ -14,6 +14,7 @@ import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
 import { publicGatewayBase } from "@/lib/fabric/inference-endpoints"
 import type { Stamp } from "@/lib/fabric/types"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
+import { getStampEnrollmentConfig } from "@/lib/fabric/stamp-enrollment-config"
 import { formatRelative, shortId } from "@/lib/format"
 
 export default async function StampsPage() {
@@ -30,7 +31,7 @@ export default async function StampsPage() {
   const incompleteCapacity = activeStamps.some((item) => gpuCapacity(item.capabilities.allocatable_gpus) === null || gpuCapacity(item.capabilities.requested_gpus) === null)
   const canWrite = hasScope(context, "stamps:write")
 
-  return <PageContainer><PageHeader title="Inference stamps" description="Connect and monitor the infrastructure that reconciles Fabric deployments." actions={<EnrollmentTokenDialog disabled={!canWrite} />} />
+  return <PageContainer><PageHeader title="Inference stamps" description="Connect and monitor the infrastructure that reconciles Fabric deployments." actions={<EnrollmentTokenDialog disabled={!canWrite} config={getStampEnrollmentConfig()} />} />
     <LiveRefresh checkedAt={checkedAt} error={error} />
     {error ? <Alert variant="destructive"><CpuIcon /><AlertTitle>Unable to load stamps</AlertTitle><AlertDescription>Refresh to try again. Fleet totals are unavailable.</AlertDescription></Alert> : null}
     <div className="grid gap-5 sm:grid-cols-3">{[{ label: "Registered stamps", value: error ? "Unavailable" : stamps.length, icon: CpuIcon }, { label: "Active · recent heartbeat", value: error ? "Unavailable" : active, icon: RadioIcon }, { label: "Allocatable GPUs · active stamps", value: error || incompleteCapacity ? "Unavailable" : allocatable, icon: GaugeIcon }].map((item) => <Card key={item.label}><CardHeader><CardDescription className="flex items-center justify-between">{item.label}<item.icon className="size-4" /></CardDescription><CardTitle className="text-2xl">{item.value}</CardTitle></CardHeader></Card>)}</div>

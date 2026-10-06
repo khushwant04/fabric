@@ -284,6 +284,25 @@ func TestRuntimeSettingsReachTheDeclaredResource(t *testing.T) {
 	}
 }
 
+func TestToolCallingTriStateReachesTheDeclaredResource(t *testing.T) {
+	disabled := false
+	publisher := NewPublisher(nil, namespace, stampID)
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID: "dep-a", AccountID: "acct-a", ModelAlias: "alpha-model",
+		EnableAutoToolChoice: &disabled,
+	})
+	encoded, _ := json.Marshal(declared.Spec)
+	if !strings.Contains(string(encoded), `"enableAutoToolChoice":false`) {
+		t.Fatalf("explicit disabled was dropped before CRD delivery: %s", encoded)
+	}
+	declared = publisher.resource("fabric-dep-a", state.Deployment{ToolCallParser: "qwen3_xml"})
+	encoded, _ = json.Marshal(declared.Spec)
+	if !strings.Contains(string(encoded), `"toolCallParser":"qwen3_xml"`) ||
+		strings.Contains(string(encoded), "enableAutoToolChoice") {
+		t.Fatalf("parser or unset boolean was serialized incorrectly: %s", encoded)
+	}
+}
+
 func TestUndeclaredRuntimeSettingsFallBackToTheStamp(t *testing.T) {
 	publisher := NewPublisher(nil, namespace, stampID)
 	declared := publisher.resource("fabric-dep-a", state.Deployment{

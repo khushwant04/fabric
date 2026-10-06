@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -147,10 +148,10 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 				if readyReplicas < 1 {
 					readyReplicas = 1
 				}
-				existing.Status = &struct {
-					ReadyReplicas int `json:"readyReplicas,omitempty"`
-					Replicas      int `json:"replicas,omitempty"`
-				}{ReadyReplicas: readyReplicas, Replicas: readyReplicas}
+				existing.Status = &deploymentStatus{
+					ObservedGeneration: existing.Metadata.Generation,
+					ReadyReplicas: readyReplicas, Replicas: readyReplicas, UpdatedReplicas: readyReplicas,
+				}
 			}
 			writeJSON(w, 200, existing)
 		case http.MethodPatch:
@@ -172,6 +173,9 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 			body, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(body, &patch)
 			if patch.Spec != nil {
+				if !reflect.DeepEqual(existing.Spec, patch.Spec) {
+					existing.Metadata.Generation++
+				}
 				existing.Spec = patch.Spec
 			}
 			if patch.Metadata.Labels != nil {
@@ -931,10 +935,7 @@ func TestCandidateRolloutPublishesThenAcknowledgesDrainBeforeDeletingActive(t *t
 	}
 
 	// Full candidate readiness produces an explicit old=0/new=1 cutover revision.
-	state.deploys[candidate].Status = &struct {
-		ReadyReplicas int `json:"readyReplicas,omitempty"`
-		Replicas      int `json:"replicas,omitempty"`
-	}{ReadyReplicas: 1, Replicas: 1}
+	state.deploys[candidate].Status = &deploymentStatus{ReadyReplicas: 1, Replicas: 1, UpdatedReplicas: 1}
 	state.endpoints[candidate] = []endpointAddress{{Address: "10.0.0.2", Ready: true, PodUID: "new"}}
 	if _, err := subject.ReconcileOnce(context.Background()); err != nil {
 		t.Fatalf("publish cutover: %v", err)
@@ -1081,7 +1082,7 @@ func containerGPULimit(t *testing.T, host *deployment) string {
 			Spec struct {
 				Containers []struct {
 					Resources struct {
-						Limits map[string]json.Number `json:"limits"`
+						Limits map[string]string `json:"limits"`
 					} `json:"resources"`
 				} `json:"containers"`
 			} `json:"spec"`
@@ -1097,7 +1098,7 @@ func containerGPULimit(t *testing.T, host *deployment) string {
 	if !present {
 		t.Fatalf("no GPU limit in %s", encoded)
 	}
-	return limit.String()
+	return limit
 }
 
 func TestTheDeploymentsGPUCountReachesTheContainer(t *testing.T) {
@@ -1232,6 +1233,218 @@ func TestPerDeploymentRuntimeSettingsReachTheModelHost(t *testing.T) {
 	// model and the operator derives it from the profiled hardware.
 	if !strings.Contains(body, "--dtype=bfloat16") {
 		t.Fatalf("host spec lost the stamp's dtype: %s", body)
+	}
+}
+
+func TestToolCallingUsesTheExactNativeModelFormat(t *testing.T) {
+	enabled, disabled := true, false
+	for _, test := range []struct {
+		name     string
+		release  string
+		enabled  *bool
+		parser   string
+		expected string
+	}{
+		{name: "qwen vision", release: "Qwen/Qwen3-VL-4B-Instruct", expected: "hermes"},
+		{name: "qwen coder", release: "Qwen/Qwen2.5-Coder-3B-Instruct", expected: "hermes"},
+		{name: "qwen hybrid", release: "Qwen/Qwen3.5-4B", expected: "qwen3_xml"},
+		{name: "unknown", release: "vendor/ocr"},
+		{name: "no prefix guessing", release: "Qwen/unknown-model"},
+		{name: "explicit disabled", release: "Qwen/Qwen3-VL-4B-Instruct", enabled: &disabled},
+		{name: "explicit enabled", release: "Qwen/Qwen3-VL-4B-Instruct", enabled: &enabled, expected: "hermes"},
+		{name: "explicit parser", release: "vendor/tool-model", parser: "hermes", expected: "hermes"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := resource("alpha", "dep-a", "acct-a", "customer-alias", 1)
+			item.Spec.UpstreamModel = test.release
+			item.Spec.EnableAutoToolChoice = test.enabled
+			item.Spec.ToolCallParser = test.parser
+			r := hostReconciler(nil, testHost())
+			encoded, _ := json.Marshal(r.desiredHost(item).Spec)
+			body := string(encoded)
+			if test.expected == "" {
+				if strings.Contains(body, "--enable-auto-tool-choice") || strings.Contains(body, "--tool-call-parser") {
+					t.Fatalf("unexpected automatic tool calling: %s", body)
+				}
+			} else if !strings.Contains(body, "--enable-auto-tool-choice") ||
+				!strings.Contains(body, "--tool-call-parser="+test.expected) {
+				t.Fatalf("native parser %s did not reach actual container args: %s", test.expected, body)
+			}
+			if strings.Contains(body, "--chat-template") {
+				t.Fatal("native vision and tool-history template was overridden")
+			}
+		})
+	}
+}
+
+func TestSameReleaseToolSettingsUpdateTheExistingHostWithoutStaleReady(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "customer-alias", 1)
+	item.Spec.UpstreamModel = "Qwen/Qwen3-VL-4B-Instruct"
+	disabled := false
+	item.Spec.EnableAutoToolChoice = &disabled
+	state, client := newHostServer(t, item)
+	state.readyAfter = 1
+	r := hostReconciler(client, testHost())
+	for i := 0; i < 2; i++ {
+		if _, err := r.ReconcileOnce(context.Background()); err != nil {
+			t.Fatalf("initial reconcile: %v", err)
+		}
+	}
+	state.readyAfter = 0
+	state.resources[item.Metadata.Name].Spec.EnableAutoToolChoice = nil
+	state.resources[item.Metadata.Name].Metadata.Generation++
+	state.patched = nil
+	if _, err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("runtime update: %v", err)
+	}
+	host := state.deploys[hostName(item)]
+	encoded, _ := json.Marshal(host.Spec)
+	if !strings.Contains(string(encoded), "--tool-call-parser=hermes") {
+		t.Fatalf("existing host kept old args: %s", encoded)
+	}
+	if got := state.resources[item.Metadata.Name].Status; got.ReadyReplicas == nil || *got.ReadyReplicas != 0 {
+		t.Fatalf("old generation readiness acknowledged new runtime args: %+v", got)
+	}
+	host.Status.ObservedGeneration = host.Metadata.Generation
+	host.Status.UpdatedReplicas = 0
+	if observed, err := r.observeNamedWorkload(context.Background(), item, hostName(item)); err != nil || observed.Ready != 0 {
+		t.Fatalf("old replicas were counted after generation observation: %+v, %v", observed, err)
+	}
+	host.Status.UpdatedReplicas = 1
+	host.Status.ReadyReplicas = 1
+	state.patched = nil
+	if _, err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("ready observation: %v", err)
+	}
+	if len(state.patched) != 0 {
+		t.Fatalf("unchanged managed fields were patched again: %v", state.patched)
+	}
+	if got := state.resources[item.Metadata.Name].Status; got.ReadyReplicas == nil || *got.ReadyReplicas != 1 {
+		t.Fatalf("current runtime did not become ready: %+v", got)
+	}
+}
+
+func TestInitialPreparingHostAcceptsSameReleaseRuntimeRepair(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "customer-alias", 1)
+	item.Spec.UpstreamModel = "Qwen/Qwen3-VL-4B-Instruct"
+	item.Spec.MaxModelLen = 131072
+	state, client := newHostServer(t, item)
+	r := hostReconciler(client, testHost())
+	if _, err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("initial create: %v", err)
+	}
+	rollout := state.resources[item.Metadata.Name].Status.Rollout
+	if rollout.Phase != rolloutPhasePreparing || rollout.CandidateWorkload != "" {
+		t.Fatalf("expected an initial host awaiting readiness: %+v", rollout)
+	}
+	state.resources[item.Metadata.Name].Spec.MaxModelLen = 4096
+	state.resources[item.Metadata.Name].Metadata.Generation++
+	state.patched = nil
+	if _, err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("repair initial startup: %v", err)
+	}
+	encoded, _ := json.Marshal(state.deploys[hostName(item)].Spec)
+	if !strings.Contains(string(encoded), "--max-model-len=4096") ||
+		strings.Contains(string(encoded), "--max-model-len=131072") {
+		t.Fatalf("initial Preparing host kept the failing context: %s", encoded)
+	}
+	if len(state.deploys) != 1 {
+		t.Fatalf("same-release repair created a second model workload: %v", state.deploys)
+	}
+	status := state.resources[item.Metadata.Name].Status
+	if status.ReadyReplicas == nil || *status.ReadyReplicas != 0 {
+		t.Fatalf("repair was prematurely reported ready: %+v", status)
+	}
+	state.readyAfter = 1
+	if _, err := r.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("observe repaired host readiness: %v", err)
+	}
+	if status := state.resources[item.Metadata.Name].Status; status.Phase != "ready" {
+		t.Fatalf("repaired initial host did not become ready: %+v", status)
+	}
+}
+
+func TestManagedWorkloadOverlayPreservesAdmissionFields(t *testing.T) {
+	current := map[string]any{"template": map[string]any{"spec": map[string]any{
+		"containers": []any{
+			map[string]any{"name": "model-host", "args": []any{"old"}, "terminationMessagePath": "/dev/termination-log",
+				"env": []any{map[string]any{"name": "FABRIC_KERNEL", "value": "1"}, map[string]any{"name": "ADMISSION_VALUE", "value": "keep"}}},
+			map[string]any{"name": "injected-sidecar", "image": "policy-sidecar"},
+		},
+	}}}
+	desired := map[string]any{"template": map[string]any{"spec": map[string]any{
+		"containers": []any{map[string]any{"name": "model-host", "args": []any{"new"}}},
+	}}}
+	merged, changed := managedWorkloadSpec(current, desired)
+	if !changed {
+		t.Fatal("changed container args were ignored")
+	}
+	containers := merged["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	if len(containers) != 2 || containers[0].(map[string]any)["terminationMessagePath"] != "/dev/termination-log" {
+		t.Fatalf("admission fields were discarded: %+v", merged)
+	}
+	env := containers[0].(map[string]any)["env"].([]any)
+	if len(env) != 1 || env[0].(map[string]any)["name"] != "ADMISSION_VALUE" {
+		t.Fatalf("removed kernel mode or admission environment was not respected: %+v", env)
+	}
+	if _, changed := managedWorkloadSpec(merged, desired); changed {
+		t.Fatal("unchanged declaration produced another patch")
+	}
+}
+
+func TestGPUCountUpdateReplacesDefaultedRequestAndKeepsOtherResources(t *testing.T) {
+	item := resource("alpha", "dep-a", "acct-a", "customer-alias", 1)
+	item.Spec.GPUCount = 2
+	r := hostReconciler(nil, testHost())
+	desired := r.desiredHost(item).Spec
+	current := map[string]any{"template": map[string]any{"spec": map[string]any{
+		"containers": []any{map[string]any{
+			"name": "model-host", "image": testHost().Image,
+			"resources": map[string]any{
+				"limits": map[string]any{"nvidia.com/gpu": "1", "memory": "8Gi"},
+				"requests": map[string]any{"nvidia.com/gpu": "1", "cpu": "1"},
+			},
+		}},
+	}}}
+	merged, changed := managedWorkloadSpec(current, desired)
+	if !changed {
+		t.Fatal("GPU count change was ignored")
+	}
+	containers := merged["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	resources := containers[0].(map[string]any)["resources"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	if limits["nvidia.com/gpu"] != "2" || requests["nvidia.com/gpu"] != "2" {
+		t.Fatalf("GPU request and limit differ after update: %+v", resources)
+	}
+	if limits["memory"] != "8Gi" || requests["cpu"] != "1" {
+		t.Fatalf("other resource reservations were discarded: %+v", resources)
+	}
+	if _, changed := managedWorkloadSpec(merged, desired); changed {
+		t.Fatal("canonical GPU quantity caused a redundant patch")
+	}
+}
+
+func TestToolCallingInstallationProfilesAreModelScoped(t *testing.T) {
+	parsers, err := ParseToolCallParsers([]string{"vendor/approved=hermes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := testHost()
+	host.DisableToolCallingModelDefaults = true
+	host.ToolCallParsers = parsers
+	item := resource("alpha", "dep-a", "acct-a", "customer-alias", 1)
+	item.Spec.UpstreamModel = "vendor/approved"
+	r := hostReconciler(nil, host)
+	if effective := r.hostSettings(item); !effective.EnableAutoToolChoice || effective.ToolCallParser != "hermes" {
+		t.Fatalf("exact installation profile was ignored: %+v", effective)
+	}
+	item.Spec.UpstreamModel = "vendor/other"
+	if r.hostSettings(item).EnableAutoToolChoice {
+		t.Fatal("a model profile was applied globally")
+	}
+	if _, err := ParseToolCallParsers([]string{"Qwen/Qwen3.5-4B=hermes"}); err == nil {
+		t.Fatal("incompatible Qwen3.5 parser was accepted")
 	}
 }
 

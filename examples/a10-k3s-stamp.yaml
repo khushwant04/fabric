@@ -1,0 +1,60 @@
+# One Azure Ubuntu 22.04 k3s node with two A10-24Q devices.
+# Combine with the published Fabric stamp image overlays; this file holds no token.
+# Match enroll-a10-stamp.sh: Helm release a10-stamp, namespace fabric-stamp.
+fullnameOverride: fabric-a10
+controlPlane:
+  url: https://control.your-company.tld
+  # Set jwtIssuer if the control plane's actual JWT issuer differs from this URL.
+enrollment:
+  existingSecret: fabric-stamp-enrollment
+  existingSecretKey: enrollment-token
+stamp:
+  name: a10-k3s
+  orchestrator: k3s
+  measureCapacity: true
+  gpus: 2
+operator:
+  enabled: true
+  installCRD: true
+  managedModelHost:
+    # v0.11.0, linux/amd64, CUDA 12.8.1. No Fabric fused-kernel overlay.
+    image: vllm/vllm-openai@sha256:d8d39b59e909d2378ac4feeb191f7e7b6f1342477dc66b7c47cec89e9985ad8a
+    gpus: 1 # Dashboard gpu_count=2 overrides this for a two-GPU replica.
+    dtype: bfloat16
+    maxModelLen: 4096
+    maxNumSeqs: 2
+    gpuMemoryUtilization: "0.85"
+    enforceEager: true
+    textOnly: false
+    # These defaults emit no new operator CLI flags on older published releases.
+    toolCalling:
+      modelDefaults: true
+      modelParsers: {}
+    cache:
+      mode: hostPath
+      hostPath: /var/lib/fabric/model-cache
+    kernel:
+      blockV: 0
+      numWarps: 0
+gpu:
+  nodeSelector:
+    accelerator: nvidia
+  runtimeClassName: nvidia
+  spreadAcrossNodes: true
+persistence:
+  enabled: true
+  size: 128Mi
+  storageClass: local-path
+usageSpool:
+  enabled: true
+  size: 256Mi
+  storageClass: local-path
+# Configure DNS, ingress, and a TLS secret or cert-manager issuer before enabling.
+exposure:
+  enabled: false
+  # host: a10.inference.your-company.tld
+  # className: traefik
+  # tls:
+  #   issuer:
+  #     name: letsencrypt
+  #     kind: ClusterIssuer

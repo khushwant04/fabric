@@ -140,6 +140,8 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			// profiled rather than trusting the declaration.
 			GPUMemoryUtilization: deployment.GPUMemoryUtilization,
 			Execution:            deployment.Execution,
+			EnableAutoToolChoice:  deployment.EnableAutoToolChoice,
+			ToolCallParser:        deployment.ToolCallParser,
 			// Stamp-wide, carried on each resource because the operator renders the data
 			// plane's configuration from these and reads stamp state from nowhere else.
 			JWTIssuer: deployment.Verification.JWTIssuer,

@@ -1,0 +1,21 @@
+.response {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.response :global(.katex-display) {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+.response :global(.katex-display) > :global(.katex) {
+  width: max-content;
+  min-width: 100%;
+}
+
+.response [data-streamdown="image-wrapper"] {
+  max-width: 100%;
+}

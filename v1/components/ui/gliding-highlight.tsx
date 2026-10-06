@@ -13,13 +13,16 @@ type GlidingHighlightOptions = {
   selectedSelector?: string
   /** For menus that move keyboard focus with aria-activedescendant. */
   activeSelector?: string
+  /** Keep one hover track across labels and padding in a navigation container. */
+  hoverMode?: "item" | "nearest"
 }
 
-/** One background moves beneath a group's stationary interactive items. */
+/** One background moves beneath a container's stationary interactive items. */
 function useGlidingHighlight<T extends HTMLElement = HTMLDivElement>({
   itemSelector,
   selectedSelector,
   activeSelector,
+  hoverMode = "item",
 }: GlidingHighlightOptions) {
   const highlightRef = React.useRef<HTMLElement | null>(null)
   const cleanupRef = React.useRef<(() => void) | null>(null)
@@ -61,6 +64,23 @@ function useGlidingHighlight<T extends HTMLElement = HTMLDivElement>({
       const itemFrom = (target: EventTarget | null) => {
         const item = target instanceof Element ? target.closest<HTMLElement>(itemSelector) : null
         return usable(item) ? item : null
+      }
+
+      const nearestItem = (x: number, y: number) => {
+        let nearest: HTMLElement | null = null
+        let distance = Number.POSITIVE_INFINITY
+        for (const item of container.querySelectorAll<HTMLElement>(itemSelector)) {
+          if (!usable(item)) continue
+          const bounds = item.getBoundingClientRect()
+          const dx = Math.max(bounds.left - x, 0, x - bounds.right)
+          const dy = Math.max(bounds.top - y, 0, y - bounds.bottom)
+          const nextDistance = dx * dx + dy * dy
+          if (nextDistance < distance) {
+            nearest = item
+            distance = nextDistance
+          }
+        }
+        return nearest
       }
 
       const find = (selector?: string) => {
@@ -133,11 +153,22 @@ function useGlidingHighlight<T extends HTMLElement = HTMLDivElement>({
 
       const pointerOver = (event: PointerEvent) => {
         if (event.pointerType === "touch") return
-        const item = itemFrom(event.target)
+        const item = itemFrom(event.target) ?? (
+          hoverMode === "nearest" ? nearestItem(event.clientX, event.clientY) : null
+        )
         if (!item) return // Crossing padding or separators keeps the last position.
         hovered = item
         lastInput = "pointer"
         paint(item)
+      }
+      const pointerMove = (event: PointerEvent) => {
+        if (event.pointerType === "touch") return
+        const item = itemFrom(event.target) ?? nearestItem(event.clientX, event.clientY)
+        if (!item) return
+        if (hovered === item && lastInput === "pointer") return
+        hovered = item
+        lastInput = "pointer"
+        schedule()
       }
       const pointerLeave = () => {
         hovered = null
@@ -190,6 +221,7 @@ function useGlidingHighlight<T extends HTMLElement = HTMLDivElement>({
       })
       observeItems()
       container.addEventListener("pointerover", pointerOver)
+      if (hoverMode === "nearest") container.addEventListener("pointermove", pointerMove)
       container.addEventListener("pointerleave", pointerLeave)
       container.addEventListener("focusin", focusIn)
       container.addEventListener("focusout", focusOut)
@@ -205,6 +237,7 @@ function useGlidingHighlight<T extends HTMLElement = HTMLDivElement>({
         mutationObserver.disconnect()
         resizeObserver.disconnect()
         container.removeEventListener("pointerover", pointerOver)
+        if (hoverMode === "nearest") container.removeEventListener("pointermove", pointerMove)
         container.removeEventListener("pointerleave", pointerLeave)
         container.removeEventListener("focusin", focusIn)
         container.removeEventListener("focusout", focusOut)
@@ -214,7 +247,7 @@ function useGlidingHighlight<T extends HTMLElement = HTMLDivElement>({
         reducedMotion.removeEventListener("change", motionChange)
       }
     },
-    [itemSelector, selectedSelector, activeSelector]
+    [itemSelector, selectedSelector, activeSelector, hoverMode]
   )
 
   return { containerRef, highlightRef }

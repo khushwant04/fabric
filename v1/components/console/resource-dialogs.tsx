@@ -6,7 +6,6 @@ import { CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, Trash2Icon, UserPlusIcon }
 import {
   addMember,
   createApiKey,
-  createEnrollmentToken,
   createServicePrincipal,
   type ActionState,
 } from "@/app/(console)/actions"
@@ -98,50 +97,6 @@ function CopySecret({ value }: { value: string }) {
         {copied ? <CheckIcon /> : <CopyIcon />}
       </Button>
     </div>
-  )
-}
-
-export function EnrollmentTokenDialog({ disabled = false }: { disabled?: boolean }) {
-  const [state, action, pending] = useActionState(createEnrollmentToken, initialState)
-  return (
-    <Dialog>
-      <DialogTrigger render={<Button disabled={disabled}><PlusIcon /> Enroll stamp</Button>} />
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create enrollment token</DialogTitle>
-          <DialogDescription>Generate a short-lived, single-use credential for a new inference stamp.</DialogDescription>
-        </DialogHeader>
-        {state.enrollmentToken ? (
-          <FieldGroup>
-            <Alert>
-              <KeyRoundIcon />
-              <AlertTitle>Save this token now</AlertTitle>
-              <AlertDescription>It is shown once and expires {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "soon"}.</AlertDescription>
-            </Alert>
-            <CopySecret value={state.enrollmentToken} />
-          </FieldGroup>
-        ) : (
-          <form action={action} className="space-y-5">
-            <FieldGroup>
-              <Field>
-                <FieldLabel>Stamp mode</FieldLabel>
-                <Select name="mode" defaultValue="byoi">
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="byoi">Bring your own infrastructure</SelectItem></SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="expiresInMinutes">Expires in</FieldLabel>
-                <Input id="expiresInMinutes" name="expiresInMinutes" type="number" min={5} max={1440} defaultValue={60} />
-                <FieldDescription>Between 5 minutes and 24 hours.</FieldDescription>
-              </Field>
-              <ResultMessage state={state} />
-            </FieldGroup>
-            <DialogFooter><SubmitButton pending={pending}>Generate token</SubmitButton></DialogFooter>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
   )
 }
 

@@ -7,9 +7,10 @@ import uuid
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core import scopes as scope_defs
+from app.core.model_profiles import default_tool_call_parser, equivalent_tool_call_parser
 
 
 class ORMModel(BaseModel):
@@ -187,6 +188,19 @@ class ApiKeyCreatedResponse(BaseModel):
 # --- deployments ----------------------------------------------------------
 
 
+ToolCallParser = Literal[
+    "deepseek_v3", "deepseek_v31", "deepseek_v32", "deepseek_v4",
+    "cohere_command3", "cohere_command4", "ernie45", "glm45", "glm47",
+    "granite-20b-fc", "granite", "granite4", "hermes", "poolside_v1",
+    "hunyuan_a13b", "hy_v3", "internlm", "jamba", "lfm2", "kimi_k2",
+    "llama3_json", "llama4_json", "llama4_pythonic", "longcat", "mimo",
+    "minimax_m2", "minimax_m3", "minicpm5", "mistral", "olmo3", "openai",
+    "phi4_mini_json", "pythonic", "qwen3_coder", "qwen3_xml", "seed_oss",
+    "step3", "step3p5", "inkling", "xlam", "gigachat3", "functiongemma",
+    "gemma4", "apertus",
+]
+
+
 class RuntimeSpec(BaseModel):
     #: Unknown settings are refused rather than stored and ignored. A spec that quietly
     #: dropped an unsupported key would let somebody set a serving option, see it persisted
@@ -228,6 +242,34 @@ class RuntimeSpec(BaseModel):
     #: than a boolean so that "use the stamp's default" stays distinguishable from
     #: "explicitly do not capture graphs".
     execution: Literal["eager", "cuda_graph"] | None = None
+    #: Unset uses an exact, verified model profile; unsupported releases keep automatic
+    #: tool choice off. Explicit false disables it even for a known tool-capable model.
+    enable_auto_tool_choice: bool | None = None
+    #: Built-in parser in the pinned vLLM 0.26 runtime. An explicit parser enables
+    #: automatic tool choice unless it was explicitly disabled, which is invalid.
+    tool_call_parser: ToolCallParser | None = None
+
+    @model_validator(mode="after")
+    def validate_tool_calling(self) -> RuntimeSpec:
+        if self.enable_auto_tool_choice is False and self.tool_call_parser is not None:
+            raise ValueError(
+                "tool_call_parser cannot be set when automatic tool calling is disabled"
+            )
+        default = default_tool_call_parser(self.release)
+        if (
+            self.enable_auto_tool_choice is True
+            and self.tool_call_parser is None
+            and default is None
+        ):
+            raise ValueError(
+                "Automatic tool calling needs a tool_call_parser for this model release"
+            )
+        if default is not None and self.tool_call_parser is not None:
+            if equivalent_tool_call_parser(self.tool_call_parser) != default:
+                raise ValueError(
+                    f"{self.release} requires the {default} tool parser for its native chat template"
+                )
+        return self
 
 
 class ModelCapabilities(BaseModel):

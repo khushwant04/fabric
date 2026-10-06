@@ -839,6 +839,48 @@ func TestAssignmentsGoToTheSinkWhenOneIsConfigured(t *testing.T) {
 	}
 }
 
+func TestToolCallingFalsePersistsAndIdenticalAssignmentsDoNotRepublish(t *testing.T) {
+	deployment := assignment(deployA, customerA, "alpha-model", 1, "Qwen/Qwen3-VL-4B-Instruct")
+	deployment.Spec["runtime"].(map[string]any)["enable_auto_tool_choice"] = false
+	desired := controlplane.DesiredState{
+		StampID: stampID, MaxGeneration: 1,
+		Deployments: []controlplane.DesiredDeployment{deployment},
+	}
+	stub := &controlPlaneStub{desired: []controlplane.DesiredState{desired, desired}}
+	server := stub.server(t)
+	dir := t.TempDir()
+	sink := &recordingSink{}
+	instance := New(Config{
+		ControlPlaneURL: server.URL, EnrollmentToken: "fab_enroll_token_secret",
+		CredentialsPath: filepath.Join(dir, "credentials.json"),
+		DeploymentsPath: filepath.Join(dir, "deployments.json"),
+		UpstreamURL: "http://model-host:8000", Sink: sink,
+	}, discardLogger())
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sink.applies) != 1 {
+		t.Fatalf("identical bool values caused declaration churn: %d applies", len(sink.applies))
+	}
+	configured := sink.applies[0][0]
+	if configured.EnableAutoToolChoice == nil || *configured.EnableAutoToolChoice {
+		t.Fatalf("explicit false was lost: %+v", configured)
+	}
+	encoded, _ := json.Marshal(configured)
+	var persisted state.Deployment
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.EnableAutoToolChoice == nil || *persisted.EnableAutoToolChoice {
+		t.Fatalf("explicit false did not survive persistence: %s", encoded)
+	}
+}
+
 func TestASinkFailureFailsThePassRatherThanLosingTheAssignment(t *testing.T) {
 	stub := &controlPlaneStub{
 		desired: []controlplane.DesiredState{{

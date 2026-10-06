@@ -148,8 +148,10 @@ def streaming_upstream_payload(payload: dict[str, Any]) -> tuple[dict[str, Any],
 class UsageMeter:
     """Splits an SSE byte stream into frames, keeping the usage and forwarding the rest."""
 
-    def __init__(self, *, forward_usage_frame: bool) -> None:
+    def __init__(self, *, forward_usage_frame: bool, responses: bool = False) -> None:
         self._forward_usage_frame = forward_usage_frame
+        self._responses = responses
+        self._response_failed = False
         self._buffer = bytearray()
         self._scanned = 0
         self._framing_lost = False
@@ -157,6 +159,11 @@ class UsageMeter:
         self._stream_ended = False
         self._usage: StreamUsage | None = None
         self._usage_is_final = False
+
+    @property
+    def response_failed(self) -> bool:
+        """Whether a native Responses terminal event reported a model failure."""
+        return self._response_failed
 
     @property
     def usage(self) -> StreamUsage | None:
@@ -211,6 +218,7 @@ class UsageMeter:
         self._stream_ended = False
         self._usage = None
         self._usage_is_final = False
+        self._response_failed = False
 
     def feed(self, chunk: bytes) -> bytes:
         """Consume upstream bytes and return the bytes to forward to the client."""
@@ -315,7 +323,7 @@ class UsageMeter:
             self._resyncing = False
             return True
 
-        payload = _data_payload(frame)
+        payload = _responses_data_payload(frame) if self._responses else _data_payload(frame)
         if payload is None:
             if _has_data_field(frame):
                 self._invalidate_subtotal()
@@ -339,6 +347,22 @@ class UsageMeter:
             return True
         if not isinstance(document, dict):
             self._invalidate_subtotal()
+            return True
+
+        if self._responses:
+            # Responses terminal events carry a full response, including usage.
+            # Forward every original event byte; no Chat stream_options frame is
+            # injected or suppressed for this protocol.
+            kind = document.get("type")
+            if isinstance(kind, str) and kind in {
+                "response.completed", "response.incomplete", "response.failed"
+            }:
+                response = document.get("response")
+                usage = response_usage(response.get("usage")) if isinstance(response, dict) else None
+                self._usage = usage
+                self._usage_is_final = usage is not None
+                self._stream_ended = True
+                self._response_failed = kind == "response.failed"
             return True
 
         usage_only = _is_usage_only(document)
@@ -498,6 +522,35 @@ def _read_usage(usage: Any) -> StreamUsage | None:
     if prompt == 0 and completion == 0:
         return None
     return StreamUsage(input_tokens=prompt, output_tokens=completion)
+
+
+def response_usage(usage: Any) -> StreamUsage | None:
+    """Read explicit Responses input/output totals, including valid zero totals."""
+    if not isinstance(usage, dict):
+        return None
+    if "input_tokens" not in usage or "output_tokens" not in usage:
+        return None
+    input_tokens = _read_count(usage["input_tokens"])
+    output_tokens = _read_count(usage["output_tokens"])
+    if input_tokens is None or output_tokens is None:
+        return None
+    return StreamUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+
+
+def _responses_data_payload(frame: bytes) -> bytes | None:
+    """Read named Responses SSE data without changing its envelope or bytes."""
+    parts: list[bytes] = []
+    for line in frame.replace(b"\r\n", b"\n").replace(b"\r", b"\n").split(b"\n"):
+        if not line or line.startswith(b":"):
+            continue
+        field, separator, value = line.partition(b":")
+        if value.startswith(b" "):
+            value = value[1:]
+        if field == b"data":
+            parts.append(value if separator else b"")
+        elif field not in {b"event", b"id", b"retry"}:
+            return None
+    return b"\n".join(parts) if parts else None
 
 
 def _read_count(value: Any) -> int | None:

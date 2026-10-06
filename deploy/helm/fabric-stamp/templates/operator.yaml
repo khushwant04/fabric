@@ -73,6 +73,14 @@ spec:
             - {{ printf "--model-host-text-only-models=%s" (join "," .) | quote }}
             {{- end }}
             {{- end }}
+            {{- with .toolCalling }}
+            {{- if eq .modelDefaults false }}
+            - --model-host-tool-calling-model-defaults=false
+            {{- end }}
+            {{- range $model, $parser := .modelParsers }}
+            - {{ printf "--model-host-tool-call-parser=%s=%s" $model $parser | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .resources }}
             {{- with .requests }}
             {{- with .cpu }}

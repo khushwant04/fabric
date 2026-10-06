@@ -40,6 +40,8 @@ export type RuntimeSpec = {
   max_num_seqs?: number | null
   gpu_memory_utilization?: number | null
   execution?: "eager" | "cuda_graph" | null
+  enable_auto_tool_choice?: boolean | null
+  tool_call_parser?: string | null
 }
 
 export type DeploymentSpec = {

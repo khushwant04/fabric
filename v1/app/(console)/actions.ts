@@ -6,6 +6,7 @@ import { redirect } from "next/navigation"
 
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
 import { parseNewDeployment, parsePlacementStamp } from "@/lib/fabric/new-deployment"
+import { controlPlaneTokenIssuer } from "@/lib/fabric/stamp-enrollment-config"
 import {
   getConsoleContext,
   getFabricAccessToken,
@@ -23,6 +24,7 @@ export type ActionState = {
   error?: string
   secret?: string
   enrollmentToken?: string
+  enrollmentIssuer?: string
   expiresAt?: string
 }
 
@@ -66,6 +68,8 @@ export async function createDeployment(_previous: ActionState, formData: FormDat
             ...(input.maxModelLen ? { max_model_len: input.maxModelLen } : {}),
             ...(input.maxNumSeqs ? { max_num_seqs: input.maxNumSeqs } : {}),
             ...(input.execution ? { execution: input.execution } : {}),
+            ...(input.enableAutoToolChoice !== null ? { enable_auto_tool_choice: input.enableAutoToolChoice } : {}),
+            ...(input.toolCallParser ? { tool_call_parser: input.toolCallParser } : {}),
           },
           replicas: input.replicas,
           resources: { gpu_count: input.gpuCount, gpu_class: input.gpuClass },
@@ -142,6 +146,7 @@ export async function createEnrollmentToken(
     return {
       ok: true,
       enrollmentToken: result.enrollment_token,
+      enrollmentIssuer: controlPlaneTokenIssuer(token),
       expiresAt: result.expires_at,
     }
   } catch (error) {
