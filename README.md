@@ -100,7 +100,11 @@ control-plane inspection, API compatibility, and caveats.
 
 ## Running it locally
 
-Each component is independent and pins its own dependencies.
+Each component is independent and pins its own dependencies. Commands below run from the
+repository root. Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), Go 1.22+,
+Node.js 22 for the console, and a reachable PostgreSQL for the control plane
+(`FABRIC_DATABASE_URL`; [`deploy/testing/postgres.yaml`](deploy/testing/postgres.yaml) is a
+throwaway in-cluster instance).
 
 ```bash
 # Control plane
@@ -121,14 +125,25 @@ a command rather than an endpoint on purpose: an unauthenticated endpoint that c
 would be a hole, while a command requires database credentials.
 
 ```bash
+# Control-plane tests (SQLite by default; set FABRIC_TEST_DATABASE_URL to a
+# postgresql+asyncpg:// URL to prove row-level security on PostgreSQL)
+(cd control-plane && .venv/bin/python -m pytest -q)
+
 # Agent, operator, collector
-cd agent && go test ./... && go build ./...
+(cd agent && go test ./... && go build ./...)
 
 # Data plane
-cd data-plane && .venv/bin/python -m pytest -q
+(cd data-plane && uv venv --python 3.12 .venv \
+  && uv pip install --python .venv/bin/python -e '.[dev]' \
+  && .venv/bin/python -m pytest -q)
 
-# Kernels (needs a CUDA GPU)
-cd runtime && .venv/bin/python -m harness.runner --target rtx4070-dev
+# Console (Next.js); fill Auth0 and control-plane values in .env.local
+(cd v1 && npm ci && cp .env.example .env.local && npm run dev)
+
+# Kernels (needs a CUDA GPU; torch/triton wheels must match the host CUDA build)
+(cd runtime && uv venv --python 3.12 .venv \
+  && uv pip install --python .venv/bin/python -e '.[dev]' \
+  && .venv/bin/python -m harness.runner --target rtx4070-dev)
 ```
 
 Declaring a harness target that does not match the GPU present fails closed, so a development
@@ -277,15 +292,17 @@ these shapes, so both implementations meet the same bandwidth limit.
 
 ## Verification
 
-```
-Go (agent, operator, collector)      83 tests
-Control plane (SQLite)              116 tests
-Control plane (PostgreSQL)          126 tests
-Data plane                           66 tests
-Runtime (kernels, harness)           75 tests
-Serving (vLLM integration)           23 tests
-Cluster                              end-to-end on a throwaway cluster
-```
+[CI](.github/workflows/ci.yaml) runs on every pull request and push to `main`:
+
+| Job | Checks |
+|---|---|
+| `python` | control-plane and data-plane `pytest` (control plane on SQLite) and `ruff check` |
+| `agent` | `gofmt`, `go vet`, `go test` for the agent, operator, and collector |
+| `console` | ESLint, `tsc`, console unit tests, and a build of `deploy/images/console.Dockerfile` |
+| `packaging` | `helm lint` for both charts plus the rendering and upgrade scripts in `deploy/scripts/` |
+
+Runtime kernel and serving (vLLM) tests need a CUDA GPU and are not run in CI.
+`deploy/scripts/kind-e2e.sh` exercises the full loop on a disposable kind cluster.
 
 The control-plane suite runs against both engines because row-level security is a no-op on
 SQLite: only the PostgreSQL run proves isolation is enforced.
@@ -304,7 +321,7 @@ SQLite: only the PostgreSQL run proves isolation is enforced.
 | [`deploy/`](deploy/) | Images, Helm charts, observability, cluster scripts | Implemented |
 | [`docs/`](docs/) | Architecture, design, ADRs, project review | Living context |
 | [`v1/`](v1/) | Next.js console: live deployment state, themes, model comparison, architecture | Implemented |
-| [`utils/transformers/`](utils/transformers/) | Vendored model reference | Not a runtime integration |
+| `utils/transformers/` | Gitlink to a Transformers checkout (no `.gitmodules` entry, so it clones empty) | Not a runtime integration |
 
 ---
 
@@ -339,6 +356,13 @@ Start with the [project review](docs/project-review.md) or the
 [Qwen3.5 startup diagnosis](docs/model-startup-diagnosis.md) ·
 [Observability and SLOs](docs/context/observability-slos.md) ·
 [Security and identity](docs/context/security-identity.md)
+
+**Papers**
+[Technical paper (LaTeX source)](FABRIC-TECHNICAL-PAPER-LATEX.md) ·
+[Managed inference platform research paper](MANAGED-INFERENCE-PLATFORM-RESEARCH-PAPER.md) ·
+[Kernel-substitution paper direction](TECHNICAL-PAPER.md) ·
+[Model optimization plan](MODEL-OPTIMIZATION.md) ·
+[Paper figures and evidence](paper/README.md)
 
 **Direction**
 [Direction](docs/platform-direction.md) ·

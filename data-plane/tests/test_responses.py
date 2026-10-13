@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Responses pass-through keeps account isolation, accounting and native events."""
 
 from __future__ import annotations
@@ -245,7 +246,10 @@ async def test_responses_body_limit_precedes_upstream_and_admission(
 
 async def test_responses_deep_invalid_json_is_a_client_error(client, plane, signing_key, responses_host):
     requests, _ = responses_host
-    body = '{"model":"launch-model","input":' + '[' * 2000 + '0' + ']' * 2000 + '}'
+    # Deep enough to raise RecursionError in the C decoder on current CPython releases;
+    # 2000 levels parses successfully on 3.12.3+ and 3.13.
+    depth = 100_000
+    body = '{"model":"launch-model","input":' + '[' * depth + '0' + ']' * depth + '}'
     reply = await client.post(
         RESPONSES_PATH, content=body,
         headers={"Authorization": f"Bearer {signing_key.issue()}", "Content-Type": "application/json"},
@@ -357,8 +361,18 @@ def responses_request(signing_key):
         "client": ("127.0.0.1", 1234), "server": ("inference.test", 80),
     }
 
+    delivered = False
+
     async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
+        # Deliver the body once, then wait like a connected client. Returning the body
+        # forever busy-loops Starlette releases that still listen for disconnects on
+        # ASGI spec 2.4 (the starlette<0.42 pulled in by fastapi==0.115.6).
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
 
     return Request(scope, receive)
 
@@ -408,8 +422,11 @@ async def test_responses_response_start_failure_closes_host_before_body_iteratio
     async def send(message):
         raise RuntimeError("downstream response-start failed")
 
-    with pytest.raises(RuntimeError):
+    # starlette<0.42 runs the body inside a task group and wraps the error in a group.
+    with pytest.raises((RuntimeError, BaseExceptionGroup)) as caught:
         await response(request.scope, request.receive, send)
+    if isinstance(caught.value, BaseExceptionGroup):
+        assert caught.value.subgroup(RuntimeError) is not None
     assert host_stream.closed
     assert not host_stream.iterated
     assert plane.concurrency.snapshot()["in_flight"] == 0

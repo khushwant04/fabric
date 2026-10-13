@@ -854,7 +854,7 @@ func TestToolCallingFalsePersistsAndIdenticalAssignmentsDoNotRepublish(t *testin
 		ControlPlaneURL: server.URL, EnrollmentToken: "fab_enroll_token_secret",
 		CredentialsPath: filepath.Join(dir, "credentials.json"),
 		DeploymentsPath: filepath.Join(dir, "deployments.json"),
-		UpstreamURL: "http://model-host:8000", Sink: sink,
+		UpstreamURL:     "http://model-host:8000", Sink: sink,
 	}, discardLogger())
 	if err := instance.Ensure(context.Background()); err != nil {
 		t.Fatal(err)

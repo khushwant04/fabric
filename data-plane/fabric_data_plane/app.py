@@ -541,7 +541,9 @@ def _stateless_responses_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "responses_background_unsupported", "Background Responses jobs are not supported"
         )
     if payload.get("store") is not None and payload.get("store") is not False:
-        raise BadRequest("responses_store_unsupported", "Stored Responses are not supported on this gateway")
+        raise BadRequest(
+            "responses_store_unsupported", "Stored Responses are not supported on this gateway"
+        )
     normalized = {**payload, "store": False}
     if "stream" in normalized and normalized["stream"] is None:
         normalized["stream"] = False
@@ -888,7 +890,8 @@ async def _proxy(
                     )
                 else:
                     logger.warning(
-                        "Responses usage missing or invalid for deployment %s; no usage record written",
+                        "Responses usage missing or invalid for deployment %s; "
+                        "no usage record written",
                         deployment_label,
                     )
                 body = {**body, "model": deployment.model_alias}
@@ -1034,7 +1037,9 @@ async def _proxy(
                     )
                     responses_upstream = await plane.client.send(upstream_request, stream=True)
                 except httpx.HTTPError as exc:
-                    logger.warning("backend %s Responses connection failed: %s", backend.backend_id, exc)
+                    logger.warning(
+                        "backend %s Responses connection failed: %s", backend.backend_id, exc
+                    )
                     _record_backend_failure(plane, pool, backend, deployment_label)
                     _release_backend(plane, pool, backend, deployment_label, "transport_error")
                     responses_backend = None
@@ -1063,7 +1068,9 @@ async def _proxy(
                         ) from exc
                     status_code = responses_upstream.status_code
                     await cleanup_stream()
-                    return JSONResponse(status_code=status_code, content=body, headers=routing_headers)
+                    return JSONResponse(
+                        status_code=status_code, content=body, headers=routing_headers
+                    )
 
                 upstream_ok = True
                 break
@@ -1072,7 +1079,9 @@ async def _proxy(
 
             if responses_upstream is None:
                 request_outcome = "upstream_error_streamed"
-                raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
+                raise UpstreamUnavailable(
+                    "upstream_unavailable", "No healthy model host is available"
+                )
         except BaseException:
             await cleanup_stream()
             raise
@@ -1093,9 +1102,13 @@ async def _proxy(
                 pool.health.record_success(responses_backend)
                 _sync_backend_health(plane, pool, deployment_label)
                 responses_attempt_outcome = "upstream_error" if meter.response_failed else "ok"
-                request_outcome = "upstream_error_streamed" if meter.response_failed else "ok_streamed"
+                request_outcome = (
+                    "upstream_error_streamed" if meter.response_failed else "ok_streamed"
+                )
             except httpx.HTTPError as exc:
-                logger.warning("backend %s Responses stream failed: %s", responses_backend.backend_id, exc)
+                logger.warning(
+                    "backend %s Responses stream failed: %s", responses_backend.backend_id, exc
+                )
                 _record_backend_failure(plane, pool, responses_backend, deployment_label)
                 responses_attempt_outcome = "transport_error"
                 request_outcome = "upstream_error_streamed"
@@ -1222,7 +1235,9 @@ async def _read_upstream_error(response: httpx.Response) -> Any:
     body = bytearray()
     async for chunk in response.aiter_bytes():
         if len(body) + len(chunk) > (1 << 20):
-            return {"error": {"code": "upstream_invalid_response", "message": "Oversized error reply"}}
+            return {
+                "error": {"code": "upstream_invalid_response", "message": "Oversized error reply"}
+            }
         body.extend(chunk)
     try:
         return json.loads(body)

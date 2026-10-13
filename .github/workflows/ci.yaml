@@ -15,6 +15,11 @@ concurrency:
 jobs:
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Match the images and setup-python; Python 3.13 enforces strict X.509 checks that
+      # the data-plane TLS test certificates do not satisfy.
+      UV_PYTHON: '3.12'
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +44,7 @@ jobs:
 
   agent:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: agent
@@ -56,6 +62,7 @@ jobs:
 
   console:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: v1
@@ -89,6 +96,7 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4

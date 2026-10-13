@@ -15,3 +15,10 @@ utils/transformers
 runtime/artifacts
 **/*.pyc
 **/*.log
+
+# Local credentials never enter the build context (az acr build uploads it to the registry).
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/kubeconfig*

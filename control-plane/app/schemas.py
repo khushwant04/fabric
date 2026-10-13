@@ -267,7 +267,8 @@ class RuntimeSpec(BaseModel):
         if default is not None and self.tool_call_parser is not None:
             if equivalent_tool_call_parser(self.tool_call_parser) != default:
                 raise ValueError(
-                    f"{self.release} requires the {default} tool parser for its native chat template"
+                    f"{self.release} requires the {default} tool parser "
+                    "for its native chat template"
                 )
         return self
 
