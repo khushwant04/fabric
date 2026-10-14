@@ -63,6 +63,7 @@ test("the real creation action sends the model repository and chosen stamp witho
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { calls.push({ path, init }); return { id: "deployment-one" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope(_context, scope) { assert.equal(scope, "deployments:write") } },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://issuer.test" },
   })
   await actions.createDeployment({}, form({ maxModelLen: "4096" }))
   assert.equal(calls.length, 2)
@@ -85,6 +86,7 @@ test("the creation action preserves explicit disabled tool calling and sends a s
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { if (!path.endsWith("/placements")) bodies.push(JSON.parse(init.body)); return { id: "deployment-one" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://issuer.test" },
   })
   await actions.createDeployment({}, form({ autoToolChoice: "disabled" }))
   assert.equal(bodies[0].spec.runtime.enable_auto_tool_choice, false)
@@ -109,6 +111,7 @@ test("placement retries read account-owned intent, preserve errors, and refuse d
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
     "@/lib/fabric/client": { FabricApiError, async controlPlaneRequest(path, init) { calls.push({ path, init }); if (init.method === "POST" && capacityError) throw new FabricApiError("No compatible GPU capacity is available"); return record } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://issuer.test" },
   })
   const result = await actions.assignDeployment("deployment-one", {}, form())
   assert.equal(result.ok, true)
@@ -132,6 +135,7 @@ test("invalid model form returns a reviewable error before creating any deployme
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, controlPlaneRequest() { throw new Error("Must not call control plane") } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "token", requireScope() {} },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://issuer.test" },
   })
   assert.match((await actions.createDeployment({}, form({ modelRef: "../private" }))).error, /model repository/)
 })
@@ -146,6 +150,7 @@ test("a lost placement response still opens the saved deployment for review and 
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path) { if (path.endsWith("/placements")) throw new TypeError("fetch failed"); creations++; return { id: "saved-deployment" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "token", requireScope() {} },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://issuer.test" },
   })
   await actions.createDeployment({}, form())
   assert.equal(creations, 1)
