@@ -1,6 +1,6 @@
 "use client"
 
-import { useActionState, useEffect, useId, useState, type FormEvent } from "react"
+import { useActionState, useId, useState, type FormEvent } from "react"
 import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronRightIcon, CopyIcon, ExternalLinkIcon, KeyRoundIcon, Maximize2Icon, Minimize2Icon, PlusIcon, ServerIcon, Settings2Icon, ShieldCheckIcon, TerminalIcon } from "lucide-react"
 
 import { createEnrollmentToken, type ActionState } from "@/app/(console)/actions"
@@ -78,7 +78,13 @@ function EnrollmentSession({ disabled, config, onFinish }: { disabled: boolean; 
   const selectedPanel = panels.find((item) => item.id === panel)!
   const PanelIcon = selectedPanel.icon
 
-  useEffect(() => { if (state.enrollmentToken) setPanel("enrollment") }, [state.enrollmentToken])
+  // Jump to the enrollment panel when a new token arrives. Adjusting state during render
+  // (instead of in an effect) avoids an extra cascading render.
+  const [shownToken, setShownToken] = useState(state.enrollmentToken)
+  if (state.enrollmentToken !== shownToken) {
+    setShownToken(state.enrollmentToken)
+    if (state.enrollmentToken) setPanel("enrollment")
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     if (pending || state.enrollmentToken || generationError || panel !== "enrollment") event.preventDefault()
