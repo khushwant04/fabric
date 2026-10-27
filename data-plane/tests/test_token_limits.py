@@ -309,3 +309,30 @@ async def test_token_limit_state_is_visible_on_the_admin_listener(
         "debited": 0,
         "rejected": 0,
     }
+
+
+async def test_a_stream_without_a_usage_report_is_still_charged_an_estimate(
+    control_plane, upstream: UpstreamStub, signing_key: SigningKey
+) -> None:
+    """Otherwise hanging up before the final report would avoid the limit indefinitely."""
+    upstream.report_stream_usage = False
+    plane = token_limited_plane(control_plane, upstream)
+    transport = httpx.ASGITransport(app=create_inference_app(plane))
+    prompt = "x" * 200  # about 50 tokens by the routing estimate
+    body = {
+        "model": "launch-model",
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+        "max_tokens": 100_000,  # an unspent output budget is not charged
+    }
+    async with httpx.AsyncClient(transport=transport, base_url="http://ingress") as client:
+        headers = {"Authorization": f"Bearer {signing_key.issue()}"}
+        streamed = await client.post("/v1/chat/completions", json=body, headers=headers)
+        assert streamed.status_code == 200
+        refused = await client.post("/v1/chat/completions", json=body, headers=headers)
+
+    debited = plane.token_limiter.snapshot()["debited"]
+    assert 50 <= debited < 1_000
+    assert refused.json()["error"]["code"] == "token_rate_limited"
+    # Billing is unchanged: nothing is recorded without a report.
+    assert plane.usage.drain() == []

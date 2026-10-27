@@ -52,6 +52,7 @@ type controlPlaneStub struct {
 	requestRotation atomic.Bool
 	rotations       atomic.Int32
 	presented       []string
+	current         string // newest issued agent credential; empty before any rotation
 }
 
 func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
@@ -91,9 +92,13 @@ func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
 		if body.Capabilities != nil {
 			s.lastCapabilities = body.Capabilities
 		}
-		s.presented = append(s.presented, r.Header.Get("Authorization"))
+		presented := r.Header.Get("Authorization")
+		s.presented = append(s.presented, presented)
+		// Like the control plane: ask for a rotation on request, and whenever the agent
+		// presents a credential that has already been rotated away.
+		superseded := s.current != "" && presented != "Bearer "+s.current
 		writeJSON(w, 200, map[string]any{
-			"stamp_id": stampID, "rotate_credentials": s.requestRotation.Load(),
+			"stamp_id": stampID, "rotate_credentials": s.requestRotation.Load() || superseded,
 		})
 	})
 
@@ -101,6 +106,7 @@ func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
 		requireAgentCredential(t, r)
 		version := s.rotations.Add(1) + 1
 		s.requestRotation.Store(false)
+		s.current = fmt.Sprintf("fab_agent_%s_v%d", stampID, version)
 		writeJSON(w, 200, map[string]any{
 			"stamp_id":                       stampID,
 			"credential_version":             version,

@@ -227,7 +227,10 @@ async def heartbeat(
     if payload.capabilities is not None:
         context.require_scopes(scope_defs.STAMP_CAPABILITIES_WRITE)
     received_at, rotate = await record_heartbeat(
-        session, stamp_id=context.stamp_id, capabilities=payload.capabilities
+        session,
+        stamp_id=context.stamp_id,
+        capabilities=payload.capabilities,
+        credential_version=context.credential_version,
     )
     await session.commit()
     return HeartbeatResponse(
@@ -253,7 +256,7 @@ async def rotate_credentials(
     require_stamp_match(context, stamp_id)
     context.require_scopes(scope_defs.STAMP_HEARTBEAT)
     stamp, agent, telemetry, previous_valid_until = await rotate_stamp_credentials(
-        session, stamp_id=context.stamp_id
+        session, stamp_id=context.stamp_id, presented_version=context.credential_version
     )
     await session.commit()
     return StampCredentialRotationResponse(

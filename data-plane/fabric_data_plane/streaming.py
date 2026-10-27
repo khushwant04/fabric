@@ -159,6 +159,7 @@ class UsageMeter:
         self._stream_ended = False
         self._usage: StreamUsage | None = None
         self._usage_is_final = False
+        self._data_frames = 0
 
     @property
     def response_failed(self) -> bool:
@@ -181,6 +182,15 @@ class UsageMeter:
         if self._stream_ended and not self._framing_lost:
             return self._usage
         return None
+
+    @property
+    def data_frames(self) -> int:
+        """Data frames seen in this attempt; roughly one per generated token on a token stream.
+
+        Used only to estimate what a stream without a trustworthy usage report cost, so a
+        client cannot avoid the token rate limit by hanging up before the final report.
+        """
+        return self._data_frames
 
     @property
     def framing_lost(self) -> bool:
@@ -219,6 +229,7 @@ class UsageMeter:
         self._usage = None
         self._usage_is_final = False
         self._response_failed = False
+        self._data_frames = 0
 
     def feed(self, chunk: bytes) -> bytes:
         """Consume upstream bytes and return the bytes to forward to the client."""
@@ -330,6 +341,7 @@ class UsageMeter:
             return True
         if payload == _DONE:
             return True
+        self._data_frames += 1
         if len(payload) > MAX_PARSED_FRAME_BYTES:
             # Unread for the same reason as a released frame — a limit this module imposes — so
             # it counts against trusting a subtotal, and it is forwarded whatever its shape.

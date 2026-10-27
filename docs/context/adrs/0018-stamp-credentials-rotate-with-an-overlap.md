@@ -28,6 +28,13 @@ stamp's next `credential_version`. It requires the heartbeat scope, which every 
 has held since enrollment, so existing credentials can rotate without first being reissued. The
 telemetry credential cannot rotate anything.
 
+Only the newest credential may rotate, with one exception: an older one may rotate while the
+newest pair has never been used, because then nobody holds it. That keeps a lost reply
+recoverable while stopping a copied, superseded credential from minting itself a fresh pair or
+cutting short the pair the real agent is using (`403 credential_superseded`). The stamp row is
+locked for the rotation, so overlapping attempts are serialized rather than each leaving an
+unexpiring pair behind.
+
 ### 2. Old credentials overlap instead of being revoked
 
 Every earlier unrevoked credential of the stamp, of both kinds, is given an expiry at most
@@ -56,12 +63,21 @@ a restart would lose.
   request (`stamps:write`). The next heartbeat reply carries `rotate_credentials: true`, the agent
   rotates, and the request clears. The response is `202 Accepted` because the work happens on the
   stamp's schedule.
+- **Until it has worked.** The heartbeat reply also asks for a rotation whenever the credential
+  presented is older than the stamp's current version. A rotation whose reply was lost, or whose
+  result the agent could not save, has already cleared the request; this is what makes the agent
+  try again before the old credential's overlap ends, however the rotation was triggered.
 
 ### 5. The collector follows its file
 
 The collector re-reads its telemetry credential whenever the file changes. The agent replaces the
 file atomically, so a read never sees half a credential. A missing or empty file keeps the last
-credential read.
+credential read. The agent checks the file on every pass and rewrites it if it does not hold the
+current credential, so one failed hand-off does not outlast the overlap.
+
+A collector given its credential through `FABRIC_COLLECTOR_TELEMETRY_CREDENTIAL` instead of a
+file cannot follow a rotation and stops reporting when the old credential expires. The chart
+always uses the file.
 
 ## Consequences
 

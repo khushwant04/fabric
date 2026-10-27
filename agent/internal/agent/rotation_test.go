@@ -126,6 +126,43 @@ func TestACredentialThatCannotBePersistedIsNotUsed(t *testing.T) {
 	if telemetry != "fab_telem_"+stampID+"_secret" {
 		t.Errorf("collector was handed an unsaved credential: %q", telemetry)
 	}
+
+	// The request was consumed by the failed attempt, but the agent still presents a
+	// superseded credential, so the control plane keeps asking and the next pass recovers.
+	if err := os.Remove(credentialsDir); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("recovery pass: %v", err)
+	}
+	if got := stub.rotations.Load(); got != 2 {
+		t.Fatalf("rotations after recovery = %d, want 2", got)
+	}
+	saved, err := state.LoadCredentials(instance.config.CredentialsPath)
+	if err != nil || saved.AgentCredential != "fab_agent_"+stampID+"_v3" {
+		t.Fatalf("recovered credential not persisted: %+v, %v", saved, err)
+	}
+}
+
+func TestAFailedCollectorHandOffIsRepairedOnTheNextPass(t *testing.T) {
+	stub := &controlPlaneStub{}
+	server := stub.server(t)
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	instance := rotatingAgent(t, server.URL, dir, 0, &now)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	path := filepath.Join(dir, state.TelemetryCredentialFile)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, err := state.ReadTelemetryCredential(path); err != nil || got != instance.credentials.TelemetryCredential {
+		t.Fatalf("hand-off not repaired: %q, %v", got, err)
+	}
 }
 
 func TestAnUpgradedAgentStartsMeasuringAgeFromItsFirstStart(t *testing.T) {

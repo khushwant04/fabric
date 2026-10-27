@@ -32,6 +32,17 @@ grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE' "$TMP/shared.yaml" | gre
 grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_BURST' "$TMP/shared.yaml" | grep -q 'value: "12000"'
 grep -q -- '--credential-max-age=720h' "$TMP/shared.yaml"
 
+# Values files carry numbers as float64; large limits must still render as integers.
+cat >"$TMP/large-limits.yaml" <<'VALUES'
+dataPlane:
+  limits:
+    tokensPerMinute: 2500000
+    tokenBurst: 10000000
+VALUES
+"$HELM" template large "$CHART" "${common[@]}" -f "$TMP/large-limits.yaml" >"$TMP/large.yaml"
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE' "$TMP/large.yaml" | grep -q 'value: "2500000"'
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_BURST' "$TMP/large.yaml" | grep -q 'value: "10000000"'
+
 # Parse document-local contracts rather than only proving strings exist somewhere.
 awk '
   /^# Source: fabric-stamp\/templates\/limit-coordinator-service.yaml$/ {in_doc=1; next}

@@ -488,6 +488,20 @@ func (a *Agent) rotateCredentials(ctx context.Context, reason string) error {
 	return nil
 }
 
+// repairTelemetryHandOff rewrites the collector's file when it does not hold the current
+// telemetry credential. After a rotation the old one expires with its overlap, so a
+// hand-off that failed once must not stay failed until the agent happens to restart.
+func (a *Agent) repairTelemetryHandOff() {
+	if a.config.TelemetryCredentialPath == "" || a.credentials == nil {
+		return
+	}
+	current, err := state.ReadTelemetryCredential(a.config.TelemetryCredentialPath)
+	if err == nil && current == a.credentials.TelemetryCredential {
+		return
+	}
+	a.handOffTelemetryCredential()
+}
+
 // handOffTelemetryCredential writes the collector's credential if one is wanted.
 //
 // This runs on every start, not only after enrollment. Credentials persist on a
@@ -522,12 +536,13 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 	}
 	if reason := a.rotationReason(beat.RotateCredentials); reason != "" {
 		// A failed rotation does not stop reconciliation: the current credentials still
-		// work, and the next pass tries again.
+		// work, and the control plane keeps asking for a rotation until one succeeds.
 		if err := a.rotateCredentials(ctx, reason); err != nil {
 			a.log.Error("credential rotation failed; keeping the current credentials",
 				"reason", reason, "error", err)
 		}
 	}
+	a.repairTelemetryHandOff()
 
 	desired, err := a.client.DesiredState(
 		ctx, a.credentials.StampID, a.credentials.AckedGeneration,

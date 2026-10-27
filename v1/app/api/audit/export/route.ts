@@ -28,7 +28,8 @@ export async function GET(request: Request) {
     const path = `/v1/accounts/${encodeURIComponent(context.account.id)}/audit-events/export`
 
     const chunks: string[] = []
-    let cursor: string | undefined = undefined
+    // Continue from the caller's cursor, so a download truncated at the page limit can resume.
+    let cursor: string | undefined = search.cursor
     let truncated = false
     for (let page = 0; page < MAX_PAGES; page++) {
       const response = await controlPlaneResponse(`${path}?${auditQuery({ ...search, cursor })}`, { token, headers: { Accept: "application/x-ndjson" } })

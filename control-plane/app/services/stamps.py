@@ -352,7 +352,7 @@ async def revoke_enrollment_token(
 
 
 async def rotate_stamp_credentials(
-    session: AsyncSession, *, stamp_id: uuid.UUID
+    session: AsyncSession, *, stamp_id: uuid.UUID, presented_version: int
 ) -> tuple[InferenceStamp, str, str, dt.datetime]:
     """Mint a stamp's next agent and telemetry credentials, overlapping the previous ones.
 
@@ -364,9 +364,38 @@ async def rotate_stamp_credentials(
     credentials from the lost reply, so a lost reply cannot leave a long-lived credential
     nobody holds (ADR 0018).
 
+    Only the newest credential may rotate, with one exception that is what makes a lost
+    reply recoverable: an older credential may rotate while the newest pair has never been
+    used, because then nobody holds it. A superseded credential copied from somewhere cannot
+    otherwise mint itself a fresh pair, nor cut short the pair the real agent is using.
+
     Returns the stamp, the two new credentials, and when the previous ones stop working.
     """
-    stamp = await get_stamp(session, stamp_id)
+    await get_stamp(session, stamp_id)
+    # Locked so two overlapping rotations are serialized; otherwise each would miss the
+    # other's uncommitted pair and both would be left without an expiry.
+    stamp = (
+        await session.execute(
+            select(InferenceStamp).where(InferenceStamp.id == stamp_id).with_for_update()
+        )
+    ).scalar_one()
+    if presented_version < stamp.credential_version:
+        newest_used = (
+            await session.execute(
+                select(func.count())
+                .select_from(StampCredential)
+                .where(
+                    StampCredential.stamp_id == stamp.id,
+                    StampCredential.version == stamp.credential_version,
+                    StampCredential.last_used_at.is_not(None),
+                )
+            )
+        ).scalar_one()
+        if newest_used:
+            raise Forbidden(
+                "credential_superseded",
+                "A newer credential for this stamp is in use; rotate with that one",
+            )
     settings = get_settings()
     now = dt.datetime.now(tz=dt.UTC)
     previous_valid_until = now + dt.timedelta(
@@ -478,11 +507,14 @@ async def record_heartbeat(
     *,
     stamp_id: uuid.UUID,
     capabilities: StampCapabilities | None,
+    credential_version: int,
 ) -> tuple[dt.datetime, bool]:
     """Update liveness and optionally refresh bounded capability data.
 
-    Returns when the heartbeat was received and whether an operator has asked this
-    stamp to rotate its credentials, which is how that request reaches the agent.
+    Returns when the heartbeat was received and whether the agent should rotate its
+    credentials: because an operator asked, or because the credential it presented has
+    already been rotated away. The second is what recovers a rotation whose reply was lost
+    or whose result the agent could not save, before the old credential's overlap ends.
     """
     stamp = await get_stamp(session, stamp_id)
     now = dt.datetime.now(tz=dt.UTC)
@@ -494,7 +526,8 @@ async def record_heartbeat(
     if stamp.status == "registered":
         stamp.status = "active"
     await session.flush()
-    return now, stamp.credential_rotation_requested_at is not None
+    superseded = credential_version < stamp.credential_version
+    return now, superseded or stamp.credential_rotation_requested_at is not None
 
 
 async def build_desired_state(

@@ -208,3 +208,39 @@ async def test_new_credentials_carry_the_stamps_new_version(
             ).scalars()
         )
         assert versions == [1, 2]
+
+
+async def test_a_superseded_credential_is_told_to_rotate(client: AsyncClient) -> None:
+    """Recovers a rotation whose reply was lost or could not be saved, however it started."""
+    account_id, token = await onboard(client, "rotate-told", "rotate-told")
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id, old_agent = enrolled["stamp"]["id"], enrolled["agent_credential"]
+    assert (await _heartbeat(client, stamp_id, old_agent)).json()["rotate_credentials"] is False
+
+    await _rotate(client, stamp_id, old_agent)  # the agent never saw this reply
+    assert (await _heartbeat(client, stamp_id, old_agent)).json()["rotate_credentials"] is True
+
+
+async def test_a_superseded_credential_cannot_rotate_once_the_newer_one_is_used(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    account_id, token = await onboard(client, "rotate-stale", "rotate-stale")
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id, old_agent = enrolled["stamp"]["id"], enrolled["agent_credential"]
+    new_agent = (await _rotate(client, stamp_id, old_agent)).json()["agent_credential"]
+    assert (await _heartbeat(client, stamp_id, new_agent)).status_code == 200
+
+    # A copy of the old credential cannot mint a fresh pair or cut the live one short.
+    refused = await _rotate(client, stamp_id, old_agent)
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "credential_superseded"
+    live = (
+        await db_session.execute(
+            select(StampCredential).where(
+                StampCredential.stamp_id == uuid.UUID(stamp_id), StampCredential.version == 2
+            )
+        )
+    ).scalar_one()
+    assert live.expires_at is None
+    # The agent holding the newest credential can still rotate.
+    assert (await _rotate(client, stamp_id, new_agent)).status_code == 200

@@ -535,6 +535,26 @@ def metered_tokens(payload: Any) -> int:
     return max(0, total)
 
 
+_OUTPUT_BUDGET_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def unmetered_stream_estimate(upstream_path: str, payload: Any, meter: UsageMeter) -> int:
+    """Tokens to charge the token rate limit for a stream with no trustworthy usage report.
+
+    The prompt is estimated the way routing estimates it, without the requested output
+    budget, which a stream cut short has not necessarily spent. Output is one token per data
+    frame the host sent, which is how OpenAI-compatible hosts stream tokens. An estimate,
+    used only for admission and never recorded as usage.
+    """
+    operation = _JSON_OPERATIONS.get(upstream_path, "chat")
+    prompt_only = (
+        {key: value for key, value in payload.items() if key not in _OUTPUT_BUDGET_FIELDS}
+        if isinstance(payload, dict)
+        else {}
+    )
+    return profile_for_json(operation, prompt_only).estimated_tokens + meter.data_frames
+
+
 #: Deepest nesting accepted in a request body. Far beyond what chat messages, content
 #: parts, or tool JSON Schemas need, and enforced explicitly: the decoder's own recursion
 #: limit differs across interpreter versions (Python 3.12+ parses thousands of levels),
@@ -1039,6 +1059,11 @@ async def _proxy(
             # applies with response.is_success. The meter itself withholds usage it cannot vouch
             # for, so this is the one condition left to check.
             usage = meter.usage if upstream_ok else None
+            if upstream_ok and usage is None:
+                # Nothing is billed without a final report, but the token rate limit still
+                # charges an estimate: otherwise a client could avoid the limit indefinitely by
+                # hanging up just before the report arrives (ADR 0017).
+                stream_tokens = unmetered_stream_estimate(upstream_path, payload, meter)
             if usage is not None:
                 # Real numbers for a request the host accepted. A persistence fault is retained
                 # as the cleanup result, but cannot skip request/placement/concurrency release.

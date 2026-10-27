@@ -64,8 +64,11 @@ added columns defaulting to "no token limit" and "not yet debited".
 ## Consequences
 
 - Operators set `dataPlane.limits.tokensPerMinute` and optionally `tokenBurst`. Zero disables it.
-- A stream the gateway could not meter (ADR 0014's `framing_lost` and `incomplete_stream` cases)
-  is not charged, which is the same residual gap usage metering already reports.
+- A stream with no trustworthy usage report (ADR 0014's `no_report`, `framing_lost` and
+  `incomplete_stream` cases) records no usage, as before, but the limiter still charges an
+  estimate: the prompt as routing estimates it, plus one token per data frame the host sent.
+  Without it a client could avoid the limit indefinitely by hanging up just before the final
+  report. An unspent `max_tokens` budget is not charged.
 - The limit is per stamp, like the request rate. A global quota needs allocated per-stamp budgets
   or an explicit choice of consistency over partition availability.
 - The policy is one value for every account on a stamp. Per-account policies need the control
