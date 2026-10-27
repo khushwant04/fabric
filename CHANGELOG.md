@@ -8,6 +8,10 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Audit-trail API: `GET /v1/accounts/{id}/audit-events` (filters, keyset pagination)
+  and `/export` (NDJSON, bounded pages, recorded as `audit.exported`), guarded by a new
+  `audit:read` scope for owners and admins. Console audit log page with filters and
+  export.
 - CI runs the control-plane suite on PostgreSQL 16 as a role without `BYPASSRLS`, so
   row-level security is exercised on every pull request.
 - CI runs the runtime kernel/harness and serving tests on CPU builds of torch and triton.

@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     accounts,
     api_keys,
+    audit,
     deployments,
     identity_providers,
     service_principals,
@@ -26,5 +27,6 @@ api_router.include_router(identity_providers.router)
 api_router.include_router(deployments.router)
 api_router.include_router(stamps.router)
 api_router.include_router(telemetry.router)
+api_router.include_router(audit.router)
 
 __all__ = ["api_router"]

@@ -322,7 +322,7 @@ Legend: **Implemented**, **Partial**, **Missing**, **Conflict**.
 | Limits/quotas | Partial | Stamp-local per-account RPM/burst/concurrency coordinator | LimitPolicy is dangling; no TPM/daily budget/per-key/global-cross-stamp/reservation APIs |
 | Rollout | Partial | release candidates, weighted cutover, acknowledged drain, automatic rollback mechanics | First-class rollout object, stages, guards, promote/pause/abort APIs, history/approvals |
 | Usage | Partial | Durable local spool, central attribution, token totals | Billing-grade ledger, cost allocation, retention/export, global quota accounting |
-| Audit | Partial | Transactional AuditEvent and outbox writes | No audit read/export API, SIEM, WORM/integrity, retention/legal hold, complete event coverage |
+| Audit | Partial | Transactional AuditEvent and outbox writes; filtered, keyset-paginated read API and audited NDJSON export; console audit log | SIEM push, WORM/integrity, retention/legal hold, complete event coverage |
 | Metrics/Grafana | Partial | Prometheus + vLLM + gateway + DCGM and one dashboard | HA/remote retention, full dashboard suite, alerts/runbooks, router/kernel/cost/energy metrics |
 | Operator Console | Partial | Auth0 server-side session; live dashboard, deployments, placement, stamp enrollment, usage, access management, playground | Model/profile catalogue, endpoints, limits, rollouts, audit/security views, operator-versus-tenant permission model |
 | Operator identity | Partial/Conflict | Auth0 humans, memberships, roles, API keys, per-account OIDC | Separate platform-operator authority from downstream tenant machine access |

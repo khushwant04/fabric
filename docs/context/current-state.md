@@ -115,6 +115,21 @@ Not implemented in the service: agent/telemetry credential rotation (the
 `credential_version` column has no handler). Idempotency and entitlement management,
 described above, were added after this note was first written.
 
+### Audit trail
+
+Audit rows are written in the same transaction as every privileged change. Owners and
+admins read them through `GET /v1/accounts/{id}/audit-events`, filtered by action,
+resource, actor and time, newest first. Pagination is keyset on `(created_at, id)`
+rather than an offset, because an offset shifts under a trail that is still being
+appended to and a reader would see some events twice and miss others.
+`GET …/audit-events/export` returns newline-delimited JSON in bounded pages, continued
+through a `Fabric-Next-Cursor` header, and records an `audit.exported` event of its own,
+so taking a copy of the trail is itself on the trail. Reading needs `audit:read`, which
+owners and admins hold and can delegate to an API key for a SIEM; developers and viewers
+cannot, because events name members and principals. Reads are never cached. The console
+shows the trail at `/audit` and downloads exports without the control token leaving the
+server.
+
 ### Usage ingestion
 
 `POST /v1/telemetry/usage` accepts usage records authenticated by the write-only
@@ -565,8 +580,8 @@ The repository currently has no implementation of:
 - Agent/telemetry credential rotation, and overlap-based rotation of the JWT signing key.
 - Token-per-minute limits, budgets, or per-key quotas. Request-rate and concurrency
   limits exist per account (ADR 0016); `limits_policy_ref` refers to no policy resource.
-- An API to read or export the audit trail. Audit rows are written transactionally but
-  can only be read from the database.
+- Tamper evidence for the audit trail (hash chaining or WORM storage), retention policy,
+  or a push integration with a SIEM.
 - A governed model catalogue (versions, artifacts, licences, approvals); deployments
   name a free-form model reference.
 - Autoscaling, warm pools or scale-to-zero. Replicas are fixed per deployment.

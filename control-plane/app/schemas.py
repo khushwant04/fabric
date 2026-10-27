@@ -154,6 +154,34 @@ class ServicePrincipalResponse(ORMModel):
     created_at: dt.datetime
 
 
+# --- audit trail ----------------------------------------------------------
+
+
+class AuditEventResponse(ORMModel):
+    id: uuid.UUID
+    account_id: uuid.UUID | None
+    actor_type: str
+    actor_id: str | None
+    action: str
+    resource_type: str | None
+    resource_id: str | None
+    metadata: dict[str, Any] = Field(validation_alias="event_metadata")
+    created_at: dt.datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def _utc(cls, value: dt.datetime) -> dt.datetime:
+        # Stored in UTC everywhere, but SQLite returns it without an offset. An exported
+        # trail is read by other systems, so every timestamp states its zone.
+        return value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value
+
+
+class AuditEventPage(BaseModel):
+    events: list[AuditEventResponse]
+    #: Pass as ``cursor`` to read the next, older page. Absent on the last page.
+    next_cursor: str | None = None
+
+
 # --- API keys -------------------------------------------------------------
 
 

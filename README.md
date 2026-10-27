@@ -63,6 +63,7 @@ The agent polls outbound only. The control plane never dials into a customer clu
 | **Declarative deployment** | A customer declares intent; the operator reconciles GPU hosts to match, one at a time, rolling back a release that never becomes ready |
 | **Hardware-aware configuration** | The operator profiles its GPU nodes and corrects settings the hardware cannot execute, naming the reason |
 | **Per-deployment kernel selection** | `kernel_mode` chooses the Fabric decode kernel or the server's own, from one image |
+| **Audit trail** | Every privileged change recorded transactionally; owners and admins filter, page and export it (NDJSON), and exports are themselves audited |
 | **Metering** | The model's own token counts attributed to account, deployment, and cluster |
 | **Observability** | Prometheus and Grafana over engine, gateway, and GPU metrics |
 
