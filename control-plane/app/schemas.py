@@ -668,6 +668,9 @@ class StampResponse(ORMModel):
     last_heartbeat_at: dt.datetime | None
     revoked_at: dt.datetime | None
     created_at: dt.datetime
+    credential_version: int = 1
+    credential_rotation_requested_at: dt.datetime | None = None
+    credentials_rotated_at: dt.datetime | None = None
 
 
 class StampEnrollResponse(BaseModel):
@@ -683,6 +686,16 @@ class HeartbeatRequest(BaseModel):
 class HeartbeatResponse(BaseModel):
     stamp_id: uuid.UUID
     received_at: dt.datetime
+    #: An operator asked for new machine credentials. The agent rotates when it sees this.
+    rotate_credentials: bool = False
+
+
+class StampCredentialRotationResponse(BaseModel):
+    stamp_id: uuid.UUID
+    credential_version: int
+    agent_credential: str = Field(description="Shown once; replaces the agent's credential")
+    telemetry_credential: str = Field(description="Shown once; the collector's new credential")
+    previous_credentials_expire_at: dt.datetime
 
 
 class DesiredDeployment(BaseModel):

@@ -74,6 +74,10 @@ agent:
   # How often the cluster's GPUs are re-measured. Node hardware does not move, but pod
   # claims do, so this is shorter than "once" and longer than every poll.
   capacityInterval: 1m
+  # Rotate the stamp's agent and telemetry credentials once they are this old. The old
+  # ones keep working for the control plane's overlap window, so rotation needs no
+  # downtime and no inbound connection (ADR 0018). "0s" rotates only on request.
+  credentialMaxAge: 720h
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}

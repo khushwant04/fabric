@@ -25,6 +25,10 @@ type Client struct {
 	BaseURL    string
 	HTTP       *http.Client
 	Credential string // agent credential; empty until enrollment completes
+	// CredentialSource, when set, is consulted on every request instead of Credential.
+	// The collector uses it to pick up a rotated credential from its file without a
+	// restart; it must be safe to call from several goroutines.
+	CredentialSource func() string
 }
 
 // New returns a client with a bounded timeout.
@@ -125,6 +129,24 @@ type Stamp struct {
 	Status       string `json:"status"`
 }
 
+// HeartbeatResponse is the control plane's reply to a heartbeat.
+type HeartbeatResponse struct {
+	StampID string `json:"stamp_id"`
+	// RotateCredentials means an operator asked for new machine credentials. Absent
+	// from an older control plane, which reads as false.
+	RotateCredentials bool `json:"rotate_credentials"`
+}
+
+// RotationResponse carries a stamp's replacement credentials (ADR 0018).
+type RotationResponse struct {
+	StampID             string `json:"stamp_id"`
+	CredentialVersion   int    `json:"credential_version"`
+	AgentCredential     string `json:"agent_credential"`
+	TelemetryCredential string `json:"telemetry_credential"`
+	// When the credentials being replaced stop working.
+	PreviousExpireAt time.Time `json:"previous_credentials_expire_at"`
+}
+
 // EnrollResponse carries the stamp and both one-time credentials.
 type EnrollResponse struct {
 	Stamp               Stamp  `json:"stamp"`
@@ -194,10 +216,14 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, aut
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if auth {
-		if c.Credential == "" {
+		credential := c.Credential
+		if c.CredentialSource != nil {
+			credential = c.CredentialSource()
+		}
+		if credential == "" {
 			return errors.New("no agent credential: enrollment has not completed")
 		}
-		request.Header.Set("Authorization", "Bearer "+c.Credential)
+		request.Header.Set("Authorization", "Bearer "+credential)
 	}
 
 	response, err := c.HTTP.Do(request)
@@ -255,13 +281,34 @@ func (c *Client) Enroll(
 }
 
 // Heartbeat reports liveness and optionally refreshes capabilities.
-func (c *Client) Heartbeat(ctx context.Context, stampID string, capabilities *Capabilities) error {
+func (c *Client) Heartbeat(
+	ctx context.Context, stampID string, capabilities *Capabilities,
+) (*HeartbeatResponse, error) {
 	body := map[string]any{}
 	if capabilities != nil {
 		body["capabilities"] = capabilities
 	}
 	path := "/v1/stamps/" + url.PathEscape(stampID) + "/heartbeat"
-	return c.do(ctx, http.MethodPost, path, body, nil, true)
+	out := &HeartbeatResponse{}
+	if err := c.do(ctx, http.MethodPost, path, body, out, true); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RotateCredentials replaces this stamp's agent and telemetry credentials, authorized
+// by the agent credential being replaced. The previous credentials keep working until
+// the returned expiry, so a caller that loses the reply can rotate again.
+func (c *Client) RotateCredentials(ctx context.Context, stampID string) (*RotationResponse, error) {
+	path := "/v1/stamps/" + url.PathEscape(stampID) + "/credentials/rotate"
+	out := &RotationResponse{}
+	if err := c.do(ctx, http.MethodPost, path, nil, out, true); err != nil {
+		return nil, err
+	}
+	if out.AgentCredential == "" || out.TelemetryCredential == "" {
+		return nil, errors.New("rotation response is missing a credential")
+	}
+	return out, nil
 }
 
 // DesiredState reads assignments newer than the acknowledged generation.

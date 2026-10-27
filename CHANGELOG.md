@@ -15,6 +15,10 @@ yet, so earlier work is summarised by period from the pull-request history.
 - Token-rate limits (ADR 0017): per-account tokens per minute, debited from metered usage,
   idempotent through the shared coordinator, `429 token_rate_limited` with `Retry-After`.
   Chart values `dataPlane.limits.tokensPerMinute` and `tokenBurst`.
+- Stamp credential rotation (ADR 0018): agent-initiated, overlapping the old credentials
+  for a grace window, by age (`agent.credentialMaxAge`, default 30 days) or on an owner's
+  request delivered through the heartbeat. The collector follows its credential file, the
+  console offers a rotation button, and the end-to-end loop exercises a rotation.
 - CI runs the control-plane suite on PostgreSQL 16 as a role without `BYPASSRLS`, so
   row-level security is exercised on every pull request.
 - CI runs the runtime kernel/harness and serving tests on CPU builds of torch and triton.

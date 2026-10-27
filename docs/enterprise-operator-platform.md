@@ -326,7 +326,7 @@ Legend: **Implemented**, **Partial**, **Missing**, **Conflict**.
 | Metrics/Grafana | Partial | Prometheus + vLLM + gateway + DCGM and one dashboard | HA/remote retention, full dashboard suite, alerts/runbooks, router/kernel/cost/energy metrics |
 | Operator Console | Partial | Auth0 server-side session; live dashboard, deployments, placement, stamp enrollment, usage, access management, playground | Model/profile catalogue, endpoints, limits, rollouts, audit/security views, operator-versus-tenant permission model |
 | Operator identity | Partial/Conflict | Auth0 humans, memberships, roles, API keys, per-account OIDC | Separate platform-operator authority from downstream tenant machine access |
-| Credential rotation | Partial | expiry/revocation fields; key/stamp revocation | Overlap rotation for API/stamp/JWT/mTLS, KMS/HSM/Vault automation and emergency workflow |
+| Credential rotation | Partial | expiry/revocation; key/stamp revocation; overlap rotation of stamp agent/telemetry credentials by age or request (ADR 0018) | Overlap rotation for API keys/JWT/mTLS, KMS/HSM/Vault automation |
 | Network security | Partial | TLS, NetworkPolicy, separated listeners/credentials | Mandatory model-host mTLS, private endpoint workflow, egress controls and policy evidence |
 | HA/DR | Partial | multiple control replicas, serving independent of central services, durable local spool | Multi-zone DB/control/gateway, cross-stamp endpoint failover, automated backup/restore and RPO/RTO drills |
 | Supply chain | Missing/Partial | Dockerfiles, pinned portions, chart security contexts | CI, immutable digest enforcement, scans, SBOM, signing, provenance, registry admission, promotion |

@@ -126,6 +126,25 @@ export async function assignDeployment(
   }
 }
 
+// Rotation is requested here and performed by the stamp's agent on its next heartbeat,
+// because the control plane never connects into a cluster (ADR 0018).
+export async function requestStampRotation(stampId: string): Promise<ActionState> {
+  const { context, token } = await mutationContext("stamps:write")
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stampId)) {
+    return { error: "Choose an enrolled stamp." }
+  }
+  try {
+    await controlPlaneRequest(
+      `/v1/accounts/${context.account.id}/stamps/${encodeURIComponent(stampId)}/credential-rotation`,
+      { method: "POST", token }
+    )
+    revalidatePath("/stamps")
+    return { ok: true }
+  } catch (error) {
+    return { error: actionError(error) }
+  }
+}
+
 export async function createEnrollmentToken(
   _previous: ActionState,
   formData: FormData

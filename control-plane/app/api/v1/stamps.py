@@ -28,6 +28,7 @@ from app.schemas import (
     EnrollmentTokenResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    StampCredentialRotationResponse,
     StampEnrollRequest,
     StampEnrollResponse,
     StampResponse,
@@ -43,8 +44,10 @@ from app.services.stamps import (
     list_stamps,
     record_heartbeat,
     report_status,
+    request_credential_rotation,
     revoke_enrollment_token,
     revoke_stamp,
+    rotate_stamp_credentials,
 )
 
 router = APIRouter(tags=["stamps"])
@@ -157,6 +160,33 @@ async def revoke_account_stamp(
 
 
 @router.post(
+    "/v1/accounts/{account_id}/stamps/{stamp_id}/credential-rotation",
+    response_model=StampResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Ask a stamp's agent to rotate its machine credentials",
+)
+async def request_stamp_rotation(
+    stamp_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.STAMPS_WRITE)),
+    session: AsyncSession = Depends(get_db_session),
+) -> StampResponse:
+    """Accepted rather than done: the agent rotates on its next heartbeat.
+
+    Use stamp revocation instead when a credential may have leaked; it takes effect
+    immediately, while a rotation waits for the agent and overlaps the old credentials.
+    """
+    stamp = await request_credential_rotation(
+        session,
+        account_id=principal.account_id,
+        stamp_id=stamp_id,
+        actor_type=principal.principal_type,
+        actor_id=principal.subject,
+    )
+    await commit_and_invalidate(session, [principal.account_id])
+    return StampResponse.model_validate(stamp)
+
+
+@router.post(
     "/v1/stamps/enroll",
     response_model=StampEnrollResponse,
     status_code=status.HTTP_201_CREATED,
@@ -196,11 +226,43 @@ async def heartbeat(
     context.require_scopes(scope_defs.STAMP_HEARTBEAT)
     if payload.capabilities is not None:
         context.require_scopes(scope_defs.STAMP_CAPABILITIES_WRITE)
-    received_at = await record_heartbeat(
+    received_at, rotate = await record_heartbeat(
         session, stamp_id=context.stamp_id, capabilities=payload.capabilities
     )
     await session.commit()
-    return HeartbeatResponse(stamp_id=context.stamp_id, received_at=received_at)
+    return HeartbeatResponse(
+        stamp_id=context.stamp_id, received_at=received_at, rotate_credentials=rotate
+    )
+
+
+@router.post(
+    "/v1/stamps/{stamp_id}/credentials/rotate",
+    response_model=StampCredentialRotationResponse,
+    summary="Replace this stamp's agent and telemetry credentials",
+)
+async def rotate_credentials(
+    stamp_id: uuid.UUID = Path(...),
+    context: StampContext = Depends(require_agent_credential),
+    session: AsyncSession = Depends(get_db_session),
+) -> StampCredentialRotationResponse:
+    """Authorized by the agent credential being replaced.
+
+    Requires the heartbeat scope, which every agent credential has held since
+    enrollment, rather than a new scope existing credentials would lack.
+    """
+    require_stamp_match(context, stamp_id)
+    context.require_scopes(scope_defs.STAMP_HEARTBEAT)
+    stamp, agent, telemetry, previous_valid_until = await rotate_stamp_credentials(
+        session, stamp_id=context.stamp_id
+    )
+    await session.commit()
+    return StampCredentialRotationResponse(
+        stamp_id=stamp.id,
+        credential_version=stamp.credential_version,
+        agent_credential=agent,
+        telemetry_credential=telemetry,
+        previous_credentials_expire_at=previous_valid_until,
+    )
 
 
 @router.get(

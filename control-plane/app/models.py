@@ -287,6 +287,12 @@ class InferenceStamp(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="registered")
     capabilities: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
     credential_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    #: Set when an operator asks for new machine credentials; the agent learns of it from
+    #: its next heartbeat reply and clears it by rotating (ADR 0018).
+    credential_rotation_requested_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    credentials_rotated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     last_heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = _created_at()
     updated_at: Mapped[dt.datetime] = mapped_column(

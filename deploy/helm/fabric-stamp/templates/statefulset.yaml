@@ -72,6 +72,8 @@ spec:
             {{- end }}
             - --gpus={{ .Values.stamp.gpus }}
             - --poll={{ .Values.agent.pollInterval }}
+            # Defaulted here too: `helm upgrade --reuse-values` omits values a newer chart added.
+            - --credential-max-age={{ .Values.agent.credentialMaxAge | default "720h" }}
             {{- if .Values.stamp.measureCapacity }}
             # Measured capacity replaces --gpus above. The selector matches the operator's
             # --model-host-node-selector: measuring nodes a host will never be placed on
@@ -165,9 +167,9 @@ spec:
             - name: FABRIC_DP_MAX_IN_FLIGHT_PER_ACCOUNT
               value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | quote }}
             - name: FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE
-              value: {{ .Values.dataPlane.limits.tokensPerMinute | quote }}
+              value: {{ .Values.dataPlane.limits.tokensPerMinute | default 0 | quote }}
             - name: FABRIC_DP_TOKEN_RATE_LIMIT_BURST
-              value: {{ .Values.dataPlane.limits.tokenBurst | quote }}
+              value: {{ .Values.dataPlane.limits.tokenBurst | default 0 | quote }}
             {{- if .Values.dataPlane.limits.shared.enabled }}
             - name: FABRIC_DP_LIMIT_COORDINATOR_URL
               value: http://{{ include "fabric-stamp.fullname" . }}-limits:8083

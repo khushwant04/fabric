@@ -994,6 +994,11 @@
             "title": "Received At",
             "type": "string"
           },
+          "rotate_credentials": {
+            "default": false,
+            "title": "Rotate Credentials",
+            "type": "boolean"
+          },
           "stamp_id": {
             "format": "uuid",
             "title": "Stamp Id",
@@ -1945,6 +1950,43 @@
         "title": "StampCapabilities",
         "type": "object"
       },
+      "StampCredentialRotationResponse": {
+        "properties": {
+          "agent_credential": {
+            "description": "Shown once; replaces the agent's credential",
+            "title": "Agent Credential",
+            "type": "string"
+          },
+          "credential_version": {
+            "title": "Credential Version",
+            "type": "integer"
+          },
+          "previous_credentials_expire_at": {
+            "format": "date-time",
+            "title": "Previous Credentials Expire At",
+            "type": "string"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          },
+          "telemetry_credential": {
+            "description": "Shown once; the collector's new credential",
+            "title": "Telemetry Credential",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "credential_version",
+          "agent_credential",
+          "telemetry_credential",
+          "previous_credentials_expire_at"
+        ],
+        "title": "StampCredentialRotationResponse",
+        "type": "object"
+      },
       "StampEnrollRequest": {
         "properties": {
           "capabilities": {
@@ -2009,6 +2051,35 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "credential_rotation_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Rotation Requested At"
+          },
+          "credential_version": {
+            "default": 1,
+            "title": "Credential Version",
+            "type": "integer"
+          },
+          "credentials_rotated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials Rotated At"
           },
           "id": {
             "format": "uuid",
@@ -4551,6 +4622,62 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/stamps/{stamp_id}/credential-rotation": {
+      "post": {
+        "description": "Accepted rather than done: the agent rotates on its next heartbeat.\n\nUse stamp revocation instead when a credential may have leaked; it takes effect\nimmediately, while a rotation waits for the agent and overlaps the old credentials.",
+        "operationId": "request_stamp_rotation_v1_accounts__account_id__stamps__stamp_id__credential_rotation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask a stamp's agent to rotate its machine credentials",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "operationId": "read_me_v1_me_get",
@@ -4631,6 +4758,50 @@
           }
         },
         "summary": "Register a stamp using a one-time enrollment token",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
+    "/v1/stamps/{stamp_id}/credentials/rotate": {
+      "post": {
+        "description": "Authorized by the agent credential being replaced.\n\nRequires the heartbeat scope, which every agent credential has held since\nenrollment, rather than a new scope existing credentials would lack.",
+        "operationId": "rotate_credentials_v1_stamps__stamp_id__credentials_rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampCredentialRotationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace this stamp's agent and telemetry credentials",
         "tags": [
           "stamps"
         ]

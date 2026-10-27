@@ -111,9 +111,10 @@ that did not happen. The attempt is audited either way. The system account itsel
 hold the entitlement: it owns the capacity, and entitling it to itself would obscure whose
 placement a deployment is.
 
-Not implemented in the service: agent/telemetry credential rotation (the
-`credential_version` column has no handler). Idempotency and entitlement management,
-described above, were added after this note was first written.
+Stamp credential rotation is implemented (ADR 0018): the agent rotates by age or on an
+operator's request delivered through its heartbeat, the old credentials overlap for a
+grace window, and the collector follows its credential file. Idempotency and entitlement
+management, described above, were added after this note was first written.
 
 ### Audit trail
 
@@ -577,7 +578,8 @@ The repository currently has no implementation of:
 
 - Serving-level evidence that the Fabric decode kernel improves end-to-end throughput;
   the kernel is measured at operation level only.
-- Agent/telemetry credential rotation, and overlap-based rotation of the JWT signing key.
+- Overlap-based rotation of the JWT signing key, or of API keys. Stamp machine
+  credentials rotate (ADR 0018).
 - Daily or monthly token budgets, per-key quotas, or per-account limit policies. Request,
   token and concurrency limits exist per account but are one stamp-wide setting (ADR 0016,
   0017); `limits_policy_ref` refers to no policy resource.

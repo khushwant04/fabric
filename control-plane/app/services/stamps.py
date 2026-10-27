@@ -351,13 +351,139 @@ async def revoke_enrollment_token(
     return record
 
 
+async def rotate_stamp_credentials(
+    session: AsyncSession, *, stamp_id: uuid.UUID
+) -> tuple[InferenceStamp, str, str, dt.datetime]:
+    """Mint a stamp's next agent and telemetry credentials, overlapping the previous ones.
+
+    Called by the agent with the credential it holds, so rotation needs no inbound
+    connection. Every earlier, unrevoked credential of the stamp, of both kinds, is given
+    an expiry at most one grace period away rather than revoked at once: the collector
+    reads its file on its own schedule, and an agent that loses this reply must still be
+    able to authenticate to rotate again. That second rotation also shortens the
+    credentials from the lost reply, so a lost reply cannot leave a long-lived credential
+    nobody holds (ADR 0018).
+
+    Returns the stamp, the two new credentials, and when the previous ones stop working.
+    """
+    stamp = await get_stamp(session, stamp_id)
+    settings = get_settings()
+    now = dt.datetime.now(tz=dt.UTC)
+    previous_valid_until = now + dt.timedelta(
+        seconds=settings.stamp_credential_rotation_grace_seconds
+    )
+    for model in (StampCredential, TelemetryCredential):
+        await session.execute(
+            update(model)
+            .where(
+                model.account_id == stamp.account_id,
+                model.stamp_id == stamp.id,
+                model.revoked_at.is_(None),
+                (model.expires_at.is_(None)) | (model.expires_at > previous_valid_until),
+            )
+            .values(expires_at=previous_valid_until)
+        )
+
+    version = stamp.credential_version + 1
+    agent = generate_credential(settings.credential_pepper, PREFIX_AGENT)
+    telemetry = generate_credential(settings.credential_pepper, PREFIX_TELEMETRY)
+    session.add(
+        StampCredential(
+            id=agent.credential_id,
+            account_id=stamp.account_id,
+            stamp_id=stamp.id,
+            credential_prefix=agent.display_prefix,
+            credential_verifier=agent.verifier,
+            scopes=sorted(scope_defs.AGENT_SCOPES),
+            version=version,
+        )
+    )
+    session.add(
+        TelemetryCredential(
+            id=telemetry.credential_id,
+            account_id=stamp.account_id,
+            stamp_id=stamp.id,
+            credential_prefix=telemetry.display_prefix,
+            credential_verifier=telemetry.verifier,
+            scopes=sorted(scope_defs.TELEMETRY_SCOPES),
+            version=version,
+        )
+    )
+    requested = stamp.credential_rotation_requested_at is not None
+    stamp.credential_version = version
+    stamp.credentials_rotated_at = now
+    stamp.credential_rotation_requested_at = None
+    await session.flush()
+
+    await record_audit(
+        session,
+        account_id=stamp.account_id,
+        actor_type="stamp",
+        actor_id=str(stamp.id),
+        action="stamp.credentials_rotated",
+        resource_type="inference_stamp",
+        resource_id=str(stamp.id),
+        metadata={
+            "credential_version": version,
+            "previous_valid_until": previous_valid_until.isoformat(),
+            "requested": requested,
+        },
+    )
+    await invalidate_account_versions(session, [stamp.account_id])
+    return stamp, agent.token, telemetry.token, previous_valid_until
+
+
+async def request_credential_rotation(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    stamp_id: uuid.UUID,
+    actor_type: str,
+    actor_id: str | None,
+) -> InferenceStamp:
+    """Ask a stamp's agent to rotate its credentials on its next heartbeat.
+
+    The control plane never dials into a cluster, so it cannot rotate a stamp's
+    credentials itself; it can only record the request where the agent will read it. A
+    suspected leak is answered by revoking the stamp, which takes effect immediately.
+    """
+    stamp = (
+        await session.execute(
+            select(InferenceStamp).where(
+                InferenceStamp.id == stamp_id, InferenceStamp.account_id == account_id
+            )
+        )
+    ).scalar_one_or_none()
+    if stamp is None:
+        raise NotFound("stamp_not_found", "Inference stamp does not exist")
+    if stamp.revoked_at is not None:
+        raise Forbidden("stamp_revoked", "Inference stamp has been revoked")
+    if stamp.credential_rotation_requested_at is None:
+        stamp.credential_rotation_requested_at = dt.datetime.now(tz=dt.UTC)
+        await session.flush()
+    await record_audit(
+        session,
+        account_id=account_id,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        action="stamp.credential_rotation_requested",
+        resource_type="inference_stamp",
+        resource_id=str(stamp.id),
+    )
+    return stamp
+
+
 async def record_heartbeat(
     session: AsyncSession,
     *,
     stamp_id: uuid.UUID,
     capabilities: StampCapabilities | None,
-) -> dt.datetime:
-    """Update liveness and optionally refresh bounded capability data."""
+) -> tuple[dt.datetime, bool]:
+    """Update liveness and optionally refresh bounded capability data.
+
+    Returns when the heartbeat was received and whether an operator has asked this
+    stamp to rotate its credentials, which is how that request reaches the agent.
+    """
     stamp = await get_stamp(session, stamp_id)
     now = dt.datetime.now(tz=dt.UTC)
     stamp.last_heartbeat_at = now
@@ -368,7 +494,7 @@ async def record_heartbeat(
     if stamp.status == "registered":
         stamp.status = "active"
     await session.flush()
-    return now
+    return now, stamp.credential_rotation_requested_at is not None
 
 
 async def build_desired_state(

@@ -100,6 +100,11 @@ type Config struct {
 	CapacityInterval time.Duration
 	PollInterval     time.Duration
 	RequestTimeout   time.Duration
+	// CredentialMaxAge rotates the machine credentials once they are this old (ADR 0018).
+	// Zero rotates only when an operator asks.
+	CredentialMaxAge time.Duration
+	// Now is the clock, replaceable in tests. Nil uses time.Now.
+	Now func() time.Time
 }
 
 // Agent holds one stamp's reconciliation state.
@@ -182,6 +187,14 @@ func (a *Agent) Ensure(ctx context.Context) error {
 			existing.DeploymentGenerations = map[string]int{}
 		}
 		a.client.Credential = existing.AgentCredential
+		if existing.CredentialsIssuedAt == "" {
+			// Written before rotation existed. The true issue time is unknown, so age is
+			// measured from now: a credential is never rotated earlier than configured.
+			existing.CredentialsIssuedAt = a.now().UTC().Format(time.RFC3339)
+			if err := state.SaveCredentials(a.config.CredentialsPath, existing); err != nil {
+				a.log.Warn("could not record when the credentials were issued", "error", err)
+			}
+		}
 		// The collector's copy may live on an ephemeral volume, so it is rewritten
 		// on every start rather than only when the credential was first issued.
 		a.handOffTelemetryCredential()
@@ -260,6 +273,7 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		Mode:                  enrolled.Stamp.Mode,
 		AgentCredential:       enrolled.AgentCredential,
 		TelemetryCredential:   enrolled.TelemetryCredential,
+		CredentialsIssuedAt:   a.now().UTC().Format(time.RFC3339),
 		DeploymentGenerations: map[string]int{},
 	}
 	if err := state.SaveCredentials(a.config.CredentialsPath, a.credentials); err != nil {
@@ -418,6 +432,62 @@ func (a *Agent) reportedFabricClaims() []controlplane.GPUClaim {
 	return claims
 }
 
+func (a *Agent) now() time.Time {
+	if a.config.Now != nil {
+		return a.config.Now()
+	}
+	return time.Now()
+}
+
+// rotationReason says why the credentials should be rotated now, or "" if they should not.
+func (a *Agent) rotationReason(requested bool) string {
+	if requested {
+		return "requested"
+	}
+	if a.config.CredentialMaxAge <= 0 {
+		return ""
+	}
+	issued, err := time.Parse(time.RFC3339, a.credentials.CredentialsIssuedAt)
+	if err != nil {
+		return ""
+	}
+	if a.now().Sub(issued) >= a.config.CredentialMaxAge {
+		return "max_age"
+	}
+	return ""
+}
+
+// rotateCredentials replaces both machine credentials (ADR 0018).
+//
+// The new pair is persisted before it is used. If persisting fails the agent keeps
+// presenting the old credential, which the control plane honours until the overlap ends,
+// and the next pass rotates again; that second rotation also retires the pair that could
+// not be saved. The collector's file is written last, so it never holds a credential the
+// agent has not durably recorded.
+func (a *Agent) rotateCredentials(ctx context.Context, reason string) error {
+	rotated, err := a.client.RotateCredentials(ctx, a.credentials.StampID)
+	if err != nil {
+		return err
+	}
+	next := *a.credentials
+	next.AgentCredential = rotated.AgentCredential
+	next.TelemetryCredential = rotated.TelemetryCredential
+	next.CredentialsIssuedAt = a.now().UTC().Format(time.RFC3339)
+	if err := state.SaveCredentials(a.config.CredentialsPath, &next); err != nil {
+		return fmt.Errorf("persist rotated credentials: %w", err)
+	}
+	a.credentials.AgentCredential = next.AgentCredential
+	a.credentials.TelemetryCredential = next.TelemetryCredential
+	a.credentials.CredentialsIssuedAt = next.CredentialsIssuedAt
+	a.client.Credential = next.AgentCredential
+	a.handOffTelemetryCredential()
+	a.log.Info("rotated machine credentials",
+		"reason", reason,
+		"credential_version", rotated.CredentialVersion,
+		"previous_valid_until", rotated.PreviousExpireAt.Format(time.RFC3339))
+	return nil
+}
+
 // handOffTelemetryCredential writes the collector's credential if one is wanted.
 //
 // This runs on every start, not only after enrollment. Credentials persist on a
@@ -446,8 +516,17 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 
 	a.refreshCapacity(ctx)
 	capabilities := a.reportedCapabilities()
-	if err := a.client.Heartbeat(ctx, a.credentials.StampID, &capabilities); err != nil {
+	beat, err := a.client.Heartbeat(ctx, a.credentials.StampID, &capabilities)
+	if err != nil {
 		return nil, fmt.Errorf("heartbeat: %w", err)
+	}
+	if reason := a.rotationReason(beat.RotateCredentials); reason != "" {
+		// A failed rotation does not stop reconciliation: the current credentials still
+		// work, and the next pass tries again.
+		if err := a.rotateCredentials(ctx, reason); err != nil {
+			a.log.Error("credential rotation failed; keeping the current credentials",
+				"reason", reason, "error", err)
+		}
 	}
 
 	desired, err := a.client.DesiredState(

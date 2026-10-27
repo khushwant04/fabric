@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Credentials is the agent's durable identity.
@@ -34,6 +36,10 @@ type Credentials struct {
 	Mode                string `json:"mode"`
 	AgentCredential     string `json:"agent_credential"`
 	TelemetryCredential string `json:"telemetry_credential"`
+	// CredentialsIssuedAt is when the credentials above were issued, in RFC 3339, which
+	// is what age-based rotation measures from. Absent from a file written before
+	// rotation existed; the agent records the time it first sees such a file instead.
+	CredentialsIssuedAt string `json:"credentials_issued_at,omitempty"`
 	// AckedGeneration is the highest desired generation already applied, so a
 	// restart resumes instead of replaying every assignment.
 	AckedGeneration int `json:"acked_generation"`
@@ -274,4 +280,42 @@ func ReadTelemetryCredential(path string) (string, error) {
 		return "", fmt.Errorf("telemetry credential at %s is empty", path)
 	}
 	return credential, nil
+}
+
+// TelemetryCredentialSource serves the collector's credential from its file, re-reading
+// the file whenever it changes, so a credential the agent rotates is picked up without
+// restarting the collector (ADR 0018). The agent replaces the file atomically, so a read
+// never sees a partial credential. Safe for concurrent use.
+type TelemetryCredentialSource struct {
+	path string
+
+	mu      sync.Mutex
+	value   string
+	modTime time.Time
+}
+
+// NewTelemetryCredentialSource starts from a credential already read from path.
+func NewTelemetryCredentialSource(path, initial string) *TelemetryCredentialSource {
+	file := &TelemetryCredentialSource{path: path, value: initial}
+	if info, err := os.Stat(path); err == nil {
+		file.modTime = info.ModTime()
+	}
+	return file
+}
+
+// Get returns the current credential. A file that has vanished, is unreadable or is
+// empty keeps the last credential read: presenting it is no worse than presenting
+// nothing, and the control plane is the one to decide whether it still works.
+func (f *TelemetryCredentialSource) Get() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info, err := os.Stat(f.path)
+	if err != nil || info.ModTime().Equal(f.modTime) {
+		return f.value
+	}
+	if credential, err := ReadTelemetryCredential(f.path); err == nil {
+		f.value = credential
+		f.modTime = info.ModTime()
+	}
+	return f.value
 }
