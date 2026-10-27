@@ -1,7 +1,11 @@
 # Current State
 
 **Status:** Implemented facts only  
-**Last verified:** 2026-08-11
+**Last verified:** 2026-10-27
+
+Subsections were written as each component landed. Where a later section supersedes an
+earlier "not implemented" note, the note now says so; the consolidated list of what is
+still missing is at the end.
 
 ## Repository state
 
@@ -13,7 +17,7 @@ Account is the only tenant level. Tenant tables carry `account_id`, placements u
 
 Authorization details that hold today: an API key can never carry a control scope the creating principal lacks; machine keys belong to account-owned service principals, and disabling a principal revokes its keys while token exchange independently rejects a key whose principal is inactive; enrollment tokens are claimed by a conditional update so concurrent enrollments cannot reuse one token; a status write resolves its owning account from the placement, which is what lets a system-account managed stamp report status for a customer deployment; managed placement requires the system account, a supported distribution (`aks`, `k3s`), and the account's managed-capacity flag; a placement is refused unless the stamp's measured capacity can hold `replicas x gpu_count` at the requested GPU class and region, and omitting `stamp_id` selects the least loaded stamp that can, with the same authorization gates applied per candidate (ADR 0013); an account cannot be left without an active owner; and outside `local`/`test` the service refuses to start without both a signing key and a real credential pepper.
 
-Verified locally: `ruff` reports no findings, 179 tests pass on SQLite and 193 on PostgreSQL against a database built by the real Alembic migration, `alembic upgrade → downgrade → upgrade` reproduces the application tables, and `openapi.json` matches the running app, which a test enforces. The extra PostgreSQL tests are the row-level-security suite plus the placement-race checks, which SQLite cannot represent and therefore skips rather than passing vacuously.
+Verified locally and in CI: `ruff` reports no findings, 233 tests pass on SQLite and 247 on PostgreSQL (as the restricted `fabric_app` role) against a database built by the real Alembic migration, `alembic upgrade → downgrade → upgrade` reproduces the application tables, and `openapi.json` matches the running app, which a test enforces. The extra PostgreSQL tests are the row-level-security suite plus the placement-race checks, which SQLite cannot represent and therefore skips rather than passing vacuously.
 
 ### Row-level security
 
@@ -107,9 +111,9 @@ that did not happen. The attempt is audited either way. The system account itsel
 hold the entitlement: it owns the capacity, and entitling it to itself would obscure whose
 placement a deployment is.
 
-Not implemented in the service: request idempotency (the `idempotency_keys` table has no handler),
-agent/telemetry credential rotation, and managed-capacity entitlement management
-through the API.
+Not implemented in the service: agent/telemetry credential rotation (the
+`credential_version` column has no handler). Idempotency and entitlement management,
+described above, were added after this note was first written.
 
 ### Usage ingestion
 
@@ -273,8 +277,9 @@ credential and the collector receives only the telemetry credential.
 loop, including a pod restart. Details and the defects that only appeared on
 Kubernetes are in [Packaging and Deployment](packaging-deployment.md).
 
-Not implemented: a CRD, an operator, a control-plane chart, GPU scheduling, ingress
-or TLS, and any model host.
+Since added: the CRD and operator (above), operator-created GPU model hosts, the
+control-plane chart, and native gateway exposure with TLS
+([stamp-native-endpoint](../stamp-native-endpoint.md)).
 
 ### Usage collector
 
@@ -307,7 +312,8 @@ without bound while being awkward to read. The latest sample is kept on the stam
 operator can see it and the rest is logged, which keeps the path real without pretending a
 relational table is a metrics system.
 
-Not implemented: a metrics store, which is an infrastructure choice, and any dashboard.
+Not implemented: a central metrics store, which is an infrastructure choice. Stamp-side
+Prometheus and a Grafana dashboard ship in [`deploy/observability`](../../deploy/observability/README.md).
 
 See [Control-Plane Service](control-plane-service.md) for configuration, commands, and Auth0 requirements.
 
@@ -315,7 +321,7 @@ See [Control-Plane Service](control-plane-service.md) for configuration, command
 
 `/data-plane` is a FastAPI inference ingress that verifies Fabric inference JWTs
 locally and proxies OpenAI-compatible chat and text completions, including
-streaming, to a model host. 32 tests pass, plus a cross-component test that runs
+streaming, to a model host. 406 tests pass, plus a cross-component test that runs
 when both the control plane and data plane are importable.
 
 - Signing keys come from the control plane's JWKS document and are cached. A
@@ -374,7 +380,7 @@ with no central control-plane request dependency.
 `/agent` is a Go binary that enrolls a stamp with a single-use token, persists its
 credentials at 0600, heartbeats with a bounded capability report, pulls desired
 state by monotonic generation, renders the `deployments.json` the data plane reads,
-and reports observed status. 11 Go tests pass, plus `go vet` and `gofmt`.
+and reports observed status. The Go module's tests pass, with `go vet` and `gofmt` clean.
 
 Ordering is deliberate: configuration is written before the acknowledged generation
 advances, so a crash replays an assignment rather than losing it; a failed status
@@ -396,12 +402,19 @@ before any placement, the placement appearing with its owning account and releas
 the reported status readable through the control API, the data plane serving that
 model for the account, and a forged token refused.
 
-Not implemented: creating Kubernetes resources, telemetry export, and the Helm
-bundle.
+Since added: with the operator enabled the agent creates `FabricModelDeployment`
+resources, the collector exports usage and metrics, and the stamp Helm chart packages
+all three processes.
 
 ### Frontend
 
-`/v1` is a Next.js 16 frontend scaffold with UI dependencies and a `TooltipProvider`, while its home page and metadata retain Create Next App starter content. It implements no Fabric authentication, deployment, cluster, model, usage, or inference workflow.
+`/v1` is the Next.js 16 console. People sign in through Auth0 with a server-side
+session (control tokens never reach the browser), choose an account, and work against
+the live control-plane API: a dashboard of deployment status and usage; deployment
+creation, placement and detail; stamp enrollment with generated Helm commands; usage;
+members, service principals, API keys and the account's identity provider; and an
+inference playground. Lint, type checks and its unit tests run in CI, which also builds
+the standalone console image.
 
 ### Runtime prototype
 
@@ -432,7 +445,7 @@ mid-generation fallback keeps the recurrence valid. Fallbacks are counted per
 deployment and exposed through `GatedDeltaDecoder.telemetry()`.
 
 Not implemented: the private-profile dispatch boundary, hardware-profile tile and
-warp selection, and any model host that calls this layer. 70 runtime tests pass,
+warp selection, and any model host that calls this layer. 77 runtime tests pass,
 with the Triton-path tests skipped when no GPU is present.
 
 The kernel also accepts `state_indices`, making the recurrent state a slot-addressed
@@ -446,7 +459,8 @@ the serving host on the same toolchain as the kernels and the committed artifact
 `serving/fabric_serving/vllm_gated_delta.py` implements vLLM's
 `fused_recurrent_gated_delta_rule` signature backed by Fabric dispatch, claiming
 only the single-token decode step and delegating prefill, speculative multi-token
-steps, and every other shape to vLLM's own implementation. 17 serving tests pass.
+steps, and every other shape to vLLM's own implementation. 45 serving tests pass
+without vLLM installed; the remainder need it and skip.
 
 Measured on the development GPU against vLLM's own decode kernel, on identical
 inputs with a shuffled slot table: outputs agree to ≤1.5e-5 in FP16 and are often
@@ -546,15 +560,19 @@ claim.
 
 The repository currently has no implementation of:
 
-- A running vLLM host; the Fabric decode-op substitution exists and is verified against vLLM's kernel, but nothing registers it in a live instance and no model weights are loaded.
-- Request quotas, rate limiting, or mTLS between the inference ingress and a model host.
-- A model-host workload. The CRD and operator exist and reconcile the data plane's configuration, but nothing starts vLLM because no host exists to start.
-- Managed-serverless infrastructure provisioning or the BYOI Helm bundle.
-- AKS or k3s deployment manifests.
-- Kubernetes stamp provisioning scripts. The A10 research-host scripts in `/scripts` are implemented and provision a bare Ubuntu 22.04 host through the Azure GRID driver and CUDA 12.8; nothing provisions a k3s or AKS stamp.
-- A10 or T4 benchmark automation/results.
-- Prometheus/OpenTelemetry collectors, central telemetry ingestion/storage, dashboard charts, metering, or billing.
-- Console workflows in the frontend scaffold.
+- Serving-level evidence that the Fabric decode kernel improves end-to-end throughput;
+  the kernel is measured at operation level only.
+- Agent/telemetry credential rotation, and overlap-based rotation of the JWT signing key.
+- Token-per-minute limits, budgets, or per-key quotas. Request-rate and concurrency
+  limits exist per account (ADR 0016); `limits_policy_ref` refers to no policy resource.
+- An API to read or export the audit trail. Audit rows are written transactionally but
+  can only be read from the database.
+- A governed model catalogue (versions, artifacts, licences, approvals); deployments
+  name a free-form model reference.
+- Autoscaling, warm pools or scale-to-zero. Replicas are fixed per deployment.
+- GPU node or cluster provisioning. Fabric installs onto an existing Kubernetes
+  cluster.
+- Central time-series storage, OpenTelemetry tracing, or billing-grade metering.
 - Agent-aware cache reuse or multi-model session state.
 
 ## Verification boundary

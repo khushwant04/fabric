@@ -324,7 +324,7 @@ Legend: **Implemented**, **Partial**, **Missing**, **Conflict**.
 | Usage | Partial | Durable local spool, central attribution, token totals | Billing-grade ledger, cost allocation, retention/export, global quota accounting |
 | Audit | Partial | Transactional AuditEvent and outbox writes | No audit read/export API, SIEM, WORM/integrity, retention/legal hold, complete event coverage |
 | Metrics/Grafana | Partial | Prometheus + vLLM + gateway + DCGM and one dashboard | HA/remote retention, full dashboard suite, alerts/runbooks, router/kernel/cost/energy metrics |
-| Operator Console | Missing | Next.js shell and placeholder dashboard | All data integration, auth/session, pages/workflows, permission model; no functional UI today |
+| Operator Console | Partial | Auth0 server-side session; live dashboard, deployments, placement, stamp enrollment, usage, access management, playground | Model/profile catalogue, endpoints, limits, rollouts, audit/security views, operator-versus-tenant permission model |
 | Operator identity | Partial/Conflict | Auth0 humans, memberships, roles, API keys, per-account OIDC | Separate platform-operator authority from downstream tenant machine access |
 | Credential rotation | Partial | expiry/revocation fields; key/stamp revocation | Overlap rotation for API/stamp/JWT/mTLS, KMS/HSM/Vault automation and emergency workflow |
 | Network security | Partial | TLS, NetworkPolicy, separated listeners/credentials | Mandatory model-host mTLS, private endpoint workflow, egress controls and policy evidence |
@@ -462,7 +462,7 @@ Weighted routing is not yet a governed canary product. `limits_policy_ref` is no
 9. Operator playground/evaluation.
 10. Adaptive routing and experiment controls.
 
-The current `v1` application is a visual shell only: its dashboard is empty placeholder cards, navigation contains placeholder links, and no authenticated backend integration exists.
+Steps 1–4 and the deployment half of step 6 are implemented in `v1` (Auth0 server-side session, account context, typed control-plane client, live dashboard and deployment workflows); the playground from step 9 exists without evaluation gates. The governed catalogue, rollouts, endpoint/tenant/limit workflows, and security/audit views remain.
 
 ## 12. Research/product relationship
 

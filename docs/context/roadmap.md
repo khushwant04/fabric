@@ -14,7 +14,7 @@ Implemented today:
 
 - Shape-generic single-token gated-delta Triton kernel with no public private-profile constants.
 - Eager reference and local correctness/microbenchmark harness.
-- Next.js frontend scaffold with starter page/metadata and UI dependencies only; no Fabric platform workflow.
+- Next.js frontend scaffold (since built out into the operator console; see [Current State](current-state.md#frontend)).
 
 Exit requirement: none; this records the starting point.
 
