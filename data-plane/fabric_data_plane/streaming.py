@@ -358,7 +358,9 @@ class UsageMeter:
                 "response.completed", "response.incomplete", "response.failed"
             }:
                 response = document.get("response")
-                usage = response_usage(response.get("usage")) if isinstance(response, dict) else None
+                usage = (
+                    response_usage(response.get("usage")) if isinstance(response, dict) else None
+                )
                 self._usage = usage
                 self._usage_is_final = usage is not None
                 self._stream_ended = True
