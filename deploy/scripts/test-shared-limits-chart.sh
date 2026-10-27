@@ -39,7 +39,13 @@ dataPlane:
     tokensPerMinute: 2500000
     tokenBurst: 10000000
 VALUES
-"$HELM" template large "$CHART" "${common[@]}" -f "$TMP/large-limits.yaml" >"$TMP/large.yaml"
+# Without the token --set flags in common, which would override the values file.
+"$HELM" template large "$CHART" \
+  --set controlPlane.url=https://fabric.example \
+  --set controlPlane.jwtIssuer=https://fabric.example \
+  --set enrollment.existingSecret=fabric-enrollment \
+  --set modelHost.url=http://model-host:8000 \
+  -f "$TMP/large-limits.yaml" >"$TMP/large.yaml"
 grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE' "$TMP/large.yaml" | grep -q 'value: "2500000"'
 grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_BURST' "$TMP/large.yaml" | grep -q 'value: "10000000"'
 
