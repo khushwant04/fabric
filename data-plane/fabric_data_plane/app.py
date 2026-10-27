@@ -50,7 +50,13 @@ from fabric_data_plane.errors import (
     UpstreamUnavailable,
     api_error_handler,
 )
-from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
+from fabric_data_plane.limits import (
+    ConcurrencyLimiter,
+    RateLimit,
+    RateLimiter,
+    TokenRate,
+    TokenRateLimiter,
+)
 from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.model_selection import (
     AUTO_MODEL,
@@ -178,12 +184,19 @@ class DataPlane:
         )
         self.rate_limiter = RateLimiter(rate_limit)
         self.concurrency = ConcurrencyLimiter(settings.max_in_flight_per_account)
+        token_rate = TokenRate(
+            tokens_per_minute=settings.token_rate_limit_tokens_per_minute,
+            burst=settings.token_rate_limit_burst
+            or settings.token_rate_limit_tokens_per_minute,
+        )
+        self.token_limiter = TokenRateLimiter(token_rate)
         self.limit_store = (
             LimitCoordinatorStore(
                 path=settings.limit_coordinator_store_path,
                 rate=rate_limit,
                 maximum=settings.max_in_flight_per_account,
                 lease_seconds=settings.limit_lease_seconds,
+                token_rate=token_rate,
             )
             if settings.limit_coordinator_store_path
             else None
@@ -196,9 +209,12 @@ class DataPlane:
                 renew_seconds=settings.limit_renew_seconds,
                 rate_enabled=rate_limit.enabled,
                 concurrency_enabled=settings.max_in_flight_per_account > 0,
+                token_rate_enabled=token_rate.enabled,
             )
         else:
-            self.limits = LocalLimitManager(self.rate_limiter, self.concurrency)
+            self.limits = LocalLimitManager(
+                self.rate_limiter, self.concurrency, self.token_limiter
+            )
         # Publish zero-valued placement counters before the first request can finish. A counter
         # first observed at one hides that first event from Prometheus rate()/increase().
         self.reconcile_pools()
@@ -507,6 +523,18 @@ class DataPlane:
             ) from exc
 
 
+def metered_tokens(payload: Any) -> int:
+    """Total model tokens in a usage payload, which is what the token rate limit debits."""
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    try:
+        total = int((usage or {}).get("prompt_tokens", 0) or 0) + int(
+            (usage or {}).get("completion_tokens", 0) or 0
+        )
+    except (TypeError, ValueError):
+        return 0
+    return max(0, total)
+
+
 #: Deepest nesting accepted in a request body. Far beyond what chat messages, content
 #: parts, or tool JSON Schemas need, and enforced explicitly: the decoder's own recursion
 #: limit differs across interpreter versions (Python 3.12+ parses thousands of levels),
@@ -796,6 +824,12 @@ async def _proxy(
                 "This account has exceeded its request rate on this stamp",
                 retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
             )
+        if reason == "token_rate_limited":
+            raise TooManyRequests(
+                "token_rate_limited",
+                "This account has exceeded its token rate on this stamp",
+                retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
+            )
         raise TooManyRequests(
             "too_many_in_flight",
             "This account has too many requests in flight on this stamp",
@@ -824,6 +858,8 @@ async def _proxy(
 
     if not streaming:
         request_recorded = False
+        # Model tokens this request is charged against the account's token rate on release.
+        charged_tokens = 0
         try:
             tried: set[str] = set()
             response: httpx.Response | None = None
@@ -908,12 +944,9 @@ async def _proxy(
             totals = response_usage(usage) if is_responses else None
             if response.is_success and isinstance(body, dict):
                 if not is_responses or totals is not None:
-                    plane.record_usage(
-                        principal,
-                        deployment,
-                        totals.as_payload() if totals is not None else body,
-                        streamed=False,
-                    )
+                    metered = totals.as_payload() if totals is not None else body
+                    charged_tokens = metered_tokens(metered)
+                    plane.record_usage(principal, deployment, metered, streamed=False)
                 else:
                     logger.warning(
                         "Responses usage missing or invalid for deployment %s; "
@@ -947,7 +980,7 @@ async def _proxy(
                     outcome="cancelled",
                     duration_seconds=time.perf_counter() - started,
                 )
-            await plane.limits.release(admission)
+            await plane.limits.release(admission, tokens=charged_tokens)
 
     if not pool.has_available():
         await plane.limits.release(admission)
@@ -961,6 +994,7 @@ async def _proxy(
 
     plane.retain_stream(deployment)
     cleanup_accounted = False
+    stream_tokens = 0
     cleanup_error: UpstreamUnavailable | None = None
     placement_released = False
     concurrency_release: asyncio.Task[None] | None = None
@@ -998,6 +1032,7 @@ async def _proxy(
         the same task without duplicating usage, metrics, or decrementing the limiter twice.
         """
         nonlocal cleanup_accounted, cleanup_error, placement_released, concurrency_release
+        nonlocal stream_tokens
         nonlocal responses_close_task
         if not cleanup_accounted:
             # Only from a stream the host accepted, which is the rule the non-streaming path
@@ -1007,6 +1042,7 @@ async def _proxy(
             if usage is not None:
                 # Real numbers for a request the host accepted. A persistence fault is retained
                 # as the cleanup result, but cannot skip request/placement/concurrency release.
+                stream_tokens = metered_tokens(usage.as_payload())
                 try:
                     plane.record_usage(principal, deployment, usage.as_payload(), streamed=True)
                 except UpstreamUnavailable as exc:
@@ -1036,7 +1072,7 @@ async def _proxy(
 
         if concurrency_release is None:
             concurrency_release = asyncio.create_task(
-                plane.limits.release(admission)
+                plane.limits.release(admission, tokens=stream_tokens)
             )
         if responses_backend is not None and responses_close_task is None:
             responses_close_task = asyncio.create_task(close_responses_upstream())
@@ -1381,6 +1417,12 @@ async def _proxy_transcription(
                 "This account has exceeded its request rate on this stamp",
                 retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
             )
+        if reason == "token_rate_limited":
+            raise TooManyRequests(
+                "token_rate_limited",
+                "This account has exceeded its token rate on this stamp",
+                retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
+            )
         raise TooManyRequests(
             "too_many_in_flight",
             "This account has too many requests in flight on this stamp",
@@ -1396,6 +1438,7 @@ async def _proxy_transcription(
     pool = plane.pool_for(deployment)
     plane.metrics.request_started(deployment_label)
     request_recorded = False
+    charged_tokens = 0
     try:
         tried: set[str] = set()
         response: httpx.Response | None = None
@@ -1478,6 +1521,7 @@ async def _proxy_transcription(
 
         usage = body.get("usage") if isinstance(body, dict) else None
         if response.is_success and isinstance(body, dict):
+            charged_tokens = metered_tokens(body)
             plane.record_usage(principal, deployment, body, streamed=False)
             # The caller's alias, never the internal release. Only set when the host
             # reported a model, so a reply that carries none is not given one.
@@ -1507,7 +1551,7 @@ async def _proxy_transcription(
                 outcome="cancelled",
                 duration_seconds=time.perf_counter() - started,
             )
-        await plane.limits.release(admission)
+        await plane.limits.release(admission, tokens=charged_tokens)
 
 
 def build_inference_router(plane: DataPlane) -> APIRouter:
@@ -1789,6 +1833,35 @@ def build_limit_coordinator_router(
                 "limit_coordinator_unavailable", "Shared limit state is unavailable"
             ) from exc
         return {"lease_id": str(lease_id), "released": released}
+
+    @router.post("/limits/consume", summary="Debit one completed request's metered tokens")
+    async def limit_consume(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_token(authorization)
+        payload = await _read_json(request)
+        try:
+            request_id = uuid.UUID(str(payload.get("request_id")))
+            account_id = uuid.UUID(str(payload.get("account_id")))
+        except ValueError as exc:
+            raise BadRequest(
+                "invalid_limit_identity", "account_id and request_id must be UUIDs"
+            ) from exc
+        tokens = payload.get("tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            raise BadRequest("invalid_token_count", "tokens must be a non-negative integer")
+        try:
+            debited = await store.consume(request_id, account_id, tokens)
+        except ValueError as exc:
+            raise BadRequest(
+                "invalid_limit_request", "request_id does not name an admission of this account"
+            ) from exc
+        except LimitCoordinatorUnavailable as exc:
+            raise UpstreamUnavailable(
+                "limit_coordinator_unavailable", "Shared limit state is unavailable"
+            ) from exc
+        return {"request_id": str(request_id), "debited": debited}
 
     @router.get("/limits/state", summary="Authoritative shared limit state")
     async def shared_limit_state(

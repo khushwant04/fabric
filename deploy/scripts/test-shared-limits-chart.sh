@@ -14,6 +14,8 @@ common=(
   --set dataPlane.limits.requestsPerMinute=60
   --set dataPlane.limits.burst=2
   --set dataPlane.limits.maxInFlightPerAccount=2
+  --set dataPlane.limits.tokensPerMinute=6000
+  --set dataPlane.limits.tokenBurst=12000
 )
 
 "$HELM" lint "$CHART" "${common[@]}" >/dev/null
@@ -26,6 +28,8 @@ grep -q 'FABRIC_DP_LIMIT_COORDINATOR_STORE_PATH' "$TMP/shared.yaml"
 grep -q 'value: /var/lib/fabric-usage/private/limits.db' "$TMP/shared.yaml"
 grep -q 'containerPort: 8083' "$TMP/shared.yaml"
 grep -q 'port: limits' "$TMP/shared.yaml"
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE' "$TMP/shared.yaml" | grep -q 'value: "6000"'
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_BURST' "$TMP/shared.yaml" | grep -q 'value: "12000"'
 
 # Parse document-local contracts rather than only proving strings exist somewhere.
 awk '

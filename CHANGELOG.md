@@ -12,6 +12,9 @@ yet, so earlier work is summarised by period from the pull-request history.
   and `/export` (NDJSON, bounded pages, recorded as `audit.exported`), guarded by a new
   `audit:read` scope for owners and admins. Console audit log page with filters and
   export.
+- Token-rate limits (ADR 0017): per-account tokens per minute, debited from metered usage,
+  idempotent through the shared coordinator, `429 token_rate_limited` with `Retry-After`.
+  Chart values `dataPlane.limits.tokensPerMinute` and `tokenBurst`.
 - CI runs the control-plane suite on PostgreSQL 16 as a role without `BYPASSRLS`, so
   row-level security is exercised on every pull request.
 - CI runs the runtime kernel/harness and serving tests on CPU builds of torch and triton.

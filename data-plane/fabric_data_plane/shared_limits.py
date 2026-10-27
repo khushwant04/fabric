@@ -27,7 +27,15 @@ from typing import Any
 
 import httpx
 
-from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
+from fabric_data_plane.limits import (
+    ConcurrencyLimiter,
+    RateLimit,
+    RateLimiter,
+    TokenRate,
+    TokenRateLimiter,
+    token_balance,
+    token_wait,
+)
 
 logger = logging.getLogger("fabric.data_plane.limits")
 
@@ -45,6 +53,15 @@ class Admission:
     retry_after: float | None = None
     lease_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
+    #: Identifies this admission to the coordinator, which is what makes a token debit
+    #: for it idempotent. Absent for in-process admissions.
+    request_id: uuid.UUID | None = None
+
+
+#: Refusal reasons an admission may carry.
+REFUSAL_REASONS = frozenset({"rate_limited", "too_many_in_flight", "token_rate_limited"})
+
+_DISABLED_TOKEN_RATE = TokenRate(tokens_per_minute=0, burst=0)
 
 
 class LocalLimitManager:
@@ -52,11 +69,22 @@ class LocalLimitManager:
 
     mode = "process"
 
-    def __init__(self, rate: RateLimiter, concurrency: ConcurrencyLimiter) -> None:
+    def __init__(
+        self,
+        rate: RateLimiter,
+        concurrency: ConcurrencyLimiter,
+        tokens: TokenRateLimiter | None = None,
+    ) -> None:
         self.rate = rate
         self.concurrency = concurrency
+        self.tokens = tokens or TokenRateLimiter(_DISABLED_TOKEN_RATE)
 
     async def acquire(self, account_id: uuid.UUID) -> Admission:
+        # Checked first and without side effects, so an account in token debt does not also
+        # spend a request-rate token on an attempt that was never going to be admitted.
+        wait = self.tokens.check(account_id)
+        if wait is not None:
+            return Admission(False, reason="token_rate_limited", retry_after=wait)
         wait = self.rate.check(account_id)
         if wait is not None:
             return Admission(False, reason="rate_limited", retry_after=wait)
@@ -64,8 +92,10 @@ class LocalLimitManager:
             return Admission(False, reason="too_many_in_flight", retry_after=1.0)
         return Admission(True, account_id=account_id)
 
-    async def release(self, admission: Admission) -> None:
+    async def release(self, admission: Admission, *, tokens: int = 0) -> None:
+        """End an admitted request, charging the model tokens it was metered at."""
         if admission.allowed and admission.account_id is not None:
+            self.tokens.debit(admission.account_id, tokens)
             await self.concurrency.release(admission.account_id)
 
     async def snapshot(self) -> dict[str, Any]:
@@ -74,6 +104,7 @@ class LocalLimitManager:
             "healthy": True,
             "rate_limit": self.rate.snapshot(),
             "concurrency": self.concurrency.snapshot(),
+            "token_rate": self.tokens.snapshot(),
         }
 
 
@@ -87,6 +118,7 @@ class LimitCoordinatorStore:
         rate: RateLimit,
         maximum: int,
         lease_seconds: float,
+        token_rate: TokenRate = _DISABLED_TOKEN_RATE,
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -95,9 +127,11 @@ class LimitCoordinatorStore:
         self.rate = rate
         self.maximum = maximum
         self.lease_seconds = lease_seconds
+        self.token_rate = token_rate
         self._wall_clock = wall_clock
         self._monotonic_clock = monotonic_clock
         self._bucket_updated: dict[str, float] = {}
+        self._token_updated: dict[str, float] = {}
         self._lease_deadlines: dict[str, float] = {}
         self._admission_deadlines: dict[str, float] = {}
         self._path = pathlib.Path(path)
@@ -124,7 +158,7 @@ class LimitCoordinatorStore:
 
     @property
     def enabled(self) -> bool:
-        return self.rate.enabled or self.maximum > 0
+        return self.rate.enabled or self.maximum > 0 or self.token_rate.enabled
 
     @property
     def healthy(self) -> bool:
@@ -171,8 +205,26 @@ class LimitCoordinatorStore:
                 burst INTEGER NOT NULL,
                 maximum INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS token_buckets (
+                account_id TEXT PRIMARY KEY,
+                tokens REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            INSERT OR IGNORE INTO limit_metadata (key, value) VALUES ('token_rejected', 0);
+            INSERT OR IGNORE INTO limit_metadata (key, value) VALUES ('token_debited', 0);
             """
         )
+        # The store lives on a retained volume, so a file written before token limits existed
+        # is upgraded in place. Added columns default to "no token limit" and "not yet debited",
+        # which is what every row written by the older version means.
+        self._add_column("admissions", "consumed", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("limit_policy", "tokens_per_minute", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column("limit_policy", "token_burst", "INTEGER NOT NULL DEFAULT 0")
+
+    def _add_column(self, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in self._database.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            self._database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def _reconcile_restart_state(self) -> None:
         """Resume conservatively without trusting wall-clock downtime.
@@ -187,19 +239,32 @@ class LimitCoordinatorStore:
         self._database.execute("BEGIN IMMEDIATE")
         try:
             previous = self._database.execute(
-                "SELECT requests_per_minute, burst, maximum FROM limit_policy WHERE singleton = 1"
+                """
+                SELECT requests_per_minute, burst, maximum, tokens_per_minute, token_burst
+                FROM limit_policy WHERE singleton = 1
+                """
             ).fetchone()
-            policy = (self.rate.requests_per_minute, self.rate.burst, self.maximum)
+            policy = (
+                self.rate.requests_per_minute,
+                self.rate.burst,
+                self.maximum,
+                self.token_rate.tokens_per_minute,
+                self.token_rate.burst,
+            )
             rate_changed = previous is not None and (
                 int(previous["requests_per_minute"]), int(previous["burst"])
             ) != policy[:2]
+            token_rate_changed = previous is not None and (
+                int(previous["tokens_per_minute"]), int(previous["token_burst"])
+            ) != policy[3:]
             policy_changed = previous is not None and tuple(previous) != policy
             if previous is None:
                 self._database.execute(
                     """
                     INSERT INTO limit_policy (
-                        singleton, requests_per_minute, burst, maximum
-                    ) VALUES (1, ?, ?, ?)
+                        singleton, requests_per_minute, burst, maximum,
+                        tokens_per_minute, token_burst
+                    ) VALUES (1, ?, ?, ?, ?, ?)
                     """,
                     policy,
                 )
@@ -207,11 +272,19 @@ class LimitCoordinatorStore:
                 self._database.execute(
                     """
                     UPDATE limit_policy
-                    SET requests_per_minute = ?, burst = ?, maximum = ?
+                    SET requests_per_minute = ?, burst = ?, maximum = ?,
+                        tokens_per_minute = ?, token_burst = ?
                     WHERE singleton = 1
                     """,
                     policy,
                 )
+                # Like the request rate: a new token policy starts every account at its new
+                # burst rather than applying the new refill rate to debt run up under the old one.
+                if token_rate_changed:
+                    self._database.execute(
+                        "UPDATE token_buckets SET tokens = ?, updated_at = ?",
+                        (float(self.token_rate.burst), wall),
+                    )
                 if rate_changed:
                     self._database.execute(
                         "UPDATE rate_buckets SET tokens = ?, updated_at = ?",
@@ -235,6 +308,12 @@ class LimitCoordinatorStore:
                 "SELECT account_id FROM rate_buckets"
             ).fetchall()
             self._bucket_updated = {row["account_id"]: monotonic for row in bucket_accounts}
+            # Downtime refills no token debt either: an account that was in debt when the
+            # coordinator stopped is still in debt when it starts.
+            token_accounts = self._database.execute(
+                "SELECT account_id FROM token_buckets"
+            ).fetchall()
+            self._token_updated = {row["account_id"]: monotonic for row in token_accounts}
 
             leases = self._database.execute(
                 "SELECT lease_id FROM concurrency_leases"
@@ -352,9 +431,16 @@ class LimitCoordinatorStore:
                         )
                     return self._admission(existing)
 
-                wait: float | None = None
+                # Token debt is checked first and changes nothing, so an account that is in debt
+                # does not also spend a request-rate token on an attempt that cannot be admitted.
+                token_refusal = (
+                    token_wait(self.token_rate, self._token_balance(str(account_id), monotonic))
+                    if self.token_rate.enabled
+                    else None
+                )
+                wait: float | None = token_refusal
                 tokens = float(self.rate.burst)
-                if self.rate.enabled:
+                if token_refusal is None and self.rate.enabled:
                     bucket = self._database.execute(
                         "SELECT tokens, updated_at FROM rate_buckets WHERE account_id = ?",
                         (str(account_id),),
@@ -385,7 +471,10 @@ class LimitCoordinatorStore:
                 reason: str | None = None
                 lease_id: uuid.UUID | None = None
                 allowed = wait is None
-                if wait is not None:
+                if token_refusal is not None:
+                    reason = "token_rate_limited"
+                    self._increment("token_rejected")
+                elif wait is not None:
                     reason = "rate_limited"
                     self._increment("rate_rejected")
                 else:
@@ -422,7 +511,13 @@ class LimitCoordinatorStore:
 
                 if allowed:
                     self._increment("allowed")
-                decision_ttl = self.lease_seconds if lease_id else max(60.0, wait or 0.0)
+                # An admitted request's row must outlive the request when tokens are debited
+                # against it, since that row is what makes the debit idempotent.
+                decision_ttl = (
+                    self.lease_seconds
+                    if lease_id or (allowed and self.token_rate.enabled)
+                    else max(60.0, wait or 0.0)
+                )
                 self._database.execute(
                     """
                     INSERT INTO admissions (
@@ -448,6 +543,69 @@ class LimitCoordinatorStore:
                     lease_id=lease_id,
                     account_id=account_id,
                 )
+
+    def _token_balance(self, account_key: str, monotonic: float) -> float:
+        row = self._database.execute(
+            "SELECT tokens FROM token_buckets WHERE account_id = ?", (account_key,)
+        ).fetchone()
+        if row is None:
+            return float(self.token_rate.burst)
+        updated = self._token_updated.get(account_key, monotonic)
+        return token_balance(self.token_rate, float(row["tokens"]), monotonic - updated)
+
+    async def consume(self, request_id: uuid.UUID, account_id: uuid.UUID, tokens: int) -> bool:
+        """Debit a completed request's metered tokens once, returning whether this call did.
+
+        Idempotent on ``request_id``, so a gateway may retry a debit whose reply it lost. A
+        request whose admission row has already expired is still charged, and leaves a
+        consumed row behind so a retry of that debit is recognised too.
+        """
+        if not self.token_rate.enabled or tokens <= 0:
+            return False
+        monotonic = self._monotonic_clock()
+        wall = self._wall_clock()
+        async with self._lock:
+            with self._transaction():
+                self._purge(monotonic)
+                row = self._database.execute(
+                    "SELECT account_id, allowed, consumed FROM admissions WHERE request_id = ?",
+                    (str(request_id),),
+                ).fetchone()
+                if row is not None:
+                    if row["account_id"] != str(account_id) or not row["allowed"]:
+                        raise ValueError("request_id does not name an admission of this account")
+                    if row["consumed"]:
+                        return False
+                    self._database.execute(
+                        "UPDATE admissions SET consumed = 1 WHERE request_id = ?",
+                        (str(request_id),),
+                    )
+                else:
+                    self._database.execute(
+                        """
+                        INSERT INTO admissions (
+                            request_id, account_id, allowed, reason, retry_after,
+                            lease_id, expires_at, released, consumed
+                        ) VALUES (?, ?, 1, NULL, NULL, NULL, ?, 1, 1)
+                        """,
+                        (str(request_id), str(account_id), wall + self.lease_seconds),
+                    )
+                    self._admission_deadlines[str(request_id)] = monotonic + self.lease_seconds
+                key = str(account_id)
+                balance = self._token_balance(key, monotonic) - tokens
+                self._database.execute(
+                    """
+                    INSERT INTO token_buckets (account_id, tokens, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(account_id) DO UPDATE SET
+                        tokens = excluded.tokens,
+                        updated_at = excluded.updated_at
+                    """,
+                    (key, balance, wall),
+                )
+                self._token_updated[key] = monotonic
+                self._increment("token_debited", tokens)
+                return True
 
     async def renew(self, lease_id: uuid.UUID) -> bool:
         monotonic = self._monotonic_clock()
@@ -528,6 +686,18 @@ class LimitCoordinatorStore:
                         "expired_leases": metadata["expired_leases"],
                         "lease_seconds": self.lease_seconds,
                     },
+                    "token_rate": {
+                        "enabled": self.token_rate.enabled,
+                        "tokens_per_minute": self.token_rate.tokens_per_minute,
+                        "burst": self.token_rate.burst,
+                        "accounts_tracked": int(
+                            self._database.execute(
+                                "SELECT COUNT(*) FROM token_buckets"
+                            ).fetchone()[0]
+                        ),
+                        "debited": metadata["token_debited"],
+                        "rejected": metadata["token_rejected"],
+                    },
                 }
 
     def close(self) -> None:
@@ -548,6 +718,7 @@ class SharedLimitManager:
         renew_seconds: float,
         rate_enabled: bool,
         concurrency_enabled: bool,
+        token_rate_enabled: bool = False,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not token:
@@ -560,6 +731,7 @@ class SharedLimitManager:
         self.renew_seconds = renew_seconds
         self.rate_enabled = rate_enabled
         self.concurrency_enabled = concurrency_enabled
+        self.token_rate_enabled = token_rate_enabled
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
         self._renewals: dict[uuid.UUID, asyncio.Task[None]] = {}
@@ -569,7 +741,7 @@ class SharedLimitManager:
 
     @property
     def enabled(self) -> bool:
-        return self.rate_enabled or self.concurrency_enabled
+        return self.rate_enabled or self.concurrency_enabled or self.token_rate_enabled
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"}
@@ -673,7 +845,7 @@ class SharedLimitManager:
             else:
                 if lease_id is not None:
                     raise ValueError("refused coordinator admission carries a lease")
-                if reason not in {"rate_limited", "too_many_in_flight"}:
+                if reason not in REFUSAL_REASONS:
                     raise ValueError("coordinator returned an unknown refusal")
                 if (
                     isinstance(retry_after, bool)
@@ -692,6 +864,7 @@ class SharedLimitManager:
             retry_after=float(retry_after) if isinstance(retry_after, int | float) else None,
             lease_id=lease_id,
             account_id=account_id,
+            request_id=request_id,
         )
         if lease_id is not None:
             self._renewals[lease_id] = asyncio.create_task(self._renew(lease_id))
@@ -721,7 +894,16 @@ class SharedLimitManager:
                 # Existing work continues, but new admissions fail closed while health is false.
                 logger.error("could not renew shared concurrency lease %s: %s", lease_id, exc)
 
-    async def release(self, admission: Admission) -> None:
+    async def release(self, admission: Admission, *, tokens: int = 0) -> None:
+        """End an admitted request, charging the model tokens it was metered at."""
+        if (
+            self.token_rate_enabled
+            and admission.allowed
+            and tokens > 0
+            and admission.request_id is not None
+            and admission.account_id is not None
+        ):
+            await self._consume(admission.request_id, admission.account_id, tokens)
         lease_id = admission.lease_id
         if lease_id is None:
             return
@@ -744,6 +926,25 @@ class SharedLimitManager:
         except LimitCoordinatorUnavailable as exc:
             # Conservative: the coordinator retains the slot until its bounded expiry.
             logger.error("could not release shared concurrency lease %s: %s", lease_id, exc)
+
+    async def _consume(self, request_id: uuid.UUID, account_id: uuid.UUID, tokens: int) -> None:
+        # Retried once: the coordinator debits each request_id at most once, so a lost reply
+        # cannot charge twice. A debit that still fails is logged rather than raised. Admission
+        # fails closed; a missed debit under-charges one completed request, and failing the
+        # request after its answer was produced would help no one.
+        try:
+            document = await self._post(
+                "/limits/consume",
+                {"request_id": str(request_id), "account_id": str(account_id), "tokens": tokens},
+                attempts=2,
+            )
+            if document.get("request_id") != str(request_id) or not isinstance(
+                document.get("debited"), bool
+            ):
+                raise self._mark_protocol_error(ValueError("malformed token debit response"))
+            self._mark_healthy()
+        except LimitCoordinatorUnavailable as exc:
+            logger.error("could not debit %d tokens for request %s: %s", tokens, request_id, exc)
 
     async def snapshot(self) -> dict[str, Any]:
         if not self.enabled:

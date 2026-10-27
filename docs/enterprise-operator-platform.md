@@ -319,7 +319,7 @@ Legend: **Implemented**, **Partial**, **Missing**, **Conflict**.
 | Runtime profiles | Partial | Kernel mode, strategy, replicas/GPU; chart-wide vLLM knobs | First-class immutable per-deployment profile, compatibility matrix, CRUD, approval/evidence |
 | Inference endpoints | Partial | Public OpenAI-compatible routes and reported endpoint URLs | First-class endpoint resource, private endpoints, tenant policies, stable lifecycle and failover |
 | Routing | Partial | least-in-flight, round-robin, session affinity, weighted, backend ejection | Predicted completion, SLO/cost/energy, prefix locality, explanation, policy and multi-stamp routing |
-| Limits/quotas | Partial | Stamp-local per-account RPM/burst/concurrency coordinator | LimitPolicy is dangling; no TPM/daily budget/per-key/global-cross-stamp/reservation APIs |
+| Limits/quotas | Partial | Stamp-local per-account RPM/burst/concurrency and tokens-per-minute (ADR 0017) coordinator | LimitPolicy is dangling; no daily budget/per-key/global-cross-stamp/reservation APIs |
 | Rollout | Partial | release candidates, weighted cutover, acknowledged drain, automatic rollback mechanics | First-class rollout object, stages, guards, promote/pause/abort APIs, history/approvals |
 | Usage | Partial | Durable local spool, central attribution, token totals | Billing-grade ledger, cost allocation, retention/export, global quota accounting |
 | Audit | Partial | Transactional AuditEvent and outbox writes; filtered, keyset-paginated read API and audited NDJSON export; console audit log | SIEM push, WORM/integrity, retention/legal hold, complete event coverage |

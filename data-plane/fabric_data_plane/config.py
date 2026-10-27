@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     #: How much of that allowance may be spent at once. Defaults to a quarter minute's
     #: worth so a client that batches its calls is not punished for arriving together.
     rate_limit_burst: int = Field(default=0, ge=0)
+    #: Model tokens (input plus output) per minute per account. Zero disables it. Requests
+    #: differ in cost by orders of magnitude, so this is what keeps a few long generations
+    #: from taking a GPU that a request rate alone would leave open (ADR 0017).
+    token_rate_limit_tokens_per_minute: int = Field(default=0, ge=0)
+    #: Tokens an idle account may bank. Defaults to one minute's allowance.
+    token_rate_limit_burst: int = Field(default=0, ge=0)
 
     #: Client certificate and key the data plane presents to the model host, and the
     #: authority it verifies the host against. All three are needed for mutual TLS: a

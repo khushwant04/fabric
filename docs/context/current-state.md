@@ -578,8 +578,9 @@ The repository currently has no implementation of:
 - Serving-level evidence that the Fabric decode kernel improves end-to-end throughput;
   the kernel is measured at operation level only.
 - Agent/telemetry credential rotation, and overlap-based rotation of the JWT signing key.
-- Token-per-minute limits, budgets, or per-key quotas. Request-rate and concurrency
-  limits exist per account (ADR 0016); `limits_policy_ref` refers to no policy resource.
+- Daily or monthly token budgets, per-key quotas, or per-account limit policies. Request,
+  token and concurrency limits exist per account but are one stamp-wide setting (ADR 0016,
+  0017); `limits_policy_ref` refers to no policy resource.
 - Tamper evidence for the audit trail (hash chaining or WORM storage), retention policy,
   or a push integration with a SIEM.
 - A governed model catalogue (versions, artifacts, licences, approvals); deployments
