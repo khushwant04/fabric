@@ -195,6 +195,10 @@ log "4. Agent: build, enroll, reconcile"
 
 (cd "$REPO_ROOT/agent" && go build -o "$WORK/fabric-agent" ./cmd/fabric-agent)
 
+# No Kubernetes cluster runs here, so there are no GPU nodes to measure. Placement admits
+# a deployment only onto capacity a stamp reports (ADR 0013), so declare one device.
+AGENT_CAPACITY="--measure-capacity=false --gpus 1"
+
 FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
     --state-dir "$WORK/agent-state" \
@@ -202,6 +206,7 @@ FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --stamp-name e2e-stamp \
     --upstream "$UPSTREAM" \
     --orchestrator k3s \
+    $AGENT_CAPACITY \
     --once 2>&1 | tail -3
 
 STAMP_ID=$("$CONTROL_PY" -c "
@@ -229,6 +234,7 @@ FABRIC_AGENT_ENROLLMENT_TOKEN="" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
     --state-dir "$WORK/agent-state" \
     --upstream "$UPSTREAM" \
+    $AGENT_CAPACITY \
     --once 2>&1 | tail -2
 
 info "rendered configuration:"
