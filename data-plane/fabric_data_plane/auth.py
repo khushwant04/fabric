@@ -39,6 +39,9 @@ class InferencePrincipal:
     scopes: frozenset[str]
     key_id: str | None
     token_id: str | None
+    #: The data zone the token is bound to (ADR 0017), or ``None`` when it is unbound. A
+    #: bound token is served only by a stamp whose boundary is inside that zone.
+    data_zone: str | None = None
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -111,12 +114,19 @@ def verify_inference_token(
             required=[INFERENCE_SCOPE],
         )
 
+    zone_claim = claims.get("data_zone")
+    if zone_claim is not None and (not isinstance(zone_claim, str) or not zone_claim.strip()):
+        # A binding that cannot be read cannot be honoured, and ignoring it would serve the
+        # token anywhere — the opposite of what whoever bound it asked for.
+        raise Unauthorized("invalid_token", "Token data-zone binding is malformed")
+
     return InferencePrincipal(
         account_id=account_id,
         subject=str(claims.get("sub", "")),
         scopes=scopes,
         key_id=key_id,
         token_id=claims.get("jti"),
+        data_zone=zone_claim.strip().lower() if isinstance(zone_claim, str) else None,
     )
 
 

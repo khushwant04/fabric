@@ -58,6 +58,7 @@ The agent polls outbound only. The control plane never dials into a customer clu
 | **OpenAI-compatible serving** | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, streaming. Verified against the official `openai` Python SDK |
 | **Responses format** | `POST /v1/responses` with native JSON/SSE, stateless input history, account routing, and input/output usage accounting. Requires an updated data-plane image and a supporting model host; see [Responses setup](docs/openai-responses.md) |
 | **Context-aware model routing** | Use `model: "auto"` to select an account-owned, healthy deployment by endpoint, modality, context bound, code/reasoning fit, and configured priority—without a request-time control-plane call |
+| **Data-zone residency** | Declare `global`, `data_zone` (`eu`, `us`, …), or `regional` per deployment. Enforced at placement, on edit, and on every gateway request; API keys and tokens can be bound to a zone, and `GET /v1/accounts/{id}/inference-routes` finds in-zone endpoints. See [Data zones](docs/data-zones.md) |
 | **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
 | **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
 | **Declarative deployment** | A customer declares intent; the operator reconciles GPU hosts to match, one at a time, rolling back a release that never becomes ready |
@@ -334,6 +335,7 @@ Start with the [project review](docs/project-review.md) or the
 **Operations**
 [Single-tenant Helm installation](docs/single-tenant-installation.md) ·
 [Native Kubernetes stamp endpoints](docs/stamp-native-endpoint.md) ·
+[Data zones and residency](docs/data-zones.md) ·
 [Packaging and deployment](docs/context/packaging-deployment.md) ·
 [Cluster connection and performance checks](docs/cluster-performance-validation.md) ·
 [Qwen3.5 startup diagnosis](docs/model-startup-diagnosis.md) ·
@@ -341,6 +343,7 @@ Start with the [project review](docs/project-review.md) or the
 [Security and identity](docs/context/security-identity.md)
 
 **Direction**
+[Technical feature roadmap](docs/feature-roadmap.md) ·
 [Direction](docs/platform-direction.md) ·
 [Roadmap](docs/context/roadmap.md) ·
 [Risks and open questions](docs/context/risks-open-questions.md) ·

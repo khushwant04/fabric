@@ -73,6 +73,7 @@ export async function createDeployment(_previous: ActionState, formData: FormDat
           },
           replicas: input.replicas,
           resources: { gpu_count: input.gpuCount, gpu_class: input.gpuClass },
+          residency: input.residency,
         },
       }),
     }

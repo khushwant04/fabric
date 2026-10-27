@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fabric_data_plane.registry import Deployment
+from fabric_data_plane.residency import requested_zone
 
 AUTO_MODEL = "auto"
 ROUTING_POLICY = "heuristic-v1"
@@ -40,6 +41,9 @@ class RoutingProfile:
     requires_vision: bool = False
     estimated_tokens: int = 0
     explain: bool = False
+    #: A zone the client requires this one request to be processed in (ADR 0017). Narrows
+    #: like a zone-bound token does, without needing a separately bound credential.
+    data_zone: str | None = None
 
 
 def _request_text(payload: dict[str, Any]) -> tuple[str, bool]:
@@ -89,11 +93,12 @@ def profile_for_json(operation: str, payload: dict[str, Any]) -> RoutingProfile:
     """Classify an OpenAI-compatible JSON request without retaining its content."""
     task_hint: str | None = None
     explain = False
+    data_zone: str | None = None
     if "routing" in payload:
         routing = payload["routing"]
         if not isinstance(routing, dict):
             raise ValueError("routing must be an object")
-        unknown = set(routing) - {"task", "explain"}
+        unknown = set(routing) - {"task", "explain", "data_zone"}
         if unknown:
             raise ValueError(f"unknown routing fields: {', '.join(sorted(unknown))}")
         if "task" in routing:
@@ -105,6 +110,8 @@ def profile_for_json(operation: str, payload: dict[str, Any]) -> RoutingProfile:
             if not isinstance(routing["explain"], bool):
                 raise ValueError("routing.explain must be a boolean")
             explain = routing["explain"]
+        if "data_zone" in routing:
+            data_zone = requested_zone(routing["data_zone"])
 
     text, requires_vision = _request_text(payload)
     if task_hint is not None:
@@ -132,6 +139,7 @@ def profile_for_json(operation: str, payload: dict[str, Any]) -> RoutingProfile:
         requires_vision=requires_vision,
         estimated_tokens=estimated_tokens,
         explain=explain,
+        data_zone=data_zone,
     )
 
 

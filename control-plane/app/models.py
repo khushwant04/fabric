@@ -212,6 +212,10 @@ class ApiKey(Base):
     key_prefix: Mapped[str] = mapped_column(String(96), nullable=False, unique=True)
     secret_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
     scopes: Mapped[list[str]] = mapped_column(JsonColumn, nullable=False, default=list)
+    #: The data zone every inference token minted from this key is bound to (ADR 0017).
+    #: ``None`` leaves the zone to the exchange request. Fixed at creation: widening a key's
+    #: zone afterwards would silently change what data its holders may send where.
+    data_zone: Mapped[str | None] = mapped_column(String(16))
     expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

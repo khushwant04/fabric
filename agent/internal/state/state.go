@@ -110,6 +110,14 @@ type Deployment struct {
 	// through persistence and publishing rather than dropping it as an empty value.
 	EnableAutoToolChoice *bool  `json:"enable_auto_tool_choice,omitempty"`
 	ToolCallParser       string `json:"tool_call_parser,omitempty"`
+	// Residency is where this deployment's requests may be processed (ADR 0017). The data
+	// plane reads it and refuses a request when this stamp's boundary does not satisfy it,
+	// which is what keeps a stamp that has moved since placement from serving out of zone.
+	// Nil means global, which is also what a deployment that predates residency gets.
+	Residency *Residency `json:"residency,omitempty"`
+	// DataBoundary is stamp-wide and lifted to the document's top level, for the same
+	// reason Verification is.
+	DataBoundary *DataBoundary `json:"-"`
 	// Verification is stamp-wide, carried here because this struct is what flows through
 	// both delivery paths: the agent writes the file directly, or declares custom
 	// resources the operator renders. It is deliberately not serialised per entry — both
@@ -129,6 +137,21 @@ type Verification struct {
 	JWKSURL   string `json:"jwks_url,omitempty"`
 }
 
+// Residency is a deployment's data-residency requirement, as the control plane validated
+// it: "data_zone" with a DataZone, or "regional" with Regions.
+type Residency struct {
+	Level    string   `json:"level"`
+	DataZone string   `json:"data_zone,omitempty"`
+	Regions  []string `json:"regions,omitempty"`
+}
+
+// DataBoundary is where the control plane's catalogue places this stamp. Empty strings
+// mean unknown, which satisfies only global deployments.
+type DataBoundary struct {
+	Region   string `json:"region"`
+	DataZone string `json:"data_zone"`
+}
+
 // DeploymentsFile is the document the data plane loads.
 type DeploymentsFile struct {
 	Deployments []Deployment `json:"deployments"`
@@ -136,6 +159,9 @@ type DeploymentsFile struct {
 	// the stamp rather than any one deployment. Omitted when the control plane did not
 	// send one, which the data plane reads as "keep what you have" rather than "clear it".
 	Verification *Verification `json:"verification,omitempty"`
+	// Stamp-wide as well. Omitted when the control plane has not reported one, which the
+	// data plane reads as "boundary unknown" and so refuses zone-restricted work.
+	DataBoundary *DataBoundary `json:"data_boundary,omitempty"`
 }
 
 // writeAtomic replaces a file in one step so a reader never sees a partial
@@ -220,6 +246,13 @@ func WriteDeployments(path string, deployments []Deployment) error {
 		if entry.Verification.JWTIssuer != "" || entry.Verification.JWKSURL != "" {
 			verification := entry.Verification
 			document.Verification = &verification
+			break
+		}
+	}
+	for _, entry := range sorted {
+		if entry.DataBoundary != nil {
+			boundary := *entry.DataBoundary
+			document.DataBoundary = &boundary
 			break
 		}
 	}

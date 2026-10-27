@@ -854,7 +854,7 @@ func TestToolCallingFalsePersistsAndIdenticalAssignmentsDoNotRepublish(t *testin
 		ControlPlaneURL: server.URL, EnrollmentToken: "fab_enroll_token_secret",
 		CredentialsPath: filepath.Join(dir, "credentials.json"),
 		DeploymentsPath: filepath.Join(dir, "deployments.json"),
-		UpstreamURL: "http://model-host:8000", Sink: sink,
+		UpstreamURL:     "http://model-host:8000", Sink: sink,
 	}, discardLogger())
 	if err := instance.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1229,5 +1229,86 @@ func TestStrategyReachesTheSinkAsSpecStrategy(t *testing.T) {
 	}
 	if got := sink.applies[0][0].Strategy; got != "session_affinity" {
 		t.Fatalf("strategy reaching the sink = %q, want session_affinity", got)
+	}
+}
+
+func TestResidencyAndDataBoundaryFlowIntoConfiguration(t *testing.T) {
+	// ADR 0017: the data plane refuses a request its stamp's boundary does not satisfy, so
+	// both halves of that comparison have to reach the file it reads. Residency is per
+	// deployment; the boundary is stamp-wide and written once at the top. A global
+	// deployment renders without a residency key, exactly as it did before the field.
+	restricted := assignment(deployA, customerA, "alpha-model", 1, "release-a")
+	restricted.Spec["residency"] = map[string]any{"level": "data_zone", "data_zone": "eu"}
+	open := assignment(deployB, customerB, "beta-model", 2, "release-b")
+	open.Spec["residency"] = map[string]any{"level": "global"}
+
+	stub := &controlPlaneStub{
+		desired: []controlplane.DesiredState{
+			{
+				StampID:       stampID,
+				MaxGeneration: 2,
+				Deployments:   []controlplane.DesiredDeployment{restricted, open},
+				DataBoundary:  &controlplane.DataBoundary{Region: "westeurope", DataZone: "eu"},
+			},
+			// A steady-state pass carries no assignments, only a moved boundary. It must
+			// still be written, or a stamp that moved would keep serving out of zone.
+			{
+				StampID:       stampID,
+				MaxGeneration: 2,
+				DataBoundary:  &controlplane.DataBoundary{Region: "eastus", DataZone: "us"},
+			},
+		},
+	}
+	server := stub.server(t)
+	instance, dir := newAgent(t, server.URL)
+	if err := instance.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	path := filepath.Join(dir, "deployments.json")
+	file, err := state.ReadDeployments(path)
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	if file.DataBoundary == nil || *file.DataBoundary != (state.DataBoundary{Region: "westeurope", DataZone: "eu"}) {
+		t.Fatalf("data boundary = %+v, want westeurope/eu", file.DataBoundary)
+	}
+	byID := map[string]state.Deployment{}
+	for _, entry := range file.Deployments {
+		byID[entry.DeploymentID] = entry
+	}
+	if got := byID[deployA].Residency; got == nil || got.Level != "data_zone" || got.DataZone != "eu" {
+		t.Fatalf("alpha residency = %+v, want data_zone/eu", got)
+	}
+	if got := byID[deployB].Residency; got != nil {
+		t.Fatalf("beta residency = %+v, want nil for global", got)
+	}
+
+	if _, err := instance.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	moved, err := state.ReadDeployments(path)
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	if moved.DataBoundary == nil || moved.DataBoundary.DataZone != "us" {
+		t.Fatalf("data boundary after move = %+v, want us", moved.DataBoundary)
+	}
+	if len(moved.Deployments) != 2 {
+		t.Fatalf("deployments after move = %d, want both still declared", len(moved.Deployments))
+	}
+}
+
+func TestAnUnreadableResidencyIsCarriedAsTheStrictest(t *testing.T) {
+	spec := map[string]any{"residency": "eu"}
+	got := residencyFromSpec(spec)
+	if got == nil || got.Level != "regional" || len(got.Regions) != 0 {
+		t.Fatalf("residency = %+v, want an empty regional list nothing satisfies", got)
+	}
+	if residencyFromSpec(map[string]any{}) != nil {
+		t.Fatal("an absent residency must stay global")
 	}
 }

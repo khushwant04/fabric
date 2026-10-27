@@ -34,6 +34,7 @@ async def create_api_key(
     expires_in_days: int | None,
     service_principal_id: uuid.UUID | None,
     actor_user_id: uuid.UUID | None,
+    data_zone: str | None = None,
 ) -> tuple[ApiKey, str]:
     """Create an account-owned API key and return the one-time secret.
 
@@ -84,6 +85,7 @@ async def create_api_key(
         key_prefix=generated.display_prefix,
         secret_verifier=generated.verifier,
         scopes=scopes,
+        data_zone=data_zone,
         expires_at=expires_at,
         created_by_user_id=actor_user_id,
     )
@@ -97,7 +99,11 @@ async def create_api_key(
         action="api_key.created",
         resource_type="api_key",
         resource_id=str(record.id),
-        metadata={"scopes": scopes, "key_prefix": record.key_prefix},
+        metadata={
+            "scopes": scopes,
+            "key_prefix": record.key_prefix,
+            "data_zone": data_zone,
+        },
     )
     return record, generated.token
 

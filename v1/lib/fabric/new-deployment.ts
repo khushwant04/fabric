@@ -11,6 +11,43 @@ export type NewDeploymentInput = {
   execution: "eager" | "cuda_graph" | null
   enableAutoToolChoice: boolean | null
   toolCallParser: string | null
+  residency: Residency
+}
+
+export type Residency =
+  | { level: "global" }
+  | { level: "data_zone"; data_zone: string }
+  | { level: "regional"; regions: string[] }
+
+/** Zones the control plane's catalogue knows (GET /v1/data-zones); it remains the authority. */
+export const dataZones: { key: string; name: string }[] = [
+  { key: "eu", name: "European Union and EEA" },
+  { key: "us", name: "United States" },
+  { key: "uk", name: "United Kingdom" },
+  { key: "ch", name: "Switzerland" },
+  { key: "ca", name: "Canada" },
+  { key: "latam", name: "Latin America" },
+  { key: "jp", name: "Japan" },
+  { key: "kr", name: "South Korea" },
+  { key: "in", name: "India" },
+  { key: "au", name: "Australia" },
+  { key: "apac", name: "Asia Pacific (other)" },
+  { key: "me", name: "Middle East" },
+  { key: "af", name: "Africa" },
+]
+
+function parseResidency(choice: string, regionList: string): Residency {
+  if (!choice || choice === "global") return { level: "global" }
+  if (choice === "regional") {
+    const regions = [...new Set(regionList.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean))]
+    if (!regions.length || regions.length > 16 || regions.some((region) => !/^[a-z0-9][a-z0-9-]{0,62}$/.test(region))) {
+      throw new Error("List one to sixteen regions, separated by commas, such as westeurope, eu-west-1.")
+    }
+    return { level: "regional", regions }
+  }
+  const zone = choice.startsWith("zone:") ? choice.slice(5) : ""
+  if (!dataZones.some((item) => item.key === zone)) throw new Error("Choose a supported data zone.")
+  return { level: "data_zone", data_zone: zone }
 }
 
 function optionalInteger(form: FormData, key: string, minimum: number, maximum: number) {
@@ -35,6 +72,7 @@ export function parseNewDeployment(form: FormData): NewDeploymentInput {
   const execution = read("execution")
   const autoToolChoice = read("autoToolChoice")
   const toolCallParser = read("toolCallParser")
+  const residency = parseResidency(read("residency"), read("residencyRegions"))
   if (!/^[a-z0-9]([a-z0-9-]{0,198}[a-z0-9])?$/.test(name)) {
     throw new Error("Deployment names must use lowercase letters, numbers, and hyphens.")
   }
@@ -70,6 +108,7 @@ export function parseNewDeployment(form: FormData): NewDeploymentInput {
     execution: execution === "eager" || execution === "cuda_graph" ? execution : null,
     enableAutoToolChoice: autoToolChoice === "enabled" ? true : autoToolChoice === "disabled" ? false : null,
     toolCallParser: toolCallParser || null,
+    residency,
   }
 }
 

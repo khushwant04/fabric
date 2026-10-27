@@ -30,6 +30,13 @@ from fabric_data_plane.pool import (
     BackendHealth,
     BackendPool,
 )
+from fabric_data_plane.residency import (
+    GLOBAL,
+    DataBoundary,
+    Residency,
+    boundary_from_payload,
+    residency_from_entry,
+)
 from fabric_data_plane.verification import Verification, verification_from_payload
 
 logger = logging.getLogger(__name__)
@@ -84,6 +91,9 @@ class Deployment:
     #: Effective served context bound when known. None means the router must not make
     #: a compatibility claim and leaves enforcement to the selected model host.
     max_model_len: int | None = None
+    #: Where this deployment may be processed (ADR 0017). Global unless the entry says
+    #: otherwise, which is what every entry written before residency existed means.
+    residency: Residency = GLOBAL
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGIES:
@@ -124,8 +134,12 @@ class DeploymentRegistry:
         *,
         revision: str = "",
         verification: Verification | None = None,
+        data_boundary: DataBoundary | None = None,
     ) -> None:
         self.revision = revision
+        # Stamp-wide, like verification. None means the document carried no boundary, which
+        # the residency checks read as "unknown" and so refuse zone-restricted work.
+        self.data_boundary = data_boundary
         # Stamp-wide rather than per-deployment: one control plane mints every token this
         # stamp serves. None means the document did not carry one, which the policy reads
         # as "keep what is in force".
@@ -155,6 +169,7 @@ class DeploymentRegistry:
             deployments,
             revision=str(payload.get("revision") or ""),
             verification=verification_from_payload(payload),
+            data_boundary=boundary_from_payload(payload),
         )
 
     @staticmethod
@@ -238,6 +253,7 @@ class DeploymentRegistry:
             route_revision=str(entry.get("route_revision") or ""),
             capabilities=capabilities,
             max_model_len=max_model_len,
+            residency=residency_from_entry(entry.get("residency")),
         )
 
     @classmethod
@@ -284,6 +300,10 @@ class DeploymentRegistry:
     def reported_verification(self) -> Verification | None:
         """The stamp-wide verification contract this document carried, if any."""
         return self.verification
+
+    def reported_data_boundary(self) -> DataBoundary | None:
+        """The stamp-wide data boundary this document carried, if any."""
+        return self.data_boundary
 
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         """Deployments this account may list."""
@@ -394,6 +414,9 @@ class ReloadingRegistry:
     def reported_verification(self) -> Verification | None:
         return self._current().reported_verification()
 
+    def reported_data_boundary(self) -> DataBoundary | None:
+        return self._current().reported_data_boundary()
+
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         return self._current().for_account(account_id)
 
@@ -410,4 +433,9 @@ class ReloadingRegistry:
                 "reloads": self._reloads,
                 "reload_failures": self._failures,
                 "last_error": self._last_error,
+                "data_boundary": (
+                    self._registry.data_boundary.as_details()
+                    if self._registry.data_boundary is not None
+                    else None
+                ),
             }

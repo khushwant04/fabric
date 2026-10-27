@@ -54,6 +54,22 @@ type ModelCapabilities struct {
 	Priority      int  `json:"priority"`
 }
 
+// Residency is where a deployment's requests may be processed (ADR 0017). Snake-case
+// nested names match the public deployment specification, as Capabilities' do, so the
+// rendered entry is identical on the direct and operator delivery paths.
+type Residency struct {
+	Level    string   `json:"level"`
+	DataZone string   `json:"data_zone,omitempty"`
+	Regions  []string `json:"regions,omitempty"`
+}
+
+// DataBoundary is where the control plane's catalogue places this stamp: the region it
+// reported and the zone that region is in. Empty means unknown.
+type DataBoundary struct {
+	Region   string `json:"region"`
+	DataZone string `json:"data_zone"`
+}
+
 // Spec is the declared intent for one deployment on this stamp.
 //
 // It carries the owning account because a managed stamp serves several: the data plane
@@ -117,9 +133,15 @@ type Spec struct {
 	// data plane's configuration from these resources and has no other channel to read
 	// stamp-wide state from. Every resource on a stamp carries the same values, and the
 	// rendered document holds one copy at the top rather than one per entry.
-	JWTIssuer  string `json:"jwtIssuer,omitempty"`
-	JWKSURL    string `json:"jwksUrl,omitempty"`
-	Generation int    `json:"generation"`
+	JWTIssuer string `json:"jwtIssuer,omitempty"`
+	JWKSURL   string `json:"jwksUrl,omitempty"`
+	// Residency is rendered onto this deployment's entry so the data plane can refuse a
+	// request the stamp's boundary does not satisfy. Nil means global.
+	Residency *Residency `json:"residency,omitempty"`
+	// DataBoundary is stamp-wide, carried per resource and rendered once at the top, for
+	// the same reason JWTIssuer is.
+	DataBoundary *DataBoundary `json:"dataBoundary,omitempty"`
+	Generation   int           `json:"generation"`
 }
 
 // DesiredReplicas is the replica count to run, defaulting to one when unset.
@@ -254,6 +276,7 @@ type dataPlaneEntry struct {
 	Strategy      string             `json:"strategy,omitempty"`
 	Capabilities  *ModelCapabilities `json:"capabilities,omitempty"`
 	MaxModelLen   int                `json:"max_model_len,omitempty"`
+	Residency     *Residency         `json:"residency,omitempty"`
 	RouteRevision string             `json:"route_revision,omitempty"`
 }
 
@@ -644,6 +667,7 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 			Strategy:      item.Spec.Strategy,
 			Capabilities:  item.Spec.Capabilities,
 			MaxModelLen:   item.Spec.MaxModelLen,
+			Residency:     item.Spec.Residency,
 		}
 		if pool := backends[item.Spec.DeploymentID]; len(pool) > 0 {
 			entry.Backends = pool
@@ -679,14 +703,28 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 		}
 	}
 
-	// The revision is a digest of everything the data plane acts on, verification
-	// included, so a changed issuer produces a changed revision and is not mistaken for
-	// an unchanged document.
+	// Lifted the same way. Omitted when no resource carries one, which the data plane reads
+	// as "boundary unknown" and so refuses zone-restricted work (ADR 0017).
+	var boundary *DataBoundary
+	for _, item := range items {
+		if item.Spec.DataBoundary != nil {
+			boundary = item.Spec.DataBoundary
+			break
+		}
+	}
+
+	// The revision is a digest of everything the data plane acts on, verification and the
+	// data boundary included, so a changed issuer or a moved stamp produces a changed
+	// revision and is not mistaken for an unchanged document.
 	canonicalBody := map[string]any{"deployments": entries}
 	body := map[string]any{"deployments": entries}
 	if verification != nil {
 		canonicalBody["verification"] = verification
 		body["verification"] = verification
+	}
+	if boundary != nil {
+		canonicalBody["data_boundary"] = boundary
+		body["data_boundary"] = boundary
 	}
 	canonical, err := json.Marshal(canonicalBody)
 	if err != nil {

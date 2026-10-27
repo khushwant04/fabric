@@ -36,6 +36,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import data_zones
 from app.core.tenancy import elevated
 from app.models import Deployment, DeploymentPlacement, InferenceStamp
 
@@ -165,6 +166,9 @@ class Demand:
     gpus_per_replica: int
     gpu_class: str
     region: str | None
+    #: Where the deployment may be processed (ADR 0017). Checked before any capacity
+    #: question, because no amount of free hardware makes an out-of-zone stamp acceptable.
+    residency: data_zones.Residency = data_zones.GLOBAL
 
     @property
     def total_gpus(self) -> int:
@@ -193,6 +197,7 @@ class Demand:
             "gpus_total": self.total_gpus,
             "gpu_class": self.gpu_class,
             "region": self.region,
+            "residency": self.residency.as_details(),
         }
 
 
@@ -228,6 +233,7 @@ def demand_of(spec: dict[str, Any] | None, *, region: str | None = None) -> Dema
         gpus_per_replica=max(1, _positive_int(resources.get("gpu_count")) or 1),
         gpu_class=normalise_class(resources.get("gpu_class")) or "t4",
         region=(region or "").strip() or None,
+        residency=data_zones.residency_of(spec),
     )
 
 
@@ -433,6 +439,19 @@ def check_fit(
         stamp_region = (capacity.region or "").strip().lower()
         if stamp_region != demand.region.lower():
             return Unfit("region_mismatch", {"stamp_region": capacity.region or None})
+
+    residency_refusal = demand.residency.refusal(capacity.region)
+    if residency_refusal is not None:
+        # Region and zone only: both are what the stamp itself advertises and what the caller
+        # needs to choose differently, and neither says anything about who else is on it.
+        return Unfit(
+            "data_residency_not_satisfied",
+            {
+                "residency_reason": residency_refusal,
+                "stamp_region": capacity.region or None,
+                "stamp_data_zone": data_zones.zone_of(capacity.region),
+            },
+        )
 
     if require_live:
         moment = now or dt.datetime.now(tz=dt.UTC)

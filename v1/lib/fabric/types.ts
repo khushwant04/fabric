@@ -48,6 +48,7 @@ export type DeploymentSpec = {
   runtime: RuntimeSpec
   replicas: number
   resources: { gpu_count: number; gpu_class: string }
+  residency?: { level: "global" | "data_zone" | "regional"; data_zone?: string | null; regions?: string[] }
   limits_policy_ref?: string | null
 }
 

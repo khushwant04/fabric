@@ -89,6 +89,37 @@ async def active_memberships(
     ]
 
 
+def _token_data_zone(
+    audience: str, *, requested: str | None, bound: str | None = None
+) -> str | None:
+    """The data zone to bind a token to, from the request and from the credential (ADR 0017).
+
+    A binding can only narrow. A credential bound to a zone mints tokens for that zone
+    whatever the request says, and a request naming another zone is refused rather than
+    quietly overridden, so a caller learns its key cannot be used where it tried to use it.
+    Control tokens carry no binding: the control plane holds configuration, not the prompts a
+    zone exists to keep in place, and asking for one is refused rather than ignored.
+    """
+    if audience != scope_defs.AUDIENCE_INFERENCE:
+        if requested is not None:
+            raise BadRequest(
+                "data_zone_requires_inference_audience",
+                "Only inference tokens can be bound to a data zone",
+            )
+        return None
+    if bound is not None and requested is not None and requested != bound:
+        raise Forbidden(
+            "data_zone_not_permitted",
+            "This credential is bound to a different data zone",
+            data_zone=bound,
+        )
+    return bound or requested
+
+
+def _zone_claims(zone: str | None) -> dict[str, str] | None:
+    return {"data_zone": zone} if zone is not None else None
+
+
 def _scopes_for_audience(audience: str, role_scopes: frozenset[str]) -> list[str]:
     if audience == scope_defs.AUDIENCE_INFERENCE:
         return sorted(scope_defs.INFERENCE_SCOPES)
@@ -101,6 +132,7 @@ async def exchange_auth0_token(
     *,
     audience: str,
     requested_account_id: uuid.UUID | None,
+    data_zone: str | None = None,
 ) -> TokenResponse:
     """Exchange a verified Auth0 identity for one account-bound Fabric JWT.
 
@@ -110,6 +142,7 @@ async def exchange_auth0_token(
     # Runs before an account is known: the caller's accounts are discovered from
     # memberships, which cannot be read under an account that is not yet known.
     await declare_system(session)
+    zone = _token_data_zone(audience, requested=data_zone)
     if requested_account_id is not None:
         require_installation_account(requested_account_id)
     user = await ensure_user(session, identity)
@@ -156,17 +189,19 @@ async def exchange_auth0_token(
         principal_type="user",
         scopes=granted,
         ttl_seconds=ttl,
+        extra_claims=_zone_claims(zone),
     )
     return TokenResponse(
         access_token=token,
         expires_in=expires_in,
         account_id=account.id,
         scope=" ".join(granted),
+        data_zone=zone,
     )
 
 
 async def exchange_oidc_token(
-    session: AsyncSession, token: str, *, audience: str
+    session: AsyncSession, token: str, *, audience: str, data_zone: str | None = None
 ) -> TokenResponse:
     """Exchange a token from an account's own identity provider for a Fabric JWT.
 
@@ -182,6 +217,7 @@ async def exchange_oidc_token(
     # Runs before an account is known: the issuer is matched against registered providers,
     # and only then does an owning account exist as a fact.
     await declare_system(session)
+    zone = _token_data_zone(audience, requested=data_zone)
 
     identity = await oidc.verify_token(session, token)
     require_installation_account(identity.account_id)
@@ -238,17 +274,19 @@ async def exchange_oidc_token(
         principal_type="user",
         scopes=granted,
         ttl_seconds=ttl,
+        extra_claims=_zone_claims(zone),
     )
     return TokenResponse(
         access_token=issued,
         expires_in=expires_in,
         account_id=account.id,
         scope=" ".join(granted),
+        data_zone=zone,
     )
 
 
 async def exchange_api_key(
-    session: AsyncSession, raw_key: str, *, audience: str
+    session: AsyncSession, raw_key: str, *, audience: str, data_zone: str | None = None
 ) -> TokenResponse:
     """Exchange a Fabric API key for a short-lived JWT.
 
@@ -308,6 +346,9 @@ async def exchange_api_key(
             audience=audience,
         )
 
+    # Decided after the key is authenticated, so an unauthenticated caller cannot use the
+    # refusal to learn which zone a key it does not hold is bound to.
+    zone = _token_data_zone(audience, requested=data_zone, bound=record.data_zone)
     record.last_used_at = now
     ttl = (
         settings.inference_token_ttl_seconds
@@ -322,11 +363,12 @@ async def exchange_api_key(
         principal_type=record.principal_type,
         scopes=granted,
         ttl_seconds=ttl,
-        extra_claims={"key_id": str(record.id)},
+        extra_claims={"key_id": str(record.id), **(_zone_claims(zone) or {})},
     )
     return TokenResponse(
         access_token=token,
         expires_in=expires_in,
         account_id=record.account_id,
         scope=" ".join(granted),
+        data_zone=zone,
     )

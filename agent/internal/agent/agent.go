@@ -119,6 +119,10 @@ type Agent struct {
 	// carrying this. An empty value means the control plane has not told us, which leaves
 	// the data plane on its locally configured values.
 	verification state.Verification
+	// dataBoundary is the stamp's data-zone boundary as the control plane last reported it
+	// (ADR 0017). Held on the agent for the same reason verification is. Nil until the
+	// control plane reports one, which the data plane reads as "boundary unknown".
+	dataBoundary *state.DataBoundary
 	// Status reports the control plane has not accepted yet, retried on later
 	// passes because desired state will not mention them again.
 	pendingStatus map[string]controlplane.DesiredDeployment
@@ -469,6 +473,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		previousGenerations[id] = generation
 	}
 	previousVerification := a.verification
+	previousBoundary := a.dataBoundary
 	changed := false
 	// Checked before the assignments, and on every pass rather than only when an
 	// assignment arrives: a steady-state poll returns no deployments at all, and a stamp
@@ -479,6 +484,16 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 				"issuer", updated.JWTIssuer, "jwks_url", updated.JWKSURL)
 		}
 		a.verification = updated
+		changed = true
+	}
+	// Recomputed by the control plane from this stamp's latest reported region on every
+	// pass, so a stamp that moves converges on its new boundary without a placement change.
+	// An absent value means an older control plane and keeps whatever is known.
+	if updated := dataBoundaryFrom(desired.DataBoundary); updated != nil &&
+		(a.dataBoundary == nil || *updated != *a.dataBoundary) {
+		a.log.Info("data boundary updated from the control plane",
+			"region", updated.Region, "data_zone", updated.DataZone)
+		a.dataBoundary = updated
 		changed = true
 	}
 
@@ -513,6 +528,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.GPUMemoryUtilization = gpuMemoryUtilizationFromSpec(assignment.Spec)
 		entry.Execution = executionFromSpec(assignment.Spec)
 		entry.EnableAutoToolChoice, entry.ToolCallParser = toolCallingFromSpec(assignment.Spec)
+		entry.Residency = residencyFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || !reflect.DeepEqual(previous, entry) {
 			changed = true
 			a.log.Info("configured deployment",
@@ -531,6 +547,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 			a.known = previousKnown
 			a.credentials.DeploymentGenerations = previousGenerations
 			a.verification = previousVerification
+			a.dataBoundary = previousBoundary
 			return nil, err
 		}
 	}
@@ -755,6 +772,7 @@ func (a *Agent) configured() []state.Deployment {
 		// not require rewriting every remembered entry and cannot leave two of them
 		// disagreeing about one stamp's issuer.
 		entry.Verification = a.verification
+		entry.DataBoundary = a.dataBoundary
 		entries = append(entries, entry)
 	}
 	return entries
@@ -1005,6 +1023,51 @@ func verificationFrom(reported *controlplane.VerificationConfig) state.Verificat
 		return state.Verification{}
 	}
 	return state.Verification{JWTIssuer: issuer, JWKSURL: jwks}
+}
+
+// dataBoundaryFrom copies the reported boundary, or returns nil when none was reported.
+func dataBoundaryFrom(reported *controlplane.DataBoundary) *state.DataBoundary {
+	if reported == nil {
+		return nil
+	}
+	return &state.DataBoundary{
+		Region:   strings.TrimSpace(reported.Region),
+		DataZone: strings.TrimSpace(reported.DataZone),
+	}
+}
+
+// residencyFromSpec extracts where the deployment may be processed (ADR 0017).
+//
+// Global and absent both return nil, so a deployment that predates residency renders
+// exactly as before. Anything else is carried verbatim, including a level this agent does
+// not recognise: the control plane validates the vocabulary, and the data plane refuses a
+// level it cannot evaluate, which fails closed. Dropping an unknown level here instead
+// would silently turn a restriction into "anywhere".
+func residencyFromSpec(spec map[string]any) *state.Residency {
+	raw, ok := spec["residency"].(map[string]any)
+	if !ok {
+		if _, present := spec["residency"]; present && spec["residency"] != nil {
+			// Present but not an object: unreadable, so the strictest reading.
+			return &state.Residency{Level: "regional"}
+		}
+		return nil
+	}
+	level, _ := raw["level"].(string)
+	if level == "" || level == "global" {
+		return nil
+	}
+	residency := &state.Residency{Level: level}
+	if zone, ok := raw["data_zone"].(string); ok {
+		residency.DataZone = zone
+	}
+	if regions, ok := raw["regions"].([]any); ok {
+		for _, region := range regions {
+			if name, ok := region.(string); ok && name != "" {
+				residency.Regions = append(residency.Regions, name)
+			}
+		}
+	}
+	return residency
 }
 
 // releaseFromSpec extracts the runtime release the host should serve.

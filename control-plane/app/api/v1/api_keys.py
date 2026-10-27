@@ -39,6 +39,7 @@ async def create_key(
         expires_in_days=payload.expires_in_days,
         service_principal_id=payload.service_principal_id,
         actor_user_id=actor_user_id,
+        data_zone=payload.data_zone,
     )
     await commit_and_invalidate(session, [principal.account_id])
     return ApiKeyCreatedResponse(

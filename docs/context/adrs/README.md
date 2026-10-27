@@ -21,6 +21,7 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0014](0014-streamed-usage-is-requested-and-metered.md) | Request usage on streamed responses, consume the frame Fabric caused, and record one row from what was reported | Implemented |
 | [0015](0015-usage-is-spooled-until-central-acknowledgement.md) | Persist usage locally, lease it to the collector, and delete only after central resolution is acknowledged | Implemented |
 | [0016](0016-limits-are-coordinated-once-per-stamp.md) | Coordinate rate and concurrency admission once per stamp with renewable crash-recovery leases | Implemented shared primitive; horizontal gateway packaging remains separate |
+| [0017](0017-data-zone-residency-is-enforced-at-placement-and-at-the-gateway.md) | Declare global, data-zone, or regional residency per deployment; enforce it at placement, on edit, and on every gateway request; bind keys and tokens to a zone | Implemented |
 
 ## ADR status vocabulary
 

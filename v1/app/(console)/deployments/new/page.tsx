@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { listStamps } from "@/lib/fabric/data"
+import { dataZones } from "@/lib/fabric/new-deployment"
 import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
 
@@ -37,6 +38,10 @@ export default async function NewDeploymentPage() {
           <Field><FieldLabel htmlFor="replicas">Replicas</FieldLabel><Input id="replicas" name="replicas" type="number" min={1} max={32} defaultValue={1} required disabled={!canWrite} /></Field>
           <Field><FieldLabel htmlFor="gpuCount">GPUs per replica</FieldLabel><Input id="gpuCount" name="gpuCount" type="number" min={1} max={8} defaultValue={1} required disabled={!canWrite} /><FieldDescription>All GPUs for one replica must fit on one node.</FieldDescription></Field>
           <Field><FieldLabel>Minimum GPU class</FieldLabel><Select name="gpuClass" defaultValue="t4" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{gpuClasses.map((value) => <SelectItem value={value} key={value}>{value.toUpperCase()}</SelectItem>)}</SelectContent></Select></Field>
+        </div>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field><FieldLabel>Data residency</FieldLabel><Select name="residency" defaultValue="global" disabled={!canWrite}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="global">Global · any region</SelectItem>{dataZones.map((zone) => <SelectItem value={`zone:${zone.key}`} key={zone.key}>{zone.name} data zone</SelectItem>)}<SelectItem value="regional">Specific regions</SelectItem></SelectContent></Select><FieldDescription>Placement and every gateway request stay inside this boundary. A stamp outside it refuses the deployment.</FieldDescription></Field>
+          <Field><FieldLabel htmlFor="residencyRegions">Regions</FieldLabel><Input id="residencyRegions" name="residencyRegions" placeholder="westeurope, eu-west-1" maxLength={1100} disabled={!canWrite} /><FieldDescription>Only used with Specific regions. Region names must match what stamps report.</FieldDescription></Field>
         </div>
         <details className="rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Serving settings</summary><div className="mt-5 grid gap-5 sm:grid-cols-3">
           <Field><FieldLabel htmlFor="maxModelLen">Context limit</FieldLabel><Input id="maxModelLen" name="maxModelLen" type="number" min={64} max={1048576} placeholder="Cluster default" disabled={!canWrite} /></Field>

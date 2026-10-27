@@ -120,6 +120,19 @@
       },
       "ApiKeyCreateRequest": {
         "properties": {
+          "data_zone": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bind every inference token this key mints to one data zone",
+            "title": "Data Zone"
+          },
           "expires_in_days": {
             "anyOf": [
               {
@@ -198,6 +211,17 @@
             "title": "Created At",
             "type": "string"
           },
+          "data_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Zone"
+          },
           "expires_at": {
             "anyOf": [
               {
@@ -265,6 +289,85 @@
           "created_at"
         ],
         "title": "ApiKeyResponse",
+        "type": "object"
+      },
+      "DataBoundary": {
+        "description": "Where a stamp is, as the control plane's catalogue reads it (ADR 0017).\n\nThe stamp reports a region; the zone is looked up centrally and sent back, so the data\nplane enforces the same mapping placement used rather than a copy that can drift. A\n``None`` zone means the region is unknown to the catalogue, which the data plane treats\nas outside every zone.",
+        "properties": {
+          "data_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Zone"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          }
+        },
+        "title": "DataBoundary",
+        "type": "object"
+      },
+      "DataZoneCatalogResponse": {
+        "properties": {
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "zones": {
+            "items": {
+              "$ref": "#/components/schemas/DataZoneResponse"
+            },
+            "title": "Zones",
+            "type": "array"
+          }
+        },
+        "required": [
+          "levels",
+          "zones"
+        ],
+        "title": "DataZoneCatalogResponse",
+        "type": "object"
+      },
+      "DataZoneResponse": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "regions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Regions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "regions"
+        ],
+        "title": "DataZoneResponse",
         "type": "object"
       },
       "DeploymentCreateRequest": {
@@ -375,6 +478,9 @@
             "minimum": 1.0,
             "title": "Replicas",
             "type": "integer"
+          },
+          "residency": {
+            "$ref": "#/components/schemas/ResidencySpec"
           },
           "resources": {
             "$ref": "#/components/schemas/ResourceSpec"
@@ -585,6 +691,16 @@
       },
       "DesiredStateResponse": {
         "properties": {
+          "data_boundary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DataBoundary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "deployments": {
             "items": {
               "$ref": "#/components/schemas/DesiredDeployment"
@@ -894,6 +1010,128 @@
           "received_at"
         ],
         "title": "HeartbeatResponse",
+        "type": "object"
+      },
+      "InferenceRouteResponse": {
+        "description": "One stamp endpoint that can serve a deployment, with why it ranks where it does.",
+        "properties": {
+          "data_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Zone"
+          },
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "inference_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inference Url"
+          },
+          "model_alias": {
+            "title": "Model Alias",
+            "type": "string"
+          },
+          "placement_status": {
+            "title": "Placement Status",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "residency_satisfied": {
+            "title": "Residency Satisfied",
+            "type": "boolean"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "model_alias",
+          "stamp_id",
+          "inference_url",
+          "region",
+          "data_zone",
+          "placement_status",
+          "residency_satisfied",
+          "healthy"
+        ],
+        "title": "InferenceRouteResponse",
+        "type": "object"
+      },
+      "InferenceRoutesResponse": {
+        "properties": {
+          "data_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Zone"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/InferenceRouteResponse"
+            },
+            "title": "Routes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "data_zone",
+          "region",
+          "routes"
+        ],
+        "title": "InferenceRoutesResponse",
         "type": "object"
       },
       "ManagedCapacityRequest": {
@@ -1336,6 +1574,44 @@
         "title": "PlacementResponse",
         "type": "object"
       },
+      "ResidencySpec": {
+        "additionalProperties": false,
+        "description": "Where this deployment's requests may be processed (ADR 0017).\n\n``global`` places anywhere. ``data_zone`` restricts placement and serving to stamps whose\nregion the catalogue puts inside ``data_zone``. ``regional`` restricts them to the listed\nregions, and is how a region the catalogue does not know is named. The restriction is\nenforced at placement, re-checked when it changes, and enforced again by the data plane\non every request, so a stamp that later reports a different region stops serving rather\nthan continuing quietly outside the boundary.",
+        "properties": {
+          "data_zone": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Zone"
+          },
+          "level": {
+            "default": "global",
+            "enum": [
+              "global",
+              "data_zone",
+              "regional"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "regions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "title": "Regions",
+            "type": "array"
+          }
+        },
+        "title": "ResidencySpec",
+        "type": "object"
+      },
       "ResourceSpec": {
         "additionalProperties": false,
         "properties": {
@@ -1400,10 +1676,13 @@
         "properties": {
           "enable_auto_tool_choice": {
             "anyOf": [
-              { "type": "boolean" },
-              { "type": "null" }
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "default": null,
             "title": "Enable Auto Tool Choice"
           },
           "execution": {
@@ -1491,21 +1770,57 @@
             "anyOf": [
               {
                 "enum": [
-                  "deepseek_v3", "deepseek_v31", "deepseek_v32", "deepseek_v4",
-                  "cohere_command3", "cohere_command4", "ernie45", "glm45", "glm47",
-                  "granite-20b-fc", "granite", "granite4", "hermes", "poolside_v1",
-                  "hunyuan_a13b", "hy_v3", "internlm", "jamba", "lfm2", "kimi_k2",
-                  "llama3_json", "llama4_json", "llama4_pythonic", "longcat", "mimo",
-                  "minimax_m2", "minimax_m3", "minicpm5", "mistral", "olmo3", "openai",
-                  "phi4_mini_json", "pythonic", "qwen3_coder", "qwen3_xml", "seed_oss",
-                  "step3", "step3p5", "inkling", "xlam", "gigachat3", "functiongemma",
-                  "gemma4", "apertus"
+                  "deepseek_v3",
+                  "deepseek_v31",
+                  "deepseek_v32",
+                  "deepseek_v4",
+                  "cohere_command3",
+                  "cohere_command4",
+                  "ernie45",
+                  "glm45",
+                  "glm47",
+                  "granite-20b-fc",
+                  "granite",
+                  "granite4",
+                  "hermes",
+                  "poolside_v1",
+                  "hunyuan_a13b",
+                  "hy_v3",
+                  "internlm",
+                  "jamba",
+                  "lfm2",
+                  "kimi_k2",
+                  "llama3_json",
+                  "llama4_json",
+                  "llama4_pythonic",
+                  "longcat",
+                  "mimo",
+                  "minimax_m2",
+                  "minimax_m3",
+                  "minicpm5",
+                  "mistral",
+                  "olmo3",
+                  "openai",
+                  "phi4_mini_json",
+                  "pythonic",
+                  "qwen3_coder",
+                  "qwen3_xml",
+                  "seed_oss",
+                  "step3",
+                  "step3p5",
+                  "inkling",
+                  "xlam",
+                  "gigachat3",
+                  "functiongemma",
+                  "gemma4",
+                  "apertus"
                 ],
                 "type": "string"
               },
-              { "type": "null" }
+              {
+                "type": "null"
+              }
             ],
-            "default": null,
             "title": "Tool Call Parser"
           }
         },
@@ -2148,6 +2463,19 @@
             "title": "Audience",
             "type": "string"
           },
+          "data_zone": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bind an inference token to one data zone. Stamps outside it refuse the token. May only narrow: a zone-bound API key cannot mint a token for another zone.",
+            "title": "Data Zone"
+          },
           "grant_type": {
             "enum": [
               "auth0_token",
@@ -2174,6 +2502,17 @@
             "format": "uuid",
             "title": "Account Id",
             "type": "string"
+          },
+          "data_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Zone"
           },
           "expires_in": {
             "title": "Expires In",
@@ -3450,6 +3789,111 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/inference-routes": {
+      "get": {
+        "description": "Not cached: health is the point of the answer, and it changes between heartbeats.",
+        "operationId": "inference_routes_v1_accounts__account_id__inference_routes_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Model alias or deployment id",
+            "in": "query",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "description": "Model alias or deployment id",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "data_zone",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Zone"
+            }
+          },
+          {
+            "in": "query",
+            "name": "region",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Region"
+            }
+          },
+          {
+            "description": "Also list placements whose stamp no longer satisfies residency",
+            "in": "query",
+            "name": "include_ineligible",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also list placements whose stamp no longer satisfies residency",
+              "title": "Include Ineligible",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InferenceRoutesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Find the stamp endpoints that serve a model, optionally within a data zone",
+        "tags": [
+          "data-zones"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/members": {
       "get": {
         "operationId": "list_account_members_v1_accounts__account_id__members_get",
@@ -4050,6 +4494,28 @@
         "summary": "Revoke a stamp and its machine credentials",
         "tags": [
           "stamps"
+        ]
+      }
+    },
+    "/v1/data-zones": {
+      "get": {
+        "description": "Public, like the signing keys: it is the same for every caller and holds no secrets.\n\nA client needs it before it holds any credential, to decide which zone to bind a key to.",
+        "operationId": "catalogue_v1_data_zones_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataZoneCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List data zones and the regions inside each",
+        "tags": [
+          "data-zones"
         ]
       }
     },

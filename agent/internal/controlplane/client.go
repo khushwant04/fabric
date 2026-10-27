@@ -155,6 +155,14 @@ type VerificationConfig struct {
 	JWKSURL   string `json:"jwks_url"`
 }
 
+// DataBoundary is where the control plane's data-zone catalogue places this stamp
+// (ADR 0017): the region it last reported, and the zone that region belongs to. Empty
+// strings mean unknown, which the data plane treats as outside every zone.
+type DataBoundary struct {
+	Region   string `json:"region"`
+	DataZone string `json:"data_zone"`
+}
+
 // DesiredState is the response to a desired-state read.
 type DesiredState struct {
 	StampID       string              `json:"stamp_id"`
@@ -163,6 +171,9 @@ type DesiredState struct {
 	// Absent from an older control plane, which leaves the stamp on its locally
 	// configured values rather than clearing them.
 	Verification *VerificationConfig `json:"verification,omitempty"`
+	// Absent from a control plane that predates data zones. The data plane then has no
+	// boundary and refuses zone-restricted work rather than guessing where it is.
+	DataBoundary *DataBoundary `json:"data_boundary,omitempty"`
 }
 
 // StatusReport is an observed-state write.

@@ -15,6 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import data_zones
 from app.core.errors import BadRequest, Conflict, Forbidden, NotFound
 from app.core.platform import is_supported_orchestrator
 from app.core.tenancy import elevated
@@ -247,6 +248,76 @@ async def _refuse_placements_that_no_longer_fit(
     return {"gpu_class_verified": verified, "gpu_claims_measured": claims_measured}
 
 
+async def _refuse_residency_that_excludes_placements(
+    session: AsyncSession,
+    *,
+    deployment: Deployment,
+    spec: dict[str, Any],
+) -> bool:
+    """Raise if a residency change would exclude a stamp already serving this deployment.
+
+    Returns whether the residency changed at all, for the audit trail.
+
+    Checked whenever the residency differs from what is stored, and only then. Tightening a
+    policy while the deployment keeps serving from a stamp outside it would make the stored
+    policy a description of intent rather than of fact, which is the gap a residency control
+    exists to close; the owner has to withdraw that placement first. An edit that leaves
+    residency alone is not re-judged against stamps that have since moved: the data plane
+    already refuses those requests, and blocking unrelated edits would remove the owner's
+    means of fixing anything else.
+    """
+    previous = data_zones.residency_of(deployment.desired_spec)
+    proposed = data_zones.residency_of(spec)
+    if proposed == previous:
+        return False
+    if not proposed.restricted:
+        # Relaxing to global excludes nothing.
+        return True
+
+    placed = (
+        (
+            await session.execute(
+                select(DeploymentPlacement).where(
+                    DeploymentPlacement.account_id == deployment.account_id,
+                    DeploymentPlacement.deployment_id == deployment.id,
+                    DeploymentPlacement.status != "terminating",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    excluded: list[dict[str, Any]] = []
+    for record in placed:
+        async with elevated(session):
+            stamp = (
+                await session.execute(
+                    select(InferenceStamp).where(InferenceStamp.id == record.stamp_id)
+                )
+            ).scalar_one_or_none()
+        if stamp is None or stamp.revoked_at is not None:
+            # A revoked stamp serves nothing, so it processes no data anywhere.
+            continue
+        reason = proposed.refusal(stamp.region)
+        if reason is not None:
+            excluded.append(
+                {
+                    "stamp_id": str(stamp.id),
+                    "residency_reason": reason,
+                    "stamp_region": stamp.region,
+                    "stamp_data_zone": data_zones.zone_of(stamp.region),
+                }
+            )
+    if excluded:
+        raise Conflict(
+            "residency_excludes_existing_placement",
+            "The new residency would exclude stamps already serving this deployment",
+            residency=proposed.as_details(),
+            placements=excluded[:_MAX_REPORTED_CANDIDATES],
+        )
+    return True
+
+
 async def update_deployment(
     session: AsyncSession,
     *,
@@ -265,6 +336,9 @@ async def update_deployment(
     account = await get_account(session, account_id)
     deployment = await get_deployment(
         session, account_id, deployment_id, for_update=True
+    )
+    residency_changed = await _refuse_residency_that_excludes_placements(
+        session, deployment=deployment, spec=spec
     )
     checked = await _refuse_placements_that_no_longer_fit(
         session, account=account, deployment=deployment, spec=spec
@@ -291,6 +365,11 @@ async def update_deployment(
             # would put a claim on the audit trail that nothing established.
             "capacity_checked": checked is not None,
             **(checked or {}),
+            **(
+                {"residency": data_zones.residency_of(spec).as_details()}
+                if residency_changed
+                else {}
+            ),
         },
     )
     await publish_outbox(

@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core import data_zones
 from app.core import scopes as scope_defs
 from app.core.model_profiles import default_tool_call_parser, equivalent_tool_call_parser
 
@@ -35,6 +36,24 @@ class TokenRequest(BaseModel):
     )
     api_key: str | None = Field(default=None, description="Fabric API key")
     account_id: uuid.UUID | None = None
+    data_zone: str | None = Field(
+        default=None,
+        max_length=16,
+        description=(
+            "Bind an inference token to one data zone. Stamps outside it refuse the token. "
+            "May only narrow: a zone-bound API key cannot mint a token for another zone."
+        ),
+    )
+
+    @field_validator("data_zone")
+    @classmethod
+    def known_zone(cls, value: str | None) -> str | None:
+        zone = data_zones.normalise_zone(value)
+        if zone is not None and not data_zones.is_known_zone(zone):
+            raise ValueError(
+                "data_zone must be one of: " + ", ".join(sorted(data_zones.DATA_ZONES))
+            )
+        return zone
 
 
 class OIDCProviderRequest(BaseModel):
@@ -78,6 +97,9 @@ class TokenResponse(BaseModel):
     expires_in: int
     account_id: uuid.UUID
     scope: str
+    #: The zone the token is bound to, when it is. Echoed so a client can see the binding a
+    #: zone-bound key imposed without decoding the token.
+    data_zone: str | None = None
 
 
 # --- accounts and membership ---------------------------------------------
@@ -165,6 +187,21 @@ class ApiKeyCreateRequest(BaseModel):
         default=None,
         description="Owning automation identity; omit for a human development key",
     )
+    data_zone: str | None = Field(
+        default=None,
+        max_length=16,
+        description="Bind every inference token this key mints to one data zone",
+    )
+
+    @field_validator("data_zone")
+    @classmethod
+    def known_zone(cls, value: str | None) -> str | None:
+        zone = data_zones.normalise_zone(value)
+        if zone is not None and not data_zones.is_known_zone(zone):
+            raise ValueError(
+                "data_zone must be one of: " + ", ".join(sorted(data_zones.DATA_ZONES))
+            )
+        return zone
 
 
 class ApiKeyResponse(ORMModel):
@@ -175,6 +212,7 @@ class ApiKeyResponse(ORMModel):
     principal_id: uuid.UUID
     key_prefix: str
     scopes: list[str]
+    data_zone: str | None = None
     expires_at: dt.datetime | None
     revoked_at: dt.datetime | None
     created_at: dt.datetime
@@ -311,6 +349,53 @@ class ResourceSpec(BaseModel):
     gpu_class: str = Field(default="t4", max_length=32)
 
 
+class ResidencySpec(BaseModel):
+    """Where this deployment's requests may be processed (ADR 0017).
+
+    ``global`` places anywhere. ``data_zone`` restricts placement and serving to stamps whose
+    region the catalogue puts inside ``data_zone``. ``regional`` restricts them to the listed
+    regions, and is how a region the catalogue does not know is named. The restriction is
+    enforced at placement, re-checked when it changes, and enforced again by the data plane
+    on every request, so a stamp that later reports a different region stops serving rather
+    than continuing quietly outside the boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["global", "data_zone", "regional"] = "global"
+    data_zone: str | None = Field(default=None, max_length=16)
+    regions: list[str] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def validate_level(self) -> ResidencySpec:
+        self.data_zone = data_zones.normalise_zone(self.data_zone)
+        folded: list[str] = []
+        for raw in self.regions:
+            region = data_zones.normalise_region(raw)
+            if region is None or not data_zones.REGION_PATTERN.match(region):
+                raise ValueError(f"region {raw!r} is not a valid region name")
+            if region not in folded:
+                folded.append(region)
+        self.regions = sorted(folded)
+
+        if self.level == "global":
+            if self.data_zone is not None or self.regions:
+                raise ValueError("a global deployment takes neither data_zone nor regions")
+        elif self.level == "data_zone":
+            if self.regions:
+                raise ValueError("regions applies to the regional level, not data_zone")
+            if not data_zones.is_known_zone(self.data_zone):
+                raise ValueError(
+                    "data_zone must be one of: " + ", ".join(sorted(data_zones.DATA_ZONES))
+                )
+        else:
+            if self.data_zone is not None:
+                raise ValueError("data_zone applies to the data_zone level, not regional")
+            if not self.regions:
+                raise ValueError("a regional deployment needs at least one region")
+        return self
+
+
 class DeploymentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -318,6 +403,7 @@ class DeploymentSpec(BaseModel):
     replicas: int = Field(default=1, ge=1, le=32)
     resources: ResourceSpec = Field(default_factory=ResourceSpec)
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    residency: ResidencySpec = Field(default_factory=ResidencySpec)
     limits_policy_ref: str | None = Field(default=None, max_length=200)
 
 
@@ -691,6 +777,19 @@ class VerificationConfig(BaseModel):
     jwks_url: str
 
 
+class DataBoundary(BaseModel):
+    """Where a stamp is, as the control plane's catalogue reads it (ADR 0017).
+
+    The stamp reports a region; the zone is looked up centrally and sent back, so the data
+    plane enforces the same mapping placement used rather than a copy that can drift. A
+    ``None`` zone means the region is unknown to the catalogue, which the data plane treats
+    as outside every zone.
+    """
+
+    region: str | None = None
+    data_zone: str | None = None
+
+
 class DesiredStateResponse(BaseModel):
     stamp_id: uuid.UUID
     max_generation: int
@@ -699,6 +798,48 @@ class DesiredStateResponse(BaseModel):
     #: when it changes: an agent that restarts, or one enrolled after a change, has to
     #: converge without depending on having seen an earlier response.
     verification: VerificationConfig | None = None
+    #: Stamp-wide for the same reason. Recomputed from the stamp's latest reported region on
+    #: every pass, so a stamp that moves converges on its new boundary without a placement
+    #: change, and starts refusing deployments whose residency it no longer satisfies.
+    data_boundary: DataBoundary | None = None
+
+
+# --- data zones and routing -------------------------------------------------
+
+
+class DataZoneResponse(BaseModel):
+    key: str
+    name: str
+    regions: list[str]
+
+
+class DataZoneCatalogResponse(BaseModel):
+    levels: list[str]
+    zones: list[DataZoneResponse]
+
+
+class InferenceRouteResponse(BaseModel):
+    """One stamp endpoint that can serve a deployment, with why it ranks where it does."""
+
+    deployment_id: uuid.UUID
+    model_alias: str
+    stamp_id: uuid.UUID
+    inference_url: str | None
+    region: str | None
+    data_zone: str | None
+    placement_status: str
+    #: Whether the stamp's current region satisfies the deployment's residency. A placement
+    #: admitted in-zone can fall out of compliance if its stamp later reports another region;
+    #: such a route is listed with ``False`` only when asked for, never returned as usable.
+    residency_satisfied: bool
+    healthy: bool
+
+
+class InferenceRoutesResponse(BaseModel):
+    model: str
+    data_zone: str | None
+    region: str | None
+    routes: list[InferenceRouteResponse]
 
 
 class StatusCondition(BaseModel):

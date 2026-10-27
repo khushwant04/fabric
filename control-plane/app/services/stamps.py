@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import data_zones
 from app.core import scopes as scope_defs
 from app.core.cache import invalidate_account_versions
 from app.core.config import get_settings
@@ -40,6 +41,7 @@ from app.models import (
     TelemetryCredential,
 )
 from app.schemas import (
+    DataBoundary,
     DesiredDeployment,
     DesiredStateResponse,
     StampCapabilities,
@@ -375,7 +377,7 @@ async def build_desired_state(
     session: AsyncSession, *, stamp_id: uuid.UUID, after_generation: int
 ) -> DesiredStateResponse:
     """Return assignments for this stamp newer than the acknowledged generation."""
-    await get_stamp(session, stamp_id)
+    stamp = await get_stamp(session, stamp_id)
     rows = await session.execute(
         select(DeploymentPlacement, Deployment)
         .join(
@@ -419,6 +421,7 @@ async def build_desired_state(
         max_generation=max_generation,
         deployments=deployments,
         verification=_verification_config(),
+        data_boundary=DataBoundary(**data_zones.boundary_of(stamp.region)),
     )
 
 

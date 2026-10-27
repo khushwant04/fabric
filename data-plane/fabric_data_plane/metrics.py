@@ -64,6 +64,19 @@ class Metrics:
         self._verification_matches_local = 1
         self._verification_rejected_updates = 0
         self._verification_corrected_drift = 0
+        # Requests refused at the data-zone boundary (ADR 0017), by reason and by what bound
+        # them: a token, a per-request hint, or the deployment's own residency. Bounded labels
+        # only; which account was refused is already on fabric_dp_requests_total when a
+        # deployment was resolved. Seeded so the first refusal is a change an alert can see.
+        self._data_zone_refusals: dict[tuple[str, str], int] = {
+            (binding, reason): 0
+            for binding in ("token", "request", "deployment")
+            for reason in (
+                "data_boundary_unknown",
+                "stamp_outside_data_zone",
+                "stamp_region_not_permitted",
+            )
+        }
         self._started = time.time()
 
     def verification_state(
@@ -216,6 +229,12 @@ class Metrics:
             if unmetered_reason is not None:
                 self._unmetered_streams[(deployment, account, unmetered_reason)] += 1
 
+    def data_zone_refused(self, *, binding: str, reason: str) -> None:
+        """Record a request refused because this stamp is outside its data boundary."""
+        with self._lock:
+            key = (binding, reason)
+            self._data_zone_refusals[key] = self._data_zone_refusals.get(key, 0) + 1
+
     def refused(self, *, deployment: str, account: str, reason: str) -> None:
         """Record a request rejected before it reached a model host."""
         with self._lock:
@@ -239,6 +258,7 @@ class Metrics:
             verification_matches_local = self._verification_matches_local
             verification_rejected_updates = self._verification_rejected_updates
             verification_corrected_drift = self._verification_corrected_drift
+            data_zone_refusals = dict(self._data_zone_refusals)
             uptime = time.time() - self._started
 
         lines: list[str] = []
@@ -334,6 +354,17 @@ class Metrics:
             lines.append(
                 f'fabric_dp_request_duration_seconds_count{{deployment_id="{deployment}"}} '
                 f"{counts.get(deployment, 0)}"
+            )
+
+        lines.append(
+            "# HELP fabric_dp_data_zone_refusals_total "
+            "Requests refused because this stamp is outside their data boundary."
+        )
+        lines.append("# TYPE fabric_dp_data_zone_refusals_total counter")
+        for (binding, reason), value in sorted(data_zone_refusals.items()):
+            lines.append(
+                f'fabric_dp_data_zone_refusals_total{{binding="{binding}",'
+                f'reason="{reason}"}} {value}'
             )
 
         lines.append(

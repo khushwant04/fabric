@@ -44,6 +44,7 @@ from fabric_data_plane.config import (
 from fabric_data_plane.errors import (
     ApiError,
     BadRequest,
+    Forbidden,
     NotFound,
     PayloadTooLarge,
     TooManyRequests,
@@ -61,6 +62,7 @@ from fabric_data_plane.model_selection import (
 )
 from fabric_data_plane.pool import Backend, BackendPool
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
+from fabric_data_plane.residency import DataBoundary, residency_refusal, zone_refusal
 from fabric_data_plane.shared_limits import (
     LimitCoordinatorStore,
     LimitCoordinatorUnavailable,
@@ -212,6 +214,61 @@ class DataPlane:
                 keys=self.keys,
                 issuer=self.verification.jwt_issuer,
             )
+
+    def data_boundary(self) -> DataBoundary | None:
+        """This stamp's data boundary as the agent last wrote it, or ``None`` if unknown."""
+        reported = getattr(self.registry, "reported_data_boundary", None)
+        return reported() if callable(reported) else None
+
+    def refuse_out_of_zone(self, required: str | None, *, binding: str) -> None:
+        """Refuse a request bound to a zone this stamp is not in (ADR 0017).
+
+        Checked as early as the binding is known — a token's straight after authentication,
+        before the body is parsed — so an out-of-zone request is turned away before its
+        content is handled any further than receiving it.
+        """
+        boundary = self.data_boundary()
+        reason = zone_refusal(required, boundary)
+        if reason is None:
+            return
+        self.metrics.data_zone_refused(binding=binding, reason=reason)
+        raise Forbidden(
+            "data_zone_mismatch",
+            "This stamp is outside the data zone the request is bound to",
+            reason=reason,
+            binding=binding,
+            required_data_zone=required,
+            stamp_data_zone=boundary.data_zone if boundary else None,
+        )
+
+    def refuse_residency(self, deployment: Deployment, *, account: str) -> None:
+        """Refuse to serve a deployment whose residency this stamp does not satisfy.
+
+        Placement admitted the stamp, but the stamp may have reported another region since.
+        Refusing here is what makes that drift a visible failure rather than quiet
+        processing outside the boundary the deployment's owner declared.
+        """
+        boundary = self.data_boundary()
+        reason = residency_refusal(deployment.residency, boundary)
+        if reason is None:
+            return
+        self.metrics.data_zone_refused(binding="deployment", reason=reason)
+        self.metrics.refused(
+            deployment=str(deployment.deployment_id),
+            account=account,
+            reason="data_residency_not_satisfied",
+        )
+        raise Forbidden(
+            "data_residency_not_satisfied",
+            "This stamp may not process requests for this deployment",
+            reason=reason,
+            residency_level=deployment.residency.level,
+            stamp_data_zone=boundary.data_zone if boundary else None,
+        )
+
+    def serves_here(self, deployment: Deployment) -> bool:
+        """Whether this stamp's boundary satisfies the deployment's residency."""
+        return residency_refusal(deployment.residency, self.data_boundary()) is None
 
     def _adopt_verification(self) -> None:
         """Prepare and atomically activate the contract the agent last wrote."""
@@ -579,7 +636,8 @@ def _resolve_json_deployment(
     account_id: uuid.UUID,
     payload: dict[str, Any],
     upstream_path: str,
-) -> tuple[Deployment, dict[str, str]]:
+) -> tuple[Deployment, dict[str, str], str | None]:
+    """Resolve the deployment, its routing headers, and any zone the request asked for."""
     concrete: Deployment | None = None
     if model != AUTO_MODEL:
         concrete = plane.registry.resolve(model, account_id=account_id)
@@ -592,7 +650,7 @@ def _resolve_json_deployment(
     # Exact requests without the extension retain their existing path without prompt
     # inspection. Extension validation happens after pinned-model ownership is checked.
     if concrete is not None and "routing" not in payload:
-        return concrete, {}
+        return concrete, {}, None
 
     try:
         profile = profile_for_json(_JSON_OPERATIONS[upstream_path], payload)
@@ -601,10 +659,16 @@ def _resolve_json_deployment(
     # ``routing`` is a Fabric extension accepted through OpenAI SDK extra_body. Model
     # hosts do not know it and may reject unknown fields, so consume it at the router.
     payload.pop("routing", None)
+    # Automatic selection never chooses a deployment this stamp may not serve. A pinned
+    # model is refused explicitly instead, by the caller, so the reason is visible.
     deployment = concrete or _pick_available_auto_deployment(
-        plane, rank_deployments(owned, profile)
+        plane, rank_deployments([item for item in owned if plane.serves_here(item)], profile)
     )
-    return deployment, explanation_headers(deployment, profile, pinned=concrete is not None)
+    return (
+        deployment,
+        explanation_headers(deployment, profile, pinned=concrete is not None),
+        profile.data_zone,
+    )
 
 
 def _resolve_audio_deployment(
@@ -622,7 +686,9 @@ def _resolve_audio_deployment(
     if concrete is not None:
         return concrete
     profile = profile_for_audio(_AUDIO_OPERATIONS[upstream_path])
-    return _pick_available_auto_deployment(plane, rank_deployments(owned, profile))
+    return _pick_available_auto_deployment(
+        plane, rank_deployments([item for item in owned if plane.serves_here(item)], profile)
+    )
 
 
 def _safe_to_retry_transport_failure(exc: httpx.HTTPError) -> bool:
@@ -711,6 +777,7 @@ async def _proxy(
     """Authenticate, authorize, then forward to the deployment's model host."""
     started = time.perf_counter()
     principal = plane.authenticate(request.headers.get("authorization"))
+    plane.refuse_out_of_zone(principal.data_zone, binding="token")
     is_responses = upstream_path == RESPONSES_PATH
     payload = await _read_json(
         request,
@@ -725,13 +792,15 @@ async def _proxy(
     # Retire withdrawn pool/metric state before resolution, including the case where
     # this request names the removed deployment and resolution itself will fail.
     plane.reconcile_pools()
-    deployment, routing_headers = _resolve_json_deployment(
+    deployment, routing_headers, requested_zone = _resolve_json_deployment(
         plane,
         model=model,
         account_id=principal.account_id,
         payload=payload,
         upstream_path=upstream_path,
     )
+    plane.refuse_out_of_zone(requested_zone, binding="request")
+    plane.refuse_residency(deployment, account=str(principal.account_id))
     if is_responses:
         routing_headers = {**routing_headers, "cache-control": "no-store"}
 
@@ -1255,6 +1324,9 @@ async def _proxy_transcription(
     """
     started = time.perf_counter()
     principal = plane.authenticate(request.headers.get("authorization"))
+    # Before the upload is parsed: audio is the largest payload this gateway accepts, and a
+    # stamp outside the token's zone has no business spooling it to disk.
+    plane.refuse_out_of_zone(principal.data_zone, binding="token")
 
     try:
         form = await request.form()
@@ -1311,6 +1383,7 @@ async def _proxy_transcription(
         account_id=principal.account_id,
         upstream_path=upstream_path,
     )
+    plane.refuse_residency(deployment, account=str(principal.account_id))
 
     if not plane.usage.healthy:
         raise UpstreamUnavailable(
@@ -1475,6 +1548,9 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
     @router.get("/v1/models", summary="List models this account may invoke")
     async def list_models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         principal = plane.authenticate(authorization)
+        # Refused like an inference request would be, so a client pointed at the wrong
+        # stamp finds out from its first call rather than from its first prompt.
+        plane.refuse_out_of_zone(principal.data_zone, binding="token")
         return {
             "object": "list",
             "data": [
@@ -1484,6 +1560,8 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
                     "owned_by": "fabric",
                 }
                 for deployment in plane.registry.for_account(principal.account_id)
+                # A model this stamp may not serve is not offered by it.
+                if plane.serves_here(deployment)
             ],
         }
 

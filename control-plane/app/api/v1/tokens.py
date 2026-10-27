@@ -40,6 +40,7 @@ async def create_token(
             identity,
             audience=payload.audience,
             requested_account_id=payload.account_id,
+            data_zone=payload.data_zone,
         )
     elif payload.grant_type == "oidc_token":
         if not payload.assertion:
@@ -48,11 +49,15 @@ async def create_token(
         # token's issuer, which is a property of the provider rather than a claim in the
         # request: a person authenticated by an organisation's directory is a person of
         # that organisation.
-        response = await exchange_oidc_token(session, payload.assertion, audience=payload.audience)
+        response = await exchange_oidc_token(
+            session, payload.assertion, audience=payload.audience, data_zone=payload.data_zone
+        )
     else:
         if not payload.api_key:
             raise BadRequest("api_key_required", "api_key is required for api_key grant")
-        response = await exchange_api_key(session, payload.api_key, audience=payload.audience)
+        response = await exchange_api_key(
+            session, payload.api_key, audience=payload.audience, data_zone=payload.data_zone
+        )
 
     await session.commit()
     return response

@@ -140,14 +140,35 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			// profiled rather than trusting the declaration.
 			GPUMemoryUtilization: deployment.GPUMemoryUtilization,
 			Execution:            deployment.Execution,
-			EnableAutoToolChoice:  deployment.EnableAutoToolChoice,
-			ToolCallParser:        deployment.ToolCallParser,
+			EnableAutoToolChoice: deployment.EnableAutoToolChoice,
+			ToolCallParser:       deployment.ToolCallParser,
 			// Stamp-wide, carried on each resource because the operator renders the data
 			// plane's configuration from these and reads stamp state from nowhere else.
-			JWTIssuer: deployment.Verification.JWTIssuer,
-			JWKSURL:   deployment.Verification.JWKSURL,
+			JWTIssuer:    deployment.Verification.JWTIssuer,
+			JWKSURL:      deployment.Verification.JWKSURL,
+			Residency:    residencyResource(deployment.Residency),
+			DataBoundary: boundaryResource(deployment.DataBoundary),
 		},
 	}
+}
+
+func residencyResource(residency *state.Residency) *Residency {
+	if residency == nil {
+		return nil
+	}
+	converted := Residency{Level: residency.Level, DataZone: residency.DataZone}
+	if len(residency.Regions) > 0 {
+		converted.Regions = append([]string(nil), residency.Regions...)
+	}
+	return &converted
+}
+
+func boundaryResource(boundary *state.DataBoundary) *DataBoundary {
+	if boundary == nil {
+		return nil
+	}
+	converted := DataBoundary(*boundary)
+	return &converted
 }
 
 func (p *Publisher) create(ctx context.Context, name string, deployment state.Deployment) error {

@@ -61,6 +61,7 @@ test("the real creation action sends the model repository and chosen stamp witho
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect: (path) => redirects.push(path) },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://control.test" },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { calls.push({ path, init }); return { id: "deployment-one" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope(_context, scope) { assert.equal(scope, "deployments:write") } },
   })
@@ -83,6 +84,7 @@ test("the creation action preserves explicit disabled tool calling and sends a s
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect() {} },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://control.test" },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { if (!path.endsWith("/placements")) bodies.push(JSON.parse(init.body)); return { id: "deployment-one" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
   })
@@ -95,6 +97,9 @@ test("the creation action preserves explicit disabled tool calling and sends a s
   await actions.createDeployment({}, form())
   assert.equal(Object.hasOwn(bodies[2].spec.runtime, "enable_auto_tool_choice"), false)
   assert.equal(Object.hasOwn(bodies[2].spec.runtime, "tool_call_parser"), false)
+  assert.deepEqual(bodies[2].spec.residency, { level: "global" })
+  await actions.createDeployment({}, form({ residency: "zone:eu" }))
+  assert.deepEqual(bodies[3].spec.residency, { level: "data_zone", data_zone: "eu" })
 })
 
 test("placement retries read account-owned intent, preserve errors, and refuse deleted or foreign deployments", async () => {
@@ -107,6 +112,7 @@ test("placement retries read account-owned intent, preserve errors, and refuse d
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect() {} },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://control.test" },
     "@/lib/fabric/client": { FabricApiError, async controlPlaneRequest(path, init) { calls.push({ path, init }); if (init.method === "POST" && capacityError) throw new FabricApiError("No compatible GPU capacity is available"); return record } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
   })
@@ -130,6 +136,7 @@ test("invalid model form returns a reviewable error before creating any deployme
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect() {} },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://control.test" },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, controlPlaneRequest() { throw new Error("Must not call control plane") } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "token", requireScope() {} },
   })
@@ -144,10 +151,26 @@ test("a lost placement response still opens the saved deployment for review and 
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect: (path) => redirects.push(path) },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": { controlPlaneTokenIssuer: () => "https://control.test" },
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path) { if (path.endsWith("/placements")) throw new TypeError("fetch failed"); creations++; return { id: "saved-deployment" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "token", requireScope() {} },
   })
   await actions.createDeployment({}, form())
   assert.equal(creations, 1)
   assert.deepEqual(redirects, ["/deployments/saved-deployment?placement=failed"])
+})
+
+// Values built inside the vm context have that context's prototypes.
+const plain = (value) => JSON.parse(JSON.stringify(value))
+
+test("data residency defaults to global and validates zones and region lists", () => {
+  assert.deepEqual(plain(parseNewDeployment(form()).residency), { level: "global" })
+  assert.deepEqual(plain(parseNewDeployment(form({ residency: "zone:eu" })).residency), { level: "data_zone", data_zone: "eu" })
+  assert.deepEqual(
+    plain(parseNewDeployment(form({ residency: "regional", residencyRegions: "WestEurope, eu-west-1, westeurope" })).residency),
+    { level: "regional", regions: ["westeurope", "eu-west-1"] },
+  )
+  for (const values of [{ residency: "zone:atlantis" }, { residency: "regional", residencyRegions: "" }, { residency: "regional", residencyRegions: "west europe" }, { residency: "planetary" }]) {
+    assert.throws(() => parseNewDeployment(form(values)))
+  }
 })

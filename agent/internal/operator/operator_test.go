@@ -482,3 +482,56 @@ func TestPerDeploymentRouteRevisionIgnoresUnrelatedRouteChurn(t *testing.T) {
 		t.Fatal("changed route did not alter its route/global revision")
 	}
 }
+
+func TestResidencyAndDataBoundaryAreRenderedForTheDataPlane(t *testing.T) {
+	// ADR 0017: residency is rendered on the entry and the boundary once at the top, and
+	// a moved stamp changes the revision so the data plane reloads rather than keeping
+	// the old boundary.
+	restricted := resource("alpha", "dep-a", "acct-a", "alpha-model", 1)
+	restricted.Spec.Residency = &Residency{Level: "data_zone", DataZone: "eu"}
+	restricted.Spec.DataBoundary = &DataBoundary{Region: "westeurope", DataZone: "eu"}
+	open := resource("beta", "dep-b", "acct-b", "beta-model", 1)
+	open.Spec.DataBoundary = &DataBoundary{Region: "westeurope", DataZone: "eu"}
+
+	rendered, err := renderConfig([]ModelDeployment{restricted, open}, nil)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var document struct {
+		DataBoundary *DataBoundary `json:"data_boundary"`
+		Deployments  []struct {
+			DeploymentID string          `json:"deployment_id"`
+			Residency    json.RawMessage `json:"residency"`
+		} `json:"deployments"`
+	}
+	if err := json.Unmarshal([]byte(rendered), &document); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if document.DataBoundary == nil || *document.DataBoundary != (DataBoundary{Region: "westeurope", DataZone: "eu"}) {
+		t.Fatalf("data boundary = %+v", document.DataBoundary)
+	}
+	for _, entry := range document.Deployments {
+		switch entry.DeploymentID {
+		case "dep-a":
+			var residency Residency
+			if err := json.Unmarshal(entry.Residency, &residency); err != nil ||
+				residency.Level != "data_zone" || residency.DataZone != "eu" {
+				t.Fatalf("dep-a residency = %s (%v)", entry.Residency, err)
+			}
+		case "dep-b":
+			if entry.Residency != nil {
+				t.Fatalf("a global deployment rendered residency %s", entry.Residency)
+			}
+		}
+	}
+
+	restricted.Spec.DataBoundary = &DataBoundary{Region: "eastus", DataZone: "us"}
+	open.Spec.DataBoundary = restricted.Spec.DataBoundary
+	moved, err := renderConfig([]ModelDeployment{restricted, open}, nil)
+	if err != nil {
+		t.Fatalf("render moved: %v", err)
+	}
+	if configRevision(moved) == configRevision(rendered) {
+		t.Fatal("a moved stamp kept the same configuration revision")
+	}
+}
