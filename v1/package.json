@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "tokens": "node scripts/build-hexel-css.mjs",
+    "tokens:check": "node scripts/build-hexel-css.mjs --check"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.30.0",

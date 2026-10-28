@@ -168,6 +168,7 @@ jobs:
         run: npm ci
       - name: Lint and typecheck
         run: |
+          npm run tokens:check
           npm run lint
           npx next typegen
           npx tsc --noEmit

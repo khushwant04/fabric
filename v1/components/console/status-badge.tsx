@@ -10,12 +10,13 @@ const danger = new Set(["degraded", "failed", "error", "blocked", "revoked", "in
 export function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase()
   return (
-    <Badge variant="outline" className="gap-1.5 bg-background font-normal capitalize">
+    <Badge variant="outline" className="ui-caption gap-1.5 bg-card capitalize">
       <CircleIcon
         className={cn(
           "size-2! fill-current",
-          healthy.has(normalized) && "text-emerald-600",
-          warning.has(normalized) && "text-amber-600",
+          // Outcome colours from the design system, always beside a word.
+          healthy.has(normalized) && "text-success",
+          warning.has(normalized) && "text-warning",
           danger.has(normalized) && "text-destructive",
           !healthy.has(normalized) &&
             !warning.has(normalized) &&
