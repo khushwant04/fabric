@@ -50,7 +50,13 @@ from fabric_data_plane.errors import (
     UpstreamUnavailable,
     api_error_handler,
 )
-from fabric_data_plane.limits import ConcurrencyLimiter, RateLimit, RateLimiter
+from fabric_data_plane.limits import (
+    ConcurrencyLimiter,
+    RateLimit,
+    RateLimiter,
+    TokenRate,
+    TokenRateLimiter,
+)
 from fabric_data_plane.metrics import Metrics
 from fabric_data_plane.model_selection import (
     AUTO_MODEL,
@@ -178,12 +184,19 @@ class DataPlane:
         )
         self.rate_limiter = RateLimiter(rate_limit)
         self.concurrency = ConcurrencyLimiter(settings.max_in_flight_per_account)
+        token_rate = TokenRate(
+            tokens_per_minute=settings.token_rate_limit_tokens_per_minute,
+            burst=settings.token_rate_limit_burst
+            or settings.token_rate_limit_tokens_per_minute,
+        )
+        self.token_limiter = TokenRateLimiter(token_rate)
         self.limit_store = (
             LimitCoordinatorStore(
                 path=settings.limit_coordinator_store_path,
                 rate=rate_limit,
                 maximum=settings.max_in_flight_per_account,
                 lease_seconds=settings.limit_lease_seconds,
+                token_rate=token_rate,
             )
             if settings.limit_coordinator_store_path
             else None
@@ -196,9 +209,12 @@ class DataPlane:
                 renew_seconds=settings.limit_renew_seconds,
                 rate_enabled=rate_limit.enabled,
                 concurrency_enabled=settings.max_in_flight_per_account > 0,
+                token_rate_enabled=token_rate.enabled,
             )
         else:
-            self.limits = LocalLimitManager(self.rate_limiter, self.concurrency)
+            self.limits = LocalLimitManager(
+                self.rate_limiter, self.concurrency, self.token_limiter
+            )
         # Publish zero-valued placement counters before the first request can finish. A counter
         # first observed at one hides that first event from Prometheus rate()/increase().
         self.reconcile_pools()
@@ -507,6 +523,62 @@ class DataPlane:
             ) from exc
 
 
+def metered_tokens(payload: Any) -> int:
+    """Total model tokens in a usage payload, which is what the token rate limit debits."""
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    try:
+        total = int((usage or {}).get("prompt_tokens", 0) or 0) + int(
+            (usage or {}).get("completion_tokens", 0) or 0
+        )
+    except (TypeError, ValueError):
+        return 0
+    return max(0, total)
+
+
+_OUTPUT_BUDGET_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def unmetered_stream_estimate(upstream_path: str, payload: Any, meter: UsageMeter) -> int:
+    """Tokens to charge the token rate limit for a stream with no trustworthy usage report.
+
+    The prompt is estimated the way routing estimates it, without the requested output
+    budget, which a stream cut short has not necessarily spent. Output is one token per data
+    frame the host sent, which is how OpenAI-compatible hosts stream tokens. An estimate,
+    used only for admission and never recorded as usage.
+    """
+    operation = _JSON_OPERATIONS.get(upstream_path, "chat")
+    prompt_only = (
+        {key: value for key, value in payload.items() if key not in _OUTPUT_BUDGET_FIELDS}
+        if isinstance(payload, dict)
+        else {}
+    )
+    return profile_for_json(operation, prompt_only).estimated_tokens + meter.data_frames
+
+
+#: Deepest nesting accepted in a request body. Far beyond what chat messages, content
+#: parts, or tool JSON Schemas need, and enforced explicitly: the decoder's own recursion
+#: limit differs across interpreter versions (Python 3.12+ parses thousands of levels),
+#: so it cannot be what keeps a pathological body away from the model host.
+_MAX_REQUEST_JSON_DEPTH = 128
+
+
+def _json_depth_exceeds(value: Any, limit: int) -> bool:
+    """Whether ``value`` nests containers more than ``limit`` deep, checked iteratively."""
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, dict):
+            children = item.values()
+        elif isinstance(item, list):
+            children = item
+        else:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
+
 async def _read_json(request: Request, *, maximum_bytes: int | None = None) -> dict[str, Any]:
     bounded_body: bytes | None = None
     if maximum_bytes is not None:
@@ -522,6 +594,8 @@ async def _read_json(request: Request, *, maximum_bytes: int | None = None) -> d
         payload = json.loads(bounded_body) if bounded_body is not None else await request.json()
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise BadRequest("invalid_json", "Request body is not valid JSON") from exc
+    if _json_depth_exceeds(payload, _MAX_REQUEST_JSON_DEPTH):
+        raise BadRequest("invalid_json", "Request body nests too deeply")
     if not isinstance(payload, dict):
         raise BadRequest("invalid_body", "Request body must be a JSON object")
     return payload
@@ -541,7 +615,9 @@ def _stateless_responses_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "responses_background_unsupported", "Background Responses jobs are not supported"
         )
     if payload.get("store") is not None and payload.get("store") is not False:
-        raise BadRequest("responses_store_unsupported", "Stored Responses are not supported on this gateway")
+        raise BadRequest(
+            "responses_store_unsupported", "Stored Responses are not supported on this gateway"
+        )
     normalized = {**payload, "store": False}
     if "stream" in normalized and normalized["stream"] is None:
         normalized["stream"] = False
@@ -768,6 +844,12 @@ async def _proxy(
                 "This account has exceeded its request rate on this stamp",
                 retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
             )
+        if reason == "token_rate_limited":
+            raise TooManyRequests(
+                "token_rate_limited",
+                "This account has exceeded its token rate on this stamp",
+                retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
+            )
         raise TooManyRequests(
             "too_many_in_flight",
             "This account has too many requests in flight on this stamp",
@@ -796,6 +878,8 @@ async def _proxy(
 
     if not streaming:
         request_recorded = False
+        # Model tokens this request is charged against the account's token rate on release.
+        charged_tokens = 0
         try:
             tried: set[str] = set()
             response: httpx.Response | None = None
@@ -880,15 +964,13 @@ async def _proxy(
             totals = response_usage(usage) if is_responses else None
             if response.is_success and isinstance(body, dict):
                 if not is_responses or totals is not None:
-                    plane.record_usage(
-                        principal,
-                        deployment,
-                        totals.as_payload() if totals is not None else body,
-                        streamed=False,
-                    )
+                    metered = totals.as_payload() if totals is not None else body
+                    charged_tokens = metered_tokens(metered)
+                    plane.record_usage(principal, deployment, metered, streamed=False)
                 else:
                     logger.warning(
-                        "Responses usage missing or invalid for deployment %s; no usage record written",
+                        "Responses usage missing or invalid for deployment %s; "
+                        "no usage record written",
                         deployment_label,
                     )
                 body = {**body, "model": deployment.model_alias}
@@ -918,7 +1000,7 @@ async def _proxy(
                     outcome="cancelled",
                     duration_seconds=time.perf_counter() - started,
                 )
-            await plane.limits.release(admission)
+            await plane.limits.release(admission, tokens=charged_tokens)
 
     if not pool.has_available():
         await plane.limits.release(admission)
@@ -932,6 +1014,7 @@ async def _proxy(
 
     plane.retain_stream(deployment)
     cleanup_accounted = False
+    stream_tokens = 0
     cleanup_error: UpstreamUnavailable | None = None
     placement_released = False
     concurrency_release: asyncio.Task[None] | None = None
@@ -969,15 +1052,22 @@ async def _proxy(
         the same task without duplicating usage, metrics, or decrementing the limiter twice.
         """
         nonlocal cleanup_accounted, cleanup_error, placement_released, concurrency_release
+        nonlocal stream_tokens
         nonlocal responses_close_task
         if not cleanup_accounted:
             # Only from a stream the host accepted, which is the rule the non-streaming path
             # applies with response.is_success. The meter itself withholds usage it cannot vouch
             # for, so this is the one condition left to check.
             usage = meter.usage if upstream_ok else None
+            if upstream_ok and usage is None:
+                # Nothing is billed without a final report, but the token rate limit still
+                # charges an estimate: otherwise a client could avoid the limit indefinitely by
+                # hanging up just before the report arrives (ADR 0017).
+                stream_tokens = unmetered_stream_estimate(upstream_path, payload, meter)
             if usage is not None:
                 # Real numbers for a request the host accepted. A persistence fault is retained
                 # as the cleanup result, but cannot skip request/placement/concurrency release.
+                stream_tokens = metered_tokens(usage.as_payload())
                 try:
                     plane.record_usage(principal, deployment, usage.as_payload(), streamed=True)
                 except UpstreamUnavailable as exc:
@@ -1007,7 +1097,7 @@ async def _proxy(
 
         if concurrency_release is None:
             concurrency_release = asyncio.create_task(
-                plane.limits.release(admission)
+                plane.limits.release(admission, tokens=stream_tokens)
             )
         if responses_backend is not None and responses_close_task is None:
             responses_close_task = asyncio.create_task(close_responses_upstream())
@@ -1034,7 +1124,9 @@ async def _proxy(
                     )
                     responses_upstream = await plane.client.send(upstream_request, stream=True)
                 except httpx.HTTPError as exc:
-                    logger.warning("backend %s Responses connection failed: %s", backend.backend_id, exc)
+                    logger.warning(
+                        "backend %s Responses connection failed: %s", backend.backend_id, exc
+                    )
                     _record_backend_failure(plane, pool, backend, deployment_label)
                     _release_backend(plane, pool, backend, deployment_label, "transport_error")
                     responses_backend = None
@@ -1063,7 +1155,9 @@ async def _proxy(
                         ) from exc
                     status_code = responses_upstream.status_code
                     await cleanup_stream()
-                    return JSONResponse(status_code=status_code, content=body, headers=routing_headers)
+                    return JSONResponse(
+                        status_code=status_code, content=body, headers=routing_headers
+                    )
 
                 upstream_ok = True
                 break
@@ -1072,7 +1166,9 @@ async def _proxy(
 
             if responses_upstream is None:
                 request_outcome = "upstream_error_streamed"
-                raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
+                raise UpstreamUnavailable(
+                    "upstream_unavailable", "No healthy model host is available"
+                )
         except BaseException:
             await cleanup_stream()
             raise
@@ -1093,9 +1189,13 @@ async def _proxy(
                 pool.health.record_success(responses_backend)
                 _sync_backend_health(plane, pool, deployment_label)
                 responses_attempt_outcome = "upstream_error" if meter.response_failed else "ok"
-                request_outcome = "upstream_error_streamed" if meter.response_failed else "ok_streamed"
+                request_outcome = (
+                    "upstream_error_streamed" if meter.response_failed else "ok_streamed"
+                )
             except httpx.HTTPError as exc:
-                logger.warning("backend %s Responses stream failed: %s", responses_backend.backend_id, exc)
+                logger.warning(
+                    "backend %s Responses stream failed: %s", responses_backend.backend_id, exc
+                )
                 _record_backend_failure(plane, pool, responses_backend, deployment_label)
                 responses_attempt_outcome = "transport_error"
                 request_outcome = "upstream_error_streamed"
@@ -1222,7 +1322,9 @@ async def _read_upstream_error(response: httpx.Response) -> Any:
     body = bytearray()
     async for chunk in response.aiter_bytes():
         if len(body) + len(chunk) > (1 << 20):
-            return {"error": {"code": "upstream_invalid_response", "message": "Oversized error reply"}}
+            return {
+                "error": {"code": "upstream_invalid_response", "message": "Oversized error reply"}
+            }
         body.extend(chunk)
     try:
         return json.loads(body)
@@ -1340,6 +1442,12 @@ async def _proxy_transcription(
                 "This account has exceeded its request rate on this stamp",
                 retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
             )
+        if reason == "token_rate_limited":
+            raise TooManyRequests(
+                "token_rate_limited",
+                "This account has exceeded its token rate on this stamp",
+                retry_after=max(1, math.ceil(admission.retry_after or 1.0)),
+            )
         raise TooManyRequests(
             "too_many_in_flight",
             "This account has too many requests in flight on this stamp",
@@ -1355,6 +1463,7 @@ async def _proxy_transcription(
     pool = plane.pool_for(deployment)
     plane.metrics.request_started(deployment_label)
     request_recorded = False
+    charged_tokens = 0
     try:
         tried: set[str] = set()
         response: httpx.Response | None = None
@@ -1437,6 +1546,7 @@ async def _proxy_transcription(
 
         usage = body.get("usage") if isinstance(body, dict) else None
         if response.is_success and isinstance(body, dict):
+            charged_tokens = metered_tokens(body)
             plane.record_usage(principal, deployment, body, streamed=False)
             # The caller's alias, never the internal release. Only set when the host
             # reported a model, so a reply that carries none is not given one.
@@ -1466,7 +1576,7 @@ async def _proxy_transcription(
                 outcome="cancelled",
                 duration_seconds=time.perf_counter() - started,
             )
-        await plane.limits.release(admission)
+        await plane.limits.release(admission, tokens=charged_tokens)
 
 
 def build_inference_router(plane: DataPlane) -> APIRouter:
@@ -1748,6 +1858,35 @@ def build_limit_coordinator_router(
                 "limit_coordinator_unavailable", "Shared limit state is unavailable"
             ) from exc
         return {"lease_id": str(lease_id), "released": released}
+
+    @router.post("/limits/consume", summary="Debit one completed request's metered tokens")
+    async def limit_consume(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_token(authorization)
+        payload = await _read_json(request)
+        try:
+            request_id = uuid.UUID(str(payload.get("request_id")))
+            account_id = uuid.UUID(str(payload.get("account_id")))
+        except ValueError as exc:
+            raise BadRequest(
+                "invalid_limit_identity", "account_id and request_id must be UUIDs"
+            ) from exc
+        tokens = payload.get("tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            raise BadRequest("invalid_token_count", "tokens must be a non-negative integer")
+        try:
+            debited = await store.consume(request_id, account_id, tokens)
+        except ValueError as exc:
+            raise BadRequest(
+                "invalid_limit_request", "request_id does not name an admission of this account"
+            ) from exc
+        except LimitCoordinatorUnavailable as exc:
+            raise UpstreamUnavailable(
+                "limit_coordinator_unavailable", "Shared limit state is unavailable"
+            ) from exc
+        return {"request_id": str(request_id), "debited": debited}
 
     @router.get("/limits/state", summary="Authoritative shared limit state")
     async def shared_limit_state(

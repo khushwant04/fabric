@@ -64,6 +64,9 @@ class StampContext:
     account_id: uuid.UUID
     credential_id: uuid.UUID
     scopes: frozenset[str]
+    #: Version of the presented credential. Older than the stamp's current version means
+    #: the credential has been rotated away and is living out its overlap (ADR 0018).
+    credential_version: int = 1
 
     def require_scopes(self, *required: str) -> None:
         missing = [scope for scope in required if scope not in self.scopes]
@@ -234,6 +237,7 @@ async def _lookup_machine_credential(
         account_id=record.account_id,
         credential_id=record.id,
         scopes=frozenset(record.scopes or []),
+        credential_version=record.version,
     )
 
 

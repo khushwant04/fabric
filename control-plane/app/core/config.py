@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     jwt_private_key_pem: str | None = None
     jwt_previous_public_key_path: str | None = None
     control_token_ttl_seconds: int = 900
+    #: How long a stamp's previous machine credentials keep working after it rotates them.
+    #: Long enough for the collector to pick up its new file and for an agent that lost the
+    #: rotation reply to rotate again with the credential it still holds (ADR 0018).
+    stamp_credential_rotation_grace_seconds: int = Field(default=3600, ge=60, le=604800)
     inference_token_ttl_seconds: int = 900
 
     credential_pepper: str = LOCAL_CREDENTIAL_PEPPER

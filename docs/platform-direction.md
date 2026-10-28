@@ -216,8 +216,10 @@ which M1 and M2 make observable per backend for the first time.
   stable batch and acknowledges it only after central ingestion resolves every record; crashes and
   lost acknowledgements replay the same record IDs and are deduplicated centrally. Overflow still
   drops oldest unleased records and reports the loss rather than growing without bound.
-- **No agent or telemetry credential rotation.** The `credential_version` column exists; no
-  handler does.
+- ~~**No agent or telemetry credential rotation.**~~ **Fixed**
+  (ADR [0018](context/adrs/0018-stamp-credentials-rotate-with-an-overlap.md)). The agent rotates
+  both credentials by age or when an operator asks through its heartbeat; the old ones overlap for
+  a grace window, so a lost reply or a collector still reading its old file breaks nothing.
 
 ---
 

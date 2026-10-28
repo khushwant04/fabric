@@ -1,0 +1,42 @@
+# Dependency updates are grouped per component and ecosystem so that each week
+# produces at most one pull request per component rather than one per package.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: pip
+    directories: [/control-plane, /data-plane]
+    schedule: { interval: weekly }
+    groups:
+      python: { patterns: ["*"] }
+
+  # torch, triton and vLLM are pinned to the toolchain the committed benchmark
+  # artifacts were produced with; moving them is a deliberate, measured change.
+  - package-ecosystem: pip
+    directories: [/runtime, /serving]
+    schedule: { interval: monthly }
+    ignore:
+      - dependency-name: torch
+      - dependency-name: triton
+      - dependency-name: vllm
+      - dependency-name: flash-linear-attention
+
+  - package-ecosystem: gomod
+    directory: /agent
+    schedule: { interval: weekly }
+    groups:
+      go: { patterns: ["*"] }
+
+  - package-ecosystem: npm
+    directory: /v1
+    schedule: { interval: weekly }
+    groups:
+      console: { patterns: ["*"] }
+
+  - package-ecosystem: docker
+    directory: /deploy/images
+    schedule: { interval: weekly }

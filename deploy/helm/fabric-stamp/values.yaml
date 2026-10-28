@@ -74,6 +74,10 @@ agent:
   # How often the cluster's GPUs are re-measured. Node hardware does not move, but pod
   # claims do, so this is shorter than "once" and longer than every poll.
   capacityInterval: 1m
+  # Rotate the stamp's agent and telemetry credentials once they are this old. The old
+  # ones keep working for the control plane's overlap window, so rotation needs no
+  # downtime and no inbound connection (ADR 0018). "0s" rotates only on request.
+  credentialMaxAge: 720h
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
@@ -214,7 +218,14 @@ dataPlane:
     # by how many sequences it decodes at once. With one GPU and a small max-num-seqs,
     # a value near that server's own concurrency is the useful setting.
     maxInFlightPerAccount: 0
-    # One private stamp-local authority makes both limits exact across gateway workers/pods.
+    # Model tokens (input plus output) per minute per account. Requests differ in cost
+    # by orders of magnitude, so this is what stops a few long generations taking the GPU.
+    # Each request is charged its metered tokens when it finishes; an account in debt is
+    # refused with Retry-After until it has paid it back (ADR 0017).
+    tokensPerMinute: 0
+    # Tokens an idle account may bank. Zero uses one minute's allowance.
+    tokenBurst: 0
+    # One private stamp-local authority makes these limits exact across gateway workers/pods.
     # It does not call the central control plane and therefore preserves offline serving.
     shared:
       enabled: true

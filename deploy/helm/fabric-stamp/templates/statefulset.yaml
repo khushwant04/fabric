@@ -72,6 +72,8 @@ spec:
             {{- end }}
             - --gpus={{ .Values.stamp.gpus }}
             - --poll={{ .Values.agent.pollInterval }}
+            # Defaulted here too: `helm upgrade --reuse-values` omits values a newer chart added.
+            - --credential-max-age={{ .Values.agent.credentialMaxAge | default "720h" }}
             {{- if .Values.stamp.measureCapacity }}
             # Measured capacity replaces --gpus above. The selector matches the operator's
             # --model-host-node-selector: measuring nodes a host will never be placed on
@@ -159,11 +161,17 @@ spec:
             - name: FABRIC_DP_RESPONSES_MAX_BODY_BYTES
               value: {{ .Values.dataPlane.responses.maxBodyBytes | quote }}
             - name: FABRIC_DP_RATE_LIMIT_REQUESTS_PER_MINUTE
-              value: {{ .Values.dataPlane.limits.requestsPerMinute | quote }}
+              # int64: a values-file number is a float64, and quote would render 1000000
+              # as "1e+06", which the data plane refuses to start with.
+              value: {{ .Values.dataPlane.limits.requestsPerMinute | default 0 | int64 | quote }}
             - name: FABRIC_DP_RATE_LIMIT_BURST
-              value: {{ .Values.dataPlane.limits.burst | quote }}
+              value: {{ .Values.dataPlane.limits.burst | default 0 | int64 | quote }}
             - name: FABRIC_DP_MAX_IN_FLIGHT_PER_ACCOUNT
-              value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | quote }}
+              value: {{ .Values.dataPlane.limits.maxInFlightPerAccount | default 0 | int64 | quote }}
+            - name: FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE
+              value: {{ .Values.dataPlane.limits.tokensPerMinute | default 0 | int64 | quote }}
+            - name: FABRIC_DP_TOKEN_RATE_LIMIT_BURST
+              value: {{ .Values.dataPlane.limits.tokenBurst | default 0 | int64 | quote }}
             {{- if .Values.dataPlane.limits.shared.enabled }}
             - name: FABRIC_DP_LIMIT_COORDINATOR_URL
               value: http://{{ include "fabric-stamp.fullname" . }}-limits:8083

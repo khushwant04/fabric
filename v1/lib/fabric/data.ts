@@ -8,6 +8,7 @@ import { getConsoleContext, getFabricAccessToken } from "@/lib/fabric/session"
 import type {
   AccountUsage,
   ApiKey,
+  AuditEventPage,
   Deployment,
   DeploymentStatus,
   DeploymentUsage,
@@ -112,6 +113,13 @@ export async function listServicePrincipals() {
   const context = await getConsoleContext()
   return accountRequest<ServicePrincipal[]>(
     `/v1/accounts/${context.account.id}/service-principals`
+  )
+}
+
+export async function listAuditEvents(query: URLSearchParams) {
+  const context = await getConsoleContext()
+  return accountRequest<AuditEventPage>(
+    `/v1/accounts/${context.account.id}/audit-events?${query}`
   )
 }
 

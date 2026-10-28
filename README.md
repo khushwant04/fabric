@@ -63,12 +63,32 @@ The agent polls outbound only. The control plane never dials into a customer clu
 | **Declarative deployment** | A customer declares intent; the operator reconciles GPU hosts to match, one at a time, rolling back a release that never becomes ready |
 | **Hardware-aware configuration** | The operator profiles its GPU nodes and corrects settings the hardware cannot execute, naming the reason |
 | **Per-deployment kernel selection** | `kernel_mode` chooses the Fabric decode kernel or the server's own, from one image |
+| **Audit trail** | Every privileged change recorded transactionally; owners and admins filter, page and export it (NDJSON), and exports are themselves audited |
+| **Token-rate limits** | Per-account tokens per minute, charged from the model's own metered usage and coordinated across gateways; an account in debt gets `429` with `Retry-After` |
+| **Credential rotation** | Stamps rotate their machine credentials by age or on request, outbound-only, with an overlap so nothing breaks mid-rotation |
 | **Metering** | The model's own token counts attributed to account, deployment, and cluster |
 | **Observability** | Prometheus and Grafana over engine, gateway, and GPU metrics |
 
 ---
 
 ## Quick start
+
+### Try the whole platform locally (no GPU, no cluster)
+
+With [uv](https://docs.astral.sh/uv/), Go 1.24+, `curl` and `openssl` installed:
+
+```bash
+make demo
+```
+
+This runs a real control plane over HTTP, the compiled Go agent and usage collector, and the
+inference data plane, with a stub model host standing in for vLLM. It enrolls a stamp with a
+single-use token, places a deployment, serves an authorized OpenAI-style request, refuses a
+forged token, and meters the usage back to the account exactly once. Set
+`FABRIC_E2E_UPSTREAM` to a running OpenAI-compatible host to use a real model. `make check`
+runs every test and lint suite; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Call a deployed Fabric
 
 Fabric includes [runnable API examples](examples/README.md) for Python and curl. They exchange an
 API key for a short-lived inference token; the raw `fab_key_…` value is never sent to the data
@@ -278,14 +298,19 @@ these shapes, so both implementations meet the same bandwidth limit.
 ## Verification
 
 ```
-Go (agent, operator, collector)      83 tests
-Control plane (SQLite)              116 tests
-Control plane (PostgreSQL)          126 tests
-Data plane                           66 tests
-Runtime (kernels, harness)           75 tests
-Serving (vLLM integration)           23 tests
+Go (agent, operator, collector)     204 tests
+Control plane (SQLite)              233 tests
+Control plane (PostgreSQL)          247 tests, as a role without BYPASSRLS
+Data plane                          406 tests
+Runtime (kernels, harness)           77 tests on CPU; 23 more need a GPU
+Serving (vLLM integration)           45 tests without vLLM; 5 more need it
+Console                              13 test files, lint, typecheck, image build
+Helm charts                          lint, production rendering, upgrade checks
 Cluster                              end-to-end on a throwaway cluster
 ```
+
+Everything above except the GPU, vLLM and cluster runs is executed by
+[CI](.github/workflows/ci.yaml) on every pull request.
 
 The control-plane suite runs against both engines because row-level security is a no-op on
 SQLite: only the PostgreSQL run proves isolation is enforced.

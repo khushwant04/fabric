@@ -154,6 +154,34 @@ class ServicePrincipalResponse(ORMModel):
     created_at: dt.datetime
 
 
+# --- audit trail ----------------------------------------------------------
+
+
+class AuditEventResponse(ORMModel):
+    id: uuid.UUID
+    account_id: uuid.UUID | None
+    actor_type: str
+    actor_id: str | None
+    action: str
+    resource_type: str | None
+    resource_id: str | None
+    metadata: dict[str, Any] = Field(validation_alias="event_metadata")
+    created_at: dt.datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def _utc(cls, value: dt.datetime) -> dt.datetime:
+        # Stored in UTC everywhere, but SQLite returns it without an offset. An exported
+        # trail is read by other systems, so every timestamp states its zone.
+        return value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value
+
+
+class AuditEventPage(BaseModel):
+    events: list[AuditEventResponse]
+    #: Pass as ``cursor`` to read the next, older page. Absent on the last page.
+    next_cursor: str | None = None
+
+
 # --- API keys -------------------------------------------------------------
 
 
@@ -267,7 +295,8 @@ class RuntimeSpec(BaseModel):
         if default is not None and self.tool_call_parser is not None:
             if equivalent_tool_call_parser(self.tool_call_parser) != default:
                 raise ValueError(
-                    f"{self.release} requires the {default} tool parser for its native chat template"
+                    f"{self.release} requires the {default} tool parser "
+                    "for its native chat template"
                 )
         return self
 
@@ -639,6 +668,9 @@ class StampResponse(ORMModel):
     last_heartbeat_at: dt.datetime | None
     revoked_at: dt.datetime | None
     created_at: dt.datetime
+    credential_version: int = 1
+    credential_rotation_requested_at: dt.datetime | None = None
+    credentials_rotated_at: dt.datetime | None = None
 
 
 class StampEnrollResponse(BaseModel):
@@ -654,6 +686,16 @@ class HeartbeatRequest(BaseModel):
 class HeartbeatResponse(BaseModel):
     stamp_id: uuid.UUID
     received_at: dt.datetime
+    #: An operator asked for new machine credentials. The agent rotates when it sees this.
+    rotate_credentials: bool = False
+
+
+class StampCredentialRotationResponse(BaseModel):
+    stamp_id: uuid.UUID
+    credential_version: int
+    agent_credential: str = Field(description="Shown once; replaces the agent's credential")
+    telemetry_credential: str = Field(description="Shown once; the collector's new credential")
+    previous_credentials_expire_at: dt.datetime
 
 
 class DesiredDeployment(BaseModel):
