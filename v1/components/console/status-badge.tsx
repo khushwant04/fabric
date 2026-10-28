@@ -1,30 +1,37 @@
-import { CircleIcon } from "lucide-react"
+import { Status, type StatusTone } from "@/components/hexel/status"
 
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
+// One map from Fabric's resource states to the design system's status tones, reused by
+// every page. State is a dot beside a plain label, never a coloured pill.
+const tones: Record<string, StatusTone> = {
+  active: "good",
+  ready: "good",
+  healthy: "good",
+  enabled: "good",
+  pending: "info",
+  deploying: "info",
+  registered: "info",
+  updating: "info",
+  terminating: "neutral",
+  deleting: "neutral",
+  deleted: "neutral",
+  draining: "neutral",
+  waiting: "warning",
+  unverified: "warning",
+  stale: "warning",
+  degraded: "serious",
+  failed: "critical",
+  error: "critical",
+  blocked: "critical",
+  revoked: "critical",
+  inactive: "critical",
+  offline: "critical",
+}
 
-const healthy = new Set(["active", "ready", "healthy", "enabled"])
-const warning = new Set(["pending", "deploying", "registered", "updating", "waiting", "unverified", "terminating", "deleting", "draining", "stale"])
-const danger = new Set(["degraded", "failed", "error", "blocked", "revoked", "inactive", "offline"])
+export function statusTone(status: string): StatusTone {
+  return tones[status.toLowerCase()] ?? "neutral"
+}
 
 export function StatusBadge({ status }: { status: string }) {
-  const normalized = status.toLowerCase()
-  return (
-    <Badge variant="outline" className="ui-caption gap-1.5 bg-card capitalize">
-      <CircleIcon
-        className={cn(
-          "size-2! fill-current",
-          // Outcome colours from the design system, always beside a word.
-          healthy.has(normalized) && "text-success",
-          warning.has(normalized) && "text-warning",
-          danger.has(normalized) && "text-destructive",
-          !healthy.has(normalized) &&
-            !warning.has(normalized) &&
-            !danger.has(normalized) &&
-            "text-muted-foreground"
-        )}
-      />
-      {status.replaceAll("_", " ")}
-    </Badge>
-  )
+  const label = status.replaceAll("_", " ")
+  return <Status tone={statusTone(status)}>{label.charAt(0).toUpperCase() + label.slice(1)}</Status>
 }
