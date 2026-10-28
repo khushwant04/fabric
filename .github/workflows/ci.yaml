@@ -35,6 +35,15 @@ jobs:
       - name: Test data plane
         if: matrix.component == 'data-plane'
         run: uv run --with-editable . --with 'pytest==8.3.4' --with 'pytest-asyncio==0.24.0' pytest -q
+      - name: Smoke-run the routing benchmark
+        if: matrix.component == 'data-plane'
+        run: |
+          uv run --with-editable . python -m benchmarks.routing \
+            --workloads multi_turn --rates 1 --duration 5 --time-scale 0.1 \
+            --out "$RUNNER_TEMP/routing-smoke"
+          python -c "import json,sys; a=json.load(open(sys.argv[1])); \
+            assert a['runs'] and all(r['summary']['failed'] == 0 for r in a['runs']), a" \
+            "$RUNNER_TEMP/routing-smoke/results.json"
       - name: Lint
         run: uv run --with 'ruff==0.8.4' ruff check .
 

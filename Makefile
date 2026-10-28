@@ -5,6 +5,8 @@
 #   make demo       run the full platform loop locally, no GPU or cluster needed
 #   make check      every test and lint suite CI runs (except PostgreSQL)
 #   make openapi    regenerate control-plane/openapi.json after an API change
+#   make bench-routing  compare routing strategies through the real gateway (see
+#                       data-plane/benchmarks/routing/README.md); BENCH_ARGS passes options
 #
 # PostgreSQL suite, against a database whose contents can be discarded:
 #   make test-postgres DATABASE_URL=postgresql+asyncpg://fabric_app:...@localhost/fabric_test
@@ -23,10 +25,10 @@ OPENAPI_ENV := FABRIC_APP_ENV=test FABRIC_DATABASE_URL=sqlite+aiosqlite:///:memo
 	FABRIC_CREDENTIAL_PEPPER=test-pepper-value FABRIC_SYSTEM_ACCOUNT_SLUG=fabric-system
 
 .PHONY: help setup setup-python demo check check-control-plane check-data-plane check-agent \
-	check-runtime check-console test-postgres openapi
+	check-runtime check-console test-postgres openapi bench-routing
 
 help:
-	@sed -n '1,13p' Makefile
+	@sed -n '1,15p' Makefile
 
 setup: setup-python
 	cd v1 && npm ci
@@ -77,3 +79,8 @@ openapi:
 	cd control-plane && $(OPENAPI_ENV) uv run --python $(PYTHON_VERSION) --extra dev python -c \
 		"import json; from app.main import create_app; \
 		print(json.dumps(create_app().openapi(), indent=2, sort_keys=True))" > openapi.json
+
+BENCH_ARGS ?=
+bench-routing:
+	cd data-plane && uv run --python $(PYTHON_VERSION) --with-editable . \
+		--with matplotlib==3.9.2 python -m benchmarks.routing $(BENCH_ARGS)
