@@ -4,7 +4,7 @@
 # host actually uses. Measuring on a development GPU answers a question about a different
 # compute capability, and measuring against a different vLLM answers a question about a
 # kernel the host would never call.
-FROM vllm/vllm-openai:v0.26.0
+FROM vllm/vllm-openai:v0.33.0
 
 COPY runtime/ /opt/fabric/runtime/
 COPY serving/fabric_serving/ /opt/fabric/serving/fabric_serving/

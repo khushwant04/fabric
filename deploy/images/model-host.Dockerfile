@@ -7,7 +7,7 @@
 #
 # The entrypoint is inherited deliberately. The operator passes the server's own flags, and
 # an image that wrapped the entrypoint would have to keep pace with them.
-FROM vllm/vllm-openai:v0.26.0
+FROM vllm/vllm-openai:v0.33.0
 
 COPY runtime/ /opt/fabric/runtime/
 COPY serving/fabric_serving/ /opt/fabric/serving/fabric_serving/
