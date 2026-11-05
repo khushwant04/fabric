@@ -158,6 +158,21 @@ p95 was 441 ms against round robin's 364 ms and least in flight's 526 ms. Goodpu
 96.2% against 99.3% and 93.8%. Concentrating a popular prompt on the hosts that hold it
 costs some tail when most traffic is cold.
 
+**Without a session key.** At 2 sessions/s with the OpenAI `user` field left out (5 seeds,
+run alone), session affinity has nothing to key on and rotates. Prefix-aware routing does
+not read the field and is unchanged.
+
+| Workload | Strategy | TTFT p50 / p95 (ms) | Cache hits | Goodput |
+|---|---|---|---|---|
+| Multi-turn | `session_affinity` | 137 / 330 | 75.0% | 99.6% |
+| | `prefix_aware` | 88 / 327 | 86.4% | 99.6% |
+| Mixed | `session_affinity` | 113 / 360 | 72.2% | 98.3% |
+| | `prefix_aware` | 81 / 343 | 85.9% | 99.3% |
+
+**Artifacts.** Every number in this section comes from the `fabric.routing-benchmark/v1`
+artifacts in `docs/benchmarks/routing-2026-11-05/`. That directory holds the
+`results.json`, summary and figures of each sweep, with the command that produced it.
+
 **What this does not show.** Simulated hosts, a single gateway, and four backends.
 Absolute numbers are not a GPU's. A claim about real hardware needs the same workloads
 replayed against real engines, which `prefix_blocks` approximates but does not reproduce.
