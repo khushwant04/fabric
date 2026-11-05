@@ -1,7 +1,8 @@
 """Command line: ``python -m benchmarks.routing`` from ``data-plane/``.
 
-    python -m benchmarks.routing --strategies round_robin,least_in_flight,session_affinity \\
-        --workloads multi_turn,shared_prefix,mixed --rates 0.5,1,2,4 --repeats 3
+    python -m benchmarks.routing \\
+        --strategies round_robin,least_in_flight,session_affinity,prefix_aware \\
+        --workloads multi_turn,shared_prefix,mixed --rates 0.5,1,2,4 --repeats 5
 
 Every combination of strategy, workload, rate and seed is one run on a fresh fleet, so no
 run inherits another's warm caches. Results go to ``--out`` (default ``results/<time>``).
@@ -31,7 +32,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m benchmarks.routing", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--strategies", type=_csv,
-                        default=["round_robin", "least_in_flight", "session_affinity"])
+                        default=["round_robin", "least_in_flight", "session_affinity",
+                                 "prefix_aware"])
     parser.add_argument("--workloads", type=_csv, default=list(WORKLOADS))
     parser.add_argument("--rates", type=lambda v: [float(x) for x in _csv(v)],
                         default=[0.5, 1.0, 2.0])
@@ -42,6 +44,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--backends", type=int, default=4)
     parser.add_argument("--time-scale", type=float, default=0.25,
                         help="wall seconds per simulated second")
+    parser.add_argument("--system-prompts", type=int, default=WorkloadConfig.system_prompts,
+                        help="distinct system prompts; more than fit in one host's cache "
+                             "makes where a request lands matter for shared prefixes")
     parser.add_argument("--no-user-field", action="store_true",
                         help="omit the OpenAI user field, which session affinity keys on")
     parser.add_argument("--slo-ttft-ms", type=float, default=500.0)
@@ -78,6 +83,7 @@ async def _main(arguments: argparse.Namespace, argv: list[str]) -> pathlib.Path:
             strategy=strategy,
             workload=WorkloadConfig(
                 kind=workload, rate=rate, duration_seconds=arguments.duration, seed=seed,
+                system_prompts=arguments.system_prompts,
                 set_user_field=not arguments.no_user_field,
             ),
             backends=arguments.backends,

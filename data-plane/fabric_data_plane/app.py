@@ -65,7 +65,8 @@ from fabric_data_plane.model_selection import (
     profile_for_json,
     rank_deployments,
 )
-from fabric_data_plane.pool import Backend, BackendPool
+from fabric_data_plane.pool import Backend, BackendPool, Strategy
+from fabric_data_plane.prefix import prefix_blocks
 from fabric_data_plane.registry import Deployment, ReloadingRegistry
 from fabric_data_plane.shared_limits import (
     LimitCoordinatorStore,
@@ -357,10 +358,16 @@ class DataPlane:
                 # adds candidate backend ids.
                 if pool is not None:
                     pool.health.reconcile(list(deployment.backends))
+                    strategy: Strategy | str = deployment.strategy
+                    if pool.uses_prefix and pool.strategy_name == deployment.strategy:
+                        # Hosts that stayed still hold their caches: keep the prefix index
+                        # (ADR 0019) and forget only the hosts that left.
+                        strategy = pool.strategy
+                        pool.strategy.forget(previous_ids - current_ids)
                     pool = BackendPool(
                         list(deployment.backends),
                         health=pool.health,
-                        strategy=deployment.strategy,
+                        strategy=strategy,
                     )
                 else:
                     pool = deployment.build_pool(
@@ -871,6 +878,8 @@ async def _proxy(
     # that is ejected or unhealthy, so a healthy replica is chosen even when one is down.
     pool = plane.pool_for(deployment)
     session_key = _session_key(request, payload)
+    # Hashed only for a strategy that routes on it (ADR 0019).
+    prefix = prefix_blocks(payload) if pool.uses_prefix else None
 
     deployment_label = str(deployment.deployment_id)
     account_label = str(principal.account_id)
@@ -885,7 +894,7 @@ async def _proxy(
             response: httpx.Response | None = None
             max_attempts = min(plane.settings.backend_max_attempts, len(pool))
             for _ in range(max_attempts):
-                backend = pool.select(exclude=tried, session_key=session_key)
+                backend = pool.select(exclude=tried, session_key=session_key, prefix=prefix)
                 if backend is None:
                     break
 
@@ -1112,7 +1121,7 @@ async def _proxy(
         max_attempts = min(plane.settings.backend_max_attempts, len(pool))
         try:
             for _ in range(max_attempts):
-                backend = pool.select(exclude=tried, session_key=session_key)
+                backend = pool.select(exclude=tried, session_key=session_key, prefix=prefix)
                 if backend is None:
                     break
                 _acquire_backend(plane, pool, backend, deployment_label)
@@ -1214,7 +1223,7 @@ async def _proxy(
     async def stream() -> AsyncIterator[bytes]:
         nonlocal request_outcome, upstream_ok
         tried: set[str] = set()
-        backend = pool.select(session_key=session_key)
+        backend = pool.select(session_key=session_key, prefix=prefix)
         max_attempts = min(plane.settings.backend_max_attempts, len(pool))
         try:
             for attempt in range(max_attempts):
@@ -1296,7 +1305,7 @@ async def _proxy(
                     )
 
                 if retry:
-                    backend = pool.select(exclude=tried, session_key=session_key)
+                    backend = pool.select(exclude=tried, session_key=session_key, prefix=prefix)
                     continue
 
             request_outcome = "upstream_error_streamed"

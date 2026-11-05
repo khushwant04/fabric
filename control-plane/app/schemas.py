@@ -241,11 +241,13 @@ class RuntimeSpec(BaseModel):
     #: ADR 0011). "least_in_flight" (the default) sends each request to the backend
     #: carrying the fewest in-flight requests; "round_robin" cycles them;
     #: "session_affinity" pins a session key to a stable backend; "weighted" spreads
-    #: proportionally to per-backend weight. It belongs on the deployment rather than the
-    #: stamp because the right choice depends on what is being served. The value flows
-    #: verbatim through desired state to the agent, which carries it to the data plane.
+    #: proportionally to per-backend weight; "prefix_aware" (ADR 0019) sends a request to
+    #: the backend most likely to hold its prompt prefix in cache, within a load bound.
+    #: It belongs on the deployment rather than the stamp because the right choice
+    #: depends on what is being served. The value flows verbatim through desired state
+    #: to the agent, which carries it to the data plane.
     strategy: Literal[
-        "least_in_flight", "round_robin", "session_affinity", "weighted"
+        "least_in_flight", "round_robin", "session_affinity", "weighted", "prefix_aware"
     ] = "least_in_flight"
     #: Serving settings that belong to the model rather than to the stamp. Before these
     #: existed every deployment on a stamp shared one Helm-configured value, which meant

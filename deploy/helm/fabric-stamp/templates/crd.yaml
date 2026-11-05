@@ -108,9 +108,11 @@ spec:
                     How the data plane balances across the deployment's backends.
                     "least_in_flight" sends each request to the backend carrying the
                     fewest in-flight requests, "round_robin" cycles them, "session_affinity"
-                    pins a session key to a stable backend, and "weighted" spreads
-                    proportionally to per-backend weight. Absent means least_in_flight.
-                  enum: [least_in_flight, round_robin, session_affinity, weighted]
+                    pins a session key to a stable backend, "weighted" spreads
+                    proportionally to per-backend weight, and "prefix_aware" sends a
+                    request where its prompt prefix is likely cached, within a load bound
+                    (ADR 0019). Absent means least_in_flight.
+                  enum: [least_in_flight, round_robin, session_affinity, weighted, prefix_aware]
                 capabilities:
                   type: object
                   description: |

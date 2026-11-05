@@ -8,8 +8,11 @@ result describes what a strategy actually decides.
 ```bash
 cd data-plane
 uv run --with-editable . --with matplotlib==3.9.2 python -m benchmarks.routing \
-    --workloads multi_turn,shared_prefix,mixed --rates 0.5,1,2,4 --repeats 3
+    --workloads multi_turn,shared_prefix,mixed --rates 0.5,1,2,4 --repeats 5
 ```
+
+By default it compares `round_robin`, `least_in_flight`, `session_affinity` and
+`prefix_aware` (ADR 0019); `--strategies` picks others.
 
 From the repository root, `make bench-routing` runs the same thing. A full sweep takes a
 few minutes; `--duration` and `--time-scale` trade fidelity for speed.
@@ -45,7 +48,12 @@ backend served a request and how much of its prompt was reused from the host its
 
 Requests set the OpenAI `user` field to the session id unless `--no-user-field` is given.
 Session affinity keys on it, so running both ways shows how much that strategy depends on
-clients setting it.
+clients setting it. Prefix-aware routing does not read it.
+
+`--system-prompts` sets how many distinct system prompts requests draw from (default 4).
+Four 1024-token prompts fit in every host's cache, so for `shared_prefix` every strategy
+ends up equal; raise it, or lower `--cache-blocks`, until they no longer fit to make
+where a shared prefix lands matter.
 
 ## Outputs
 

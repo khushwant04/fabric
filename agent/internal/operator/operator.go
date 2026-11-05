@@ -77,8 +77,8 @@ type Spec struct {
 	// deployment that predates this field is unchanged.
 	Replicas int `json:"replicas,omitempty"`
 	// Strategy is how the data plane balances across this deployment's backends:
-	// "least_in_flight" (the default), "round_robin", "session_affinity", or "weighted"
-	// (M2, ADR 0011). It belongs on the deployment rather than the stamp because the
+	// "least_in_flight" (the default), "round_robin", "session_affinity", "weighted"
+	// (M2, ADR 0011), or "prefix_aware" (ADR 0019). It belongs on the deployment rather than the stamp because the
 	// right choice depends on what is being served, not on where. Empty means the data
 	// plane's own default, which is least-in-flight.
 	Strategy string `json:"strategy,omitempty"`
