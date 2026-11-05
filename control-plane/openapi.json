@@ -267,6 +267,117 @@
         "title": "ApiKeyResponse",
         "type": "object"
       },
+      "AuditEventPage": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "AuditEventPage",
+        "type": "object"
+      },
+      "AuditEventResponse": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "actor_type": {
+            "title": "Actor Type",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "metadata": {
+            "title": "Metadata",
+            "type": "object"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "resource_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Type"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "actor_type",
+          "actor_id",
+          "action",
+          "resource_type",
+          "resource_id",
+          "metadata",
+          "created_at"
+        ],
+        "title": "AuditEventResponse",
+        "type": "object"
+      },
       "DeploymentCreateRequest": {
         "properties": {
           "model_alias": {
@@ -883,6 +994,11 @@
             "title": "Received At",
             "type": "string"
           },
+          "rotate_credentials": {
+            "default": false,
+            "title": "Rotate Credentials",
+            "type": "boolean"
+          },
           "stamp_id": {
             "format": "uuid",
             "title": "Stamp Id",
@@ -1400,10 +1516,13 @@
         "properties": {
           "enable_auto_tool_choice": {
             "anyOf": [
-              { "type": "boolean" },
-              { "type": "null" }
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "default": null,
             "title": "Enable Auto Tool Choice"
           },
           "execution": {
@@ -1491,21 +1610,57 @@
             "anyOf": [
               {
                 "enum": [
-                  "deepseek_v3", "deepseek_v31", "deepseek_v32", "deepseek_v4",
-                  "cohere_command3", "cohere_command4", "ernie45", "glm45", "glm47",
-                  "granite-20b-fc", "granite", "granite4", "hermes", "poolside_v1",
-                  "hunyuan_a13b", "hy_v3", "internlm", "jamba", "lfm2", "kimi_k2",
-                  "llama3_json", "llama4_json", "llama4_pythonic", "longcat", "mimo",
-                  "minimax_m2", "minimax_m3", "minicpm5", "mistral", "olmo3", "openai",
-                  "phi4_mini_json", "pythonic", "qwen3_coder", "qwen3_xml", "seed_oss",
-                  "step3", "step3p5", "inkling", "xlam", "gigachat3", "functiongemma",
-                  "gemma4", "apertus"
+                  "deepseek_v3",
+                  "deepseek_v31",
+                  "deepseek_v32",
+                  "deepseek_v4",
+                  "cohere_command3",
+                  "cohere_command4",
+                  "ernie45",
+                  "glm45",
+                  "glm47",
+                  "granite-20b-fc",
+                  "granite",
+                  "granite4",
+                  "hermes",
+                  "poolside_v1",
+                  "hunyuan_a13b",
+                  "hy_v3",
+                  "internlm",
+                  "jamba",
+                  "lfm2",
+                  "kimi_k2",
+                  "llama3_json",
+                  "llama4_json",
+                  "llama4_pythonic",
+                  "longcat",
+                  "mimo",
+                  "minimax_m2",
+                  "minimax_m3",
+                  "minicpm5",
+                  "mistral",
+                  "olmo3",
+                  "openai",
+                  "phi4_mini_json",
+                  "pythonic",
+                  "qwen3_coder",
+                  "qwen3_xml",
+                  "seed_oss",
+                  "step3",
+                  "step3p5",
+                  "inkling",
+                  "xlam",
+                  "gigachat3",
+                  "functiongemma",
+                  "gemma4",
+                  "apertus"
                 ],
                 "type": "string"
               },
-              { "type": "null" }
+              {
+                "type": "null"
+              }
             ],
-            "default": null,
             "title": "Tool Call Parser"
           }
         },
@@ -1795,6 +1950,43 @@
         "title": "StampCapabilities",
         "type": "object"
       },
+      "StampCredentialRotationResponse": {
+        "properties": {
+          "agent_credential": {
+            "description": "Shown once; replaces the agent's credential",
+            "title": "Agent Credential",
+            "type": "string"
+          },
+          "credential_version": {
+            "title": "Credential Version",
+            "type": "integer"
+          },
+          "previous_credentials_expire_at": {
+            "format": "date-time",
+            "title": "Previous Credentials Expire At",
+            "type": "string"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          },
+          "telemetry_credential": {
+            "description": "Shown once; the collector's new credential",
+            "title": "Telemetry Credential",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "credential_version",
+          "agent_credential",
+          "telemetry_credential",
+          "previous_credentials_expire_at"
+        ],
+        "title": "StampCredentialRotationResponse",
+        "type": "object"
+      },
       "StampEnrollRequest": {
         "properties": {
           "capabilities": {
@@ -1859,6 +2051,35 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "credential_rotation_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Rotation Requested At"
+          },
+          "credential_version": {
+            "default": 1,
+            "title": "Credential Version",
+            "type": "integer"
+          },
+          "credentials_rotated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials Rotated At"
           },
           "id": {
             "format": "uuid",
@@ -2773,6 +2994,354 @@
         "summary": "Revoke an API key",
         "tags": [
           "api-keys"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/audit-events": {
+      "get": {
+        "operationId": "list_events_v1_accounts__account_id__audit_events_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Exact action",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact action",
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          },
+          {
+            "description": "Inclusive lower bound",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower bound",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Exclusive upper bound",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclusive upper bound",
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List the account's audit trail, newest first",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/audit-events/export": {
+      "get": {
+        "operationId": "export_events_v1_accounts__account_id__audit_events_export_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Exact action",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact action",
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          },
+          {
+            "description": "Inclusive lower bound",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower bound",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Exclusive upper bound",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclusive upper bound",
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-ndjson": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export the account's audit trail as newline-delimited JSON",
+        "tags": [
+          "audit"
         ]
       }
     },
@@ -4053,6 +4622,62 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/stamps/{stamp_id}/credential-rotation": {
+      "post": {
+        "description": "Accepted rather than done: the agent rotates on its next heartbeat.\n\nUse stamp revocation instead when a credential may have leaked; it takes effect\nimmediately, while a rotation waits for the agent and overlaps the old credentials.",
+        "operationId": "request_stamp_rotation_v1_accounts__account_id__stamps__stamp_id__credential_rotation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask a stamp's agent to rotate its machine credentials",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "operationId": "read_me_v1_me_get",
@@ -4133,6 +4758,50 @@
           }
         },
         "summary": "Register a stamp using a one-time enrollment token",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
+    "/v1/stamps/{stamp_id}/credentials/rotate": {
+      "post": {
+        "description": "Authorized by the agent credential being replaced.\n\nRequires the heartbeat scope, which every agent credential has held since\nenrollment, rather than a new scope existing credentials would lack.",
+        "operationId": "rotate_credentials_v1_stamps__stamp_id__credentials_rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampCredentialRotationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace this stamp's agent and telemetry credentials",
         "tags": [
           "stamps"
         ]

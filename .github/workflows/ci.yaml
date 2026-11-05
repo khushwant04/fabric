@@ -15,6 +15,7 @@ concurrency:
 jobs:
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -37,8 +38,95 @@ jobs:
       - name: Lint
         run: uv run --with 'ruff==0.8.4' ruff check .
 
+  # Row-level security is a no-op on SQLite, so the isolation guarantees are only
+  # proven here: PostgreSQL, with the application connected as a role that has
+  # neither SUPERUSER nor BYPASSRLS.
+  control-plane-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fabric_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: control-plane
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create the restricted application role
+        run: |
+          psql -h localhost -U postgres -d fabric_test -v ON_ERROR_STOP=1 \
+            -v password="'fabric-ci'" -f scripts/create-app-role.sql
+          psql -h localhost -U postgres -d fabric_test -tA -c \
+            "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = 'fabric_app'" \
+            | grep -qx f
+      - name: Test control plane on PostgreSQL
+        env:
+          FABRIC_TEST_DATABASE_URL: postgresql+asyncpg://fabric_app:fabric-ci@localhost:5432/fabric_test
+        run: uv run --extra dev pytest -q -rs
+
+  # Kernel and vLLM-integration tests on CPU builds of the pinned torch/triton.
+  # GPU-only cases skip themselves; vLLM itself is not installed (multi-GB CUDA
+  # wheels), so the serving tests that need it skip too.
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UV_INDEX: https://download.pytorch.org/whl/cpu
+      UV_INDEX_STRATEGY: unsafe-best-match
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test runtime kernels and harness
+        working-directory: runtime
+        run: uv run --python 3.12 --with-editable . --with 'pytest==8.3.4' pytest -q
+      - name: Test serving integration
+        working-directory: serving
+        run: |
+          uv run --python 3.12 --no-project --with 'torch==2.8.0' --with 'triton==3.4.0' \
+            --with-editable ../runtime --with 'pytest==8.3.4' \
+            env PYTHONPATH=. pytest -q
+      - name: Lint
+        run: |
+          (cd runtime && uv run --no-project --with 'ruff==0.8.4' ruff check .)
+          (cd serving && uv run --no-project --with 'ruff==0.8.4' ruff check .)
+
+  # The cross-component loop: a real control plane over HTTP, the compiled agent and
+  # collector, and the data plane serving from the file the agent wrote, with a stub
+  # model host. Unit suites stub each other and cannot show that the pieces agree.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      - name: Run the platform loop
+        run: make demo
+
   agent:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: agent
@@ -56,6 +144,7 @@ jobs:
 
   console:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: v1
@@ -89,6 +178,7 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4

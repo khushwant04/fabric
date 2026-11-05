@@ -11,6 +11,7 @@ import {
   NetworkIcon,
   FlaskConicalIcon,
   SearchIcon,
+  ScrollTextIcon,
   Settings2Icon,
   UserRoundCogIcon,
   UsersIcon,
@@ -40,6 +41,7 @@ const items = [
   { label: "Service principals", href: "/access/service-principals", icon: UserRoundCogIcon, group: "Identity & access" },
   { label: "API keys", href: "/access/api-keys", icon: KeyRoundIcon, group: "Identity & access" },
   { label: "Account settings", href: "/settings", icon: Settings2Icon, group: "Administration" },
+  { label: "Audit log", href: "/audit", icon: ScrollTextIcon, group: "Administration" },
 ]
 
 export function SearchCommand({ compact = false }: { compact?: boolean }) {

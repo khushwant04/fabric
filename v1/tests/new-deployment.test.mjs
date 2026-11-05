@@ -13,6 +13,8 @@ function compile(relative, dependencies = {}) {
 
 const { parseNewDeployment, parsePlacementStamp } = compile("../lib/fabric/new-deployment.ts")
 const stampId = "4c0a0d13-70e5-4a98-9a61-0a278fdc831c"
+// Deployment actions never read the enrollment issuer; only stamp enrollment does.
+const stampEnrollmentConfig = { controlPlaneTokenIssuer() { throw new Error("deployment actions must not read the enrollment issuer") } }
 function form(values = {}) {
   const result = new FormData()
   for (const [key, value] of Object.entries({ name: "qwen-4b", modelAlias: "qwen3.5-4b", modelRef: "Qwen/Qwen3.5-4B", replicas: "1", gpuCount: "1", gpuClass: "t4", stampId, ...values })) result.set(key, value)
@@ -61,6 +63,7 @@ test("the real creation action sends the model repository and chosen stamp witho
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect: (path) => redirects.push(path) },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { calls.push({ path, init }); return { id: "deployment-one" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope(_context, scope) { assert.equal(scope, "deployments:write") } },
   })
@@ -83,6 +86,7 @@ test("the creation action preserves explicit disabled tool calling and sends a s
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect() {} },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { if (!path.endsWith("/placements")) bodies.push(JSON.parse(init.body)); return { id: "deployment-one" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
   })
@@ -107,6 +111,7 @@ test("placement retries read account-owned intent, preserve errors, and refuse d
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect() {} },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
     "@/lib/fabric/client": { FabricApiError, async controlPlaneRequest(path, init) { calls.push({ path, init }); if (init.method === "POST" && capacityError) throw new FabricApiError("No compatible GPU capacity is available"); return record } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
   })
@@ -130,6 +135,7 @@ test("invalid model form returns a reviewable error before creating any deployme
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect() {} },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, controlPlaneRequest() { throw new Error("Must not call control plane") } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "token", requireScope() {} },
   })
@@ -144,6 +150,7 @@ test("a lost placement response still opens the saved deployment for review and 
     "next/cache": { revalidatePath() {} },
     "next/navigation": { redirect: (path) => redirects.push(path) },
     "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
     "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path) { if (path.endsWith("/placements")) throw new TypeError("fetch failed"); creations++; return { id: "saved-deployment" } } },
     "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "token", requireScope() {} },
   })

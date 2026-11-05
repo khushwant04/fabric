@@ -150,7 +150,7 @@ func newHostServer(t *testing.T, items ...ModelDeployment) (*hostServer, *kube.C
 				}
 				existing.Status = &deploymentStatus{
 					ObservedGeneration: existing.Metadata.Generation,
-					ReadyReplicas: readyReplicas, Replicas: readyReplicas, UpdatedReplicas: readyReplicas,
+					ReadyReplicas:      readyReplicas, Replicas: readyReplicas, UpdatedReplicas: readyReplicas,
 				}
 			}
 			writeJSON(w, 200, existing)
@@ -1401,7 +1401,7 @@ func TestGPUCountUpdateReplacesDefaultedRequestAndKeepsOtherResources(t *testing
 		"containers": []any{map[string]any{
 			"name": "model-host", "image": testHost().Image,
 			"resources": map[string]any{
-				"limits": map[string]any{"nvidia.com/gpu": "1", "memory": "8Gi"},
+				"limits":   map[string]any{"nvidia.com/gpu": "1", "memory": "8Gi"},
 				"requests": map[string]any{"nvidia.com/gpu": "1", "cpu": "1"},
 			},
 		}},

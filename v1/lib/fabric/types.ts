@@ -120,6 +120,26 @@ export type Stamp = {
   last_heartbeat_at: string | null
   revoked_at: string | null
   created_at: string
+  credential_version?: number
+  credential_rotation_requested_at?: string | null
+  credentials_rotated_at?: string | null
+}
+
+export type AuditEvent = {
+  id: string
+  account_id: string | null
+  actor_type: string
+  actor_id: string | null
+  action: string
+  resource_type: string | null
+  resource_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export type AuditEventPage = {
+  events: AuditEvent[]
+  next_cursor: string | null
 }
 
 export type ServicePrincipal = {

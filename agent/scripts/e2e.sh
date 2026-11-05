@@ -195,6 +195,10 @@ log "4. Agent: build, enroll, reconcile"
 
 (cd "$REPO_ROOT/agent" && go build -o "$WORK/fabric-agent" ./cmd/fabric-agent)
 
+# No Kubernetes cluster runs here, so there are no GPU nodes to measure. Placement admits
+# a deployment only onto capacity a stamp reports (ADR 0013), so declare one device.
+AGENT_CAPACITY="--measure-capacity=false --gpus 1"
+
 FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
     --state-dir "$WORK/agent-state" \
@@ -202,6 +206,7 @@ FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --stamp-name e2e-stamp \
     --upstream "$UPSTREAM" \
     --orchestrator k3s \
+    $AGENT_CAPACITY \
     --once 2>&1 | tail -3
 
 STAMP_ID=$("$CONTROL_PY" -c "
@@ -229,6 +234,7 @@ FABRIC_AGENT_ENROLLMENT_TOKEN="" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
     --state-dir "$WORK/agent-state" \
     --upstream "$UPSTREAM" \
+    $AGENT_CAPACITY \
     --once 2>&1 | tail -2
 
 info "rendered configuration:"
@@ -443,6 +449,49 @@ AFTER=$(api GET "/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID/usage" \
 [ "$AFTER" = "1" ] || die "a second collector pass double counted usage ($AFTER events)"
 info "a second pass added nothing: still $AFTER event"
 
+# --------------------------------------------------------------------------
+log "10. Rotate the stamp's credentials without an inbound connection"
+# --------------------------------------------------------------------------
+
+OLD_AGENT=$("$CONTROL_PY" -c "import json;print(json.load(open('$WORK/agent-state/credentials.json'))['agent_credential'])")
+OLD_TELEMETRY=$(cat "$WORK/collector-secret/telemetry-credential")
+api POST "/v1/accounts/$ACCOUNT_ID/stamps/$STAMP_ID/credential-rotation" >/dev/null
+info "owner requested a rotation"
+
+# The agent learns of the request from its heartbeat reply and rotates on that pass.
+FABRIC_AGENT_ENROLLMENT_TOKEN="" "$WORK/fabric-agent" \
+    --control-plane "$CONTROL_URL" \
+    --state-dir "$WORK/agent-state" \
+    --telemetry-credential-file "$WORK/collector-secret/telemetry-credential" \
+    --upstream "$UPSTREAM" \
+    $AGENT_CAPACITY \
+    --once >"$WORK/rotation.log" 2>&1 || true
+grep -q '"msg":"rotated machine credentials"' "$WORK/rotation.log" \
+    || { cat "$WORK/rotation.log"; die "the agent did not rotate its credentials on request"; }
+
+NEW_AGENT=$("$CONTROL_PY" -c "import json;print(json.load(open('$WORK/agent-state/credentials.json'))['agent_credential'])")
+NEW_TELEMETRY=$(cat "$WORK/collector-secret/telemetry-credential")
+[ "$NEW_AGENT" != "$OLD_AGENT" ] || die "the persisted agent credential did not change"
+[ "$NEW_TELEMETRY" != "$OLD_TELEMETRY" ] || die "the collector's credential did not change"
+info "agent and collector credentials replaced and persisted"
+
+for credential in "$OLD_AGENT" "$NEW_AGENT"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CONTROL_URL/v1/stamps/$STAMP_ID/heartbeat" \
+        -H "Authorization: Bearer $credential" -H 'Content-Type: application/json' -d '{}')
+    [ "$code" = "200" ] || die "a credential was refused during the overlap (got $code)"
+done
+info "old and new agent credentials both accepted during the overlap"
+
+"$WORK/fabric-collector" \
+    --control-plane "$CONTROL_URL" \
+    --data-plane-admin "$DP_ADMIN_URL" \
+    --credential-file "$WORK/collector-secret/telemetry-credential" \
+    --once >/dev/null 2>&1 || die "the collector could not report with its rotated credential"
+VERSION=$(api GET "/v1/accounts/$ACCOUNT_ID/stamps" \
+    | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)[0]['credential_version'])")
+[ "$VERSION" = "2" ] || die "stamp credential_version is $VERSION, want 2"
+info "collector reports with the new credential; credential_version=$VERSION"
+
 log "Loop closed"
 cat <<EOF
 
@@ -456,5 +505,8 @@ cat <<EOF
   data plane    -> caller         inference authorized for that account only
   collector     -> control plane  usage forwarded, attributed to the account
                                   and stamp, and not double counted
+  control plane -> agent          an owner's rotation request delivered through
+                                  the heartbeat; both credentials replaced with
+                                  an overlap, and the collector follows its file
 
 EOF

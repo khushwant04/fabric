@@ -51,7 +51,9 @@ _DEFAULT_TILE = {"block_v": 32, "num_warps": 1}
 
 def _tile_from_environment() -> dict[str, int]:
     tile = dict(_DEFAULT_TILE)
-    for key, variable in (("block_v", "FABRIC_KERNEL_BLOCK_V"), ("num_warps", "FABRIC_KERNEL_NUM_WARPS")):
+    for key, variable in (
+        ("block_v", "FABRIC_KERNEL_BLOCK_V"), ("num_warps", "FABRIC_KERNEL_NUM_WARPS")
+    ):
         raw = os.environ.get(variable, "").strip()
         if not raw:
             continue

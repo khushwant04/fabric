@@ -89,6 +89,11 @@ func main() {
 
 	client := controlplane.New(*controlPlane, *timeout)
 	client.Credential = credential
+	if os.Getenv("FABRIC_COLLECTOR_TELEMETRY_CREDENTIAL") == "" {
+		// Follow the file the agent writes, so a rotated credential takes effect before
+		// the one it replaces expires.
+		client.CredentialSource = state.NewTelemetryCredentialSource(*credentialFile, credential).Get
+	}
 
 	worker := collector.New(
 		client, collector.NewDataPlane(*dataPlane, *timeout), logger, *capacity,

@@ -183,12 +183,15 @@ Notable codes: `account_membership_required` (403), `account_selection_required`
 
 ## Frontend integration
 
-`control-plane/openapi.json` is committed for client generation. Regenerate after
-API changes:
+`control-plane/openapi.json` is committed for client generation. Regenerate it after
+API changes, from the repository root:
 
 ```bash
-.venv/bin/python -c "import json;from app.main import app;print(json.dumps(app.openapi(),indent=2))" > openapi.json
+make openapi
 ```
+
+A test fails while the committed document differs from what the app serves, so edit the
+code rather than the document.
 
 Console flow: complete Auth0 login requesting the Fabric API audience, call
 `GET /v1/me`, create an account if none exists, exchange the Auth0 token at

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,6 +47,12 @@ type controlPlaneStub struct {
 	lastCapabilities *controlplane.Capabilities
 	// Capabilities presented at enrollment, which happens before the first heartbeat.
 	enrolledCapabilities *controlplane.Capabilities
+	// Credential rotation (ADR 0018): whether the heartbeat reply asks for one, how many
+	// were performed, and the credential each authenticated call presented.
+	requestRotation atomic.Bool
+	rotations       atomic.Int32
+	presented       []string
+	current         string // newest issued agent credential; empty before any rotation
 }
 
 func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
@@ -85,7 +92,28 @@ func (s *controlPlaneStub) server(t *testing.T) *httptest.Server {
 		if body.Capabilities != nil {
 			s.lastCapabilities = body.Capabilities
 		}
-		writeJSON(w, 200, map[string]any{"stamp_id": stampID})
+		presented := r.Header.Get("Authorization")
+		s.presented = append(s.presented, presented)
+		// Like the control plane: ask for a rotation on request, and whenever the agent
+		// presents a credential that has already been rotated away.
+		superseded := s.current != "" && presented != "Bearer "+s.current
+		writeJSON(w, 200, map[string]any{
+			"stamp_id": stampID, "rotate_credentials": s.requestRotation.Load() || superseded,
+		})
+	})
+
+	mux.HandleFunc("/v1/stamps/"+stampID+"/credentials/rotate", func(w http.ResponseWriter, r *http.Request) {
+		requireAgentCredential(t, r)
+		version := s.rotations.Add(1) + 1
+		s.requestRotation.Store(false)
+		s.current = fmt.Sprintf("fab_agent_%s_v%d", stampID, version)
+		writeJSON(w, 200, map[string]any{
+			"stamp_id":                       stampID,
+			"credential_version":             version,
+			"agent_credential":               fmt.Sprintf("fab_agent_%s_v%d", stampID, version),
+			"telemetry_credential":           fmt.Sprintf("fab_telem_%s_v%d", stampID, version),
+			"previous_credentials_expire_at": "2026-10-27T13:00:00Z",
+		})
 	})
 
 	mux.HandleFunc("/v1/stamps/"+stampID+"/desired-state", func(w http.ResponseWriter, r *http.Request) {
@@ -854,7 +882,7 @@ func TestToolCallingFalsePersistsAndIdenticalAssignmentsDoNotRepublish(t *testin
 		ControlPlaneURL: server.URL, EnrollmentToken: "fab_enroll_token_secret",
 		CredentialsPath: filepath.Join(dir, "credentials.json"),
 		DeploymentsPath: filepath.Join(dir, "deployments.json"),
-		UpstreamURL: "http://model-host:8000", Sink: sink,
+		UpstreamURL:     "http://model-host:8000", Sink: sink,
 	}, discardLogger())
 	if err := instance.Ensure(context.Background()); err != nil {
 		t.Fatal(err)

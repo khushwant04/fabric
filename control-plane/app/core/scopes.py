@@ -19,6 +19,9 @@ DEPLOYMENTS_READ = "deployments:read"
 DEPLOYMENTS_WRITE = "deployments:write"
 STAMPS_READ = "stamps:read"
 STAMPS_WRITE = "stamps:write"
+#: Reading the audit trail. Held by owners and admins only: events name members,
+#: principals and the changes they made, which is more than a developer or viewer needs.
+AUDIT_READ = "audit:read"
 
 # Granting managed capacity is Fabric's decision, not a customer's, so this scope is
 # deliberately outside CONTROL_SCOPES: an account-scoped API key can never carry it,
@@ -36,6 +39,7 @@ CONTROL_SCOPES = frozenset(
         DEPLOYMENTS_WRITE,
         STAMPS_READ,
         STAMPS_WRITE,
+        AUDIT_READ,
     }
 )
 

@@ -14,7 +14,15 @@ Two mechanisms, because they protect against different things:
   the one that actually protects the GPU, because a model server's cost is set by how
   many sequences it is decoding at once, not by how many arrived per minute.
 
-Both are per account rather than per deployment. The scarce resource is the device, and
+A third, optional mechanism bounds how many model tokens an account may spend per minute.
+Requests differ in cost by orders of magnitude, so a request rate alone lets one caller
+take most of a GPU with a few long generations. Output length is unknown until a request
+finishes, so the token limit is a *debt* bucket (ADR 0017): admission only requires the
+account not to be in debt, and the request's metered tokens are debited when it completes.
+Over any long interval the rate holds exactly; a single request may overshoot by its own
+size, and the concurrency cap bounds how many can do so at once.
+
+All three are per account rather than per deployment. The scarce resource is the device, and
 an account with several deployments on one stamp shares it either way.
 
 This module contains the in-process primitives. Production requests use the stamp-local shared
@@ -166,5 +174,80 @@ class ConcurrencyLimiter:
             "max_in_flight_per_account": self._maximum,
             "in_flight": sum(self._in_flight.values()),
             "peak_per_account": self._peak,
+            "rejected": self._rejected,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class TokenRate:
+    """How many model tokens (input plus output) an account may spend per minute."""
+
+    tokens_per_minute: int
+    #: The most an idle account can bank. Defaults to one minute's allowance.
+    burst: int
+
+    @property
+    def enabled(self) -> bool:
+        return self.tokens_per_minute > 0
+
+    @property
+    def refill_per_second(self) -> float:
+        return self.tokens_per_minute / 60.0
+
+
+def token_balance(rate: TokenRate, balance: float, elapsed: float) -> float:
+    """Refill ``balance`` over ``elapsed`` seconds, capped at the burst."""
+    return min(float(rate.burst), balance + max(0.0, elapsed) * rate.refill_per_second)
+
+
+def token_wait(rate: TokenRate, balance: float) -> float | None:
+    """Seconds until an account with ``balance`` may be admitted, or ``None`` if it may now."""
+    if balance >= 0.0:
+        return None
+    return -balance / rate.refill_per_second
+
+
+class TokenRateLimiter:
+    """Per-account token debt buckets for the in-process backend."""
+
+    def __init__(self, rate: TokenRate) -> None:
+        self._rate = rate
+        self._balances: dict[uuid.UUID, tuple[float, float]] = {}
+        self._rejected = 0
+        self._debited = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self._rate.enabled
+
+    def _current(self, account_id: uuid.UUID, now: float) -> float:
+        balance, updated = self._balances.get(account_id, (float(self._rate.burst), now))
+        return token_balance(self._rate, balance, now - updated)
+
+    def check(self, account_id: uuid.UUID, *, now: float | None = None) -> float | None:
+        """Return ``None`` when the account may start a request, or the seconds to wait."""
+        if not self._rate.enabled:
+            return None
+        moment = now if now is not None else time.monotonic()
+        wait = token_wait(self._rate, self._current(account_id, moment))
+        if wait is not None:
+            self._rejected += 1
+        return wait
+
+    def debit(self, account_id: uuid.UUID, tokens: int, *, now: float | None = None) -> None:
+        """Charge a completed request's metered tokens, which may leave the account in debt."""
+        if not self._rate.enabled or tokens <= 0:
+            return
+        moment = now if now is not None else time.monotonic()
+        self._balances[account_id] = (self._current(account_id, moment) - tokens, moment)
+        self._debited += tokens
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "enabled": self._rate.enabled,
+            "tokens_per_minute": self._rate.tokens_per_minute,
+            "burst": self._rate.burst,
+            "accounts_tracked": len(self._balances),
+            "debited": self._debited,
             "rejected": self._rejected,
         }

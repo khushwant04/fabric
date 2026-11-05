@@ -14,6 +14,8 @@ common=(
   --set dataPlane.limits.requestsPerMinute=60
   --set dataPlane.limits.burst=2
   --set dataPlane.limits.maxInFlightPerAccount=2
+  --set dataPlane.limits.tokensPerMinute=6000
+  --set dataPlane.limits.tokenBurst=12000
 )
 
 "$HELM" lint "$CHART" "${common[@]}" >/dev/null
@@ -26,6 +28,26 @@ grep -q 'FABRIC_DP_LIMIT_COORDINATOR_STORE_PATH' "$TMP/shared.yaml"
 grep -q 'value: /var/lib/fabric-usage/private/limits.db' "$TMP/shared.yaml"
 grep -q 'containerPort: 8083' "$TMP/shared.yaml"
 grep -q 'port: limits' "$TMP/shared.yaml"
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE' "$TMP/shared.yaml" | grep -q 'value: "6000"'
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_BURST' "$TMP/shared.yaml" | grep -q 'value: "12000"'
+grep -q -- '--credential-max-age=720h' "$TMP/shared.yaml"
+
+# Values files carry numbers as float64; large limits must still render as integers.
+cat >"$TMP/large-limits.yaml" <<'VALUES'
+dataPlane:
+  limits:
+    tokensPerMinute: 2500000
+    tokenBurst: 10000000
+VALUES
+# Without the token --set flags in common, which would override the values file.
+"$HELM" template large "$CHART" \
+  --set controlPlane.url=https://fabric.example \
+  --set controlPlane.jwtIssuer=https://fabric.example \
+  --set enrollment.existingSecret=fabric-enrollment \
+  --set modelHost.url=http://model-host:8000 \
+  -f "$TMP/large-limits.yaml" >"$TMP/large.yaml"
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_TOKENS_PER_MINUTE' "$TMP/large.yaml" | grep -q 'value: "2500000"'
+grep -A1 'FABRIC_DP_TOKEN_RATE_LIMIT_BURST' "$TMP/large.yaml" | grep -q 'value: "10000000"'
 
 # Parse document-local contracts rather than only proving strings exist somewhere.
 awk '

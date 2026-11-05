@@ -30,6 +30,15 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
+// envDuration reads a duration from the environment, falling back on absence or a value
+// that does not parse; flag parsing then reports the effective default in --help.
+func envDuration(name string, fallback time.Duration) time.Duration {
+	if value, err := time.ParseDuration(os.Getenv(name)); err == nil {
+		return value
+	}
+	return fallback
+}
+
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
@@ -70,6 +79,9 @@ func main() {
 	capacityInterval := flag.Duration("capacity-interval", time.Minute,
 		"how often to re-measure the cluster's GPUs")
 	poll := flag.Duration("poll", 15*time.Second, "desired-state poll interval")
+	credentialMaxAge := flag.Duration("credential-max-age",
+		envDuration("FABRIC_AGENT_CREDENTIAL_MAX_AGE", 30*24*time.Hour),
+		"rotate the machine credentials once they are this old; 0 rotates only on request")
 	once := flag.Bool("once", false, "reconcile a single time and exit")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 
@@ -118,6 +130,7 @@ func main() {
 		UpstreamURL:             *upstream,
 		InferenceURL:            publicURL,
 		PollInterval:            *poll,
+		CredentialMaxAge:        *credentialMaxAge,
 		CapacityInterval:        *capacityInterval,
 		Capabilities: controlplane.Capabilities{
 			Orchestrator:    *orchestrator,

@@ -10,8 +10,8 @@ import (
 // emits JSON tool calls, while Qwen3.5 emits XML function/parameter tags.
 var modelToolCallParsers = map[string]string{
 	"Qwen/Qwen2.5-Coder-3B-Instruct": "hermes",
-	"Qwen/Qwen3-VL-4B-Instruct":     "hermes",
-	"Qwen/Qwen3.5-4B":              "qwen3_xml",
+	"Qwen/Qwen3-VL-4B-Instruct":      "hermes",
+	"Qwen/Qwen3.5-4B":                "qwen3_xml",
 }
 
 // Built-in names from vLLM v0.26.0. A caller cannot request a plugin to execute

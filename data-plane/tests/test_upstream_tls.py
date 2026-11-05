@@ -39,8 +39,25 @@ def _issue(common_name: str, *, issuer=None, issuer_key=None, ca: bool = False):
         .not_valid_before(now - dt.timedelta(minutes=5))
         .not_valid_after(now + dt.timedelta(hours=1))
         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True)
+        # Python 3.13 verifies with VERIFY_X509_STRICT, which requires key identifiers.
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                (issuer_key or key).public_key()
+            ),
+            critical=False,
+        )
     )
-    if not ca:
+    if ca:
+        builder = builder.add_extension(
+            x509.KeyUsage(
+                digital_signature=False, content_commitment=False, key_encipherment=False,
+                data_encipherment=False, key_agreement=False, key_cert_sign=True,
+                crl_sign=True, encipher_only=False, decipher_only=False,
+            ),
+            critical=True,
+        )
+    else:
         builder = builder.add_extension(
             x509.SubjectAlternativeName([
                 x509.DNSName("localhost"),

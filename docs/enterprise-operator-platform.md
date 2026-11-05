@@ -319,14 +319,14 @@ Legend: **Implemented**, **Partial**, **Missing**, **Conflict**.
 | Runtime profiles | Partial | Kernel mode, strategy, replicas/GPU; chart-wide vLLM knobs | First-class immutable per-deployment profile, compatibility matrix, CRUD, approval/evidence |
 | Inference endpoints | Partial | Public OpenAI-compatible routes and reported endpoint URLs | First-class endpoint resource, private endpoints, tenant policies, stable lifecycle and failover |
 | Routing | Partial | least-in-flight, round-robin, session affinity, weighted, backend ejection | Predicted completion, SLO/cost/energy, prefix locality, explanation, policy and multi-stamp routing |
-| Limits/quotas | Partial | Stamp-local per-account RPM/burst/concurrency coordinator | LimitPolicy is dangling; no TPM/daily budget/per-key/global-cross-stamp/reservation APIs |
+| Limits/quotas | Partial | Stamp-local per-account RPM/burst/concurrency and tokens-per-minute (ADR 0017) coordinator | LimitPolicy is dangling; no daily budget/per-key/global-cross-stamp/reservation APIs |
 | Rollout | Partial | release candidates, weighted cutover, acknowledged drain, automatic rollback mechanics | First-class rollout object, stages, guards, promote/pause/abort APIs, history/approvals |
 | Usage | Partial | Durable local spool, central attribution, token totals | Billing-grade ledger, cost allocation, retention/export, global quota accounting |
-| Audit | Partial | Transactional AuditEvent and outbox writes | No audit read/export API, SIEM, WORM/integrity, retention/legal hold, complete event coverage |
+| Audit | Partial | Transactional AuditEvent and outbox writes; filtered, keyset-paginated read API and audited NDJSON export; console audit log | SIEM push, WORM/integrity, retention/legal hold, complete event coverage |
 | Metrics/Grafana | Partial | Prometheus + vLLM + gateway + DCGM and one dashboard | HA/remote retention, full dashboard suite, alerts/runbooks, router/kernel/cost/energy metrics |
-| Operator Console | Missing | Next.js shell and placeholder dashboard | All data integration, auth/session, pages/workflows, permission model; no functional UI today |
+| Operator Console | Partial | Auth0 server-side session; live dashboard, deployments, placement, stamp enrollment, usage, access management, playground | Model/profile catalogue, endpoints, limits, rollouts, audit/security views, operator-versus-tenant permission model |
 | Operator identity | Partial/Conflict | Auth0 humans, memberships, roles, API keys, per-account OIDC | Separate platform-operator authority from downstream tenant machine access |
-| Credential rotation | Partial | expiry/revocation fields; key/stamp revocation | Overlap rotation for API/stamp/JWT/mTLS, KMS/HSM/Vault automation and emergency workflow |
+| Credential rotation | Partial | expiry/revocation; key/stamp revocation; overlap rotation of stamp agent/telemetry credentials by age or request (ADR 0018) | Overlap rotation for API keys/JWT/mTLS, KMS/HSM/Vault automation |
 | Network security | Partial | TLS, NetworkPolicy, separated listeners/credentials | Mandatory model-host mTLS, private endpoint workflow, egress controls and policy evidence |
 | HA/DR | Partial | multiple control replicas, serving independent of central services, durable local spool | Multi-zone DB/control/gateway, cross-stamp endpoint failover, automated backup/restore and RPO/RTO drills |
 | Supply chain | Missing/Partial | Dockerfiles, pinned portions, chart security contexts | CI, immutable digest enforcement, scans, SBOM, signing, provenance, registry admission, promotion |
@@ -462,7 +462,7 @@ Weighted routing is not yet a governed canary product. `limits_policy_ref` is no
 9. Operator playground/evaluation.
 10. Adaptive routing and experiment controls.
 
-The current `v1` application is a visual shell only: its dashboard is empty placeholder cards, navigation contains placeholder links, and no authenticated backend integration exists.
+Steps 1–4 and the deployment half of step 6 are implemented in `v1` (Auth0 server-side session, account context, typed control-plane client, live dashboard and deployment workflows); the playground from step 9 exists without evaluation gates. The governed catalogue, rollouts, endpoint/tenant/limit workflows, and security/audit views remain.
 
 ## 12. Research/product relationship
 

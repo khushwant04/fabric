@@ -52,11 +52,21 @@ export async function controlPlaneRequest<T>(
   path: string,
   init: RequestInit & { token?: string } = {}
 ): Promise<T> {
+  const response = await controlPlaneResponse(path, init)
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
+}
+
+// The successful response itself, for bodies that are not one JSON document.
+export async function controlPlaneResponse(
+  path: string,
+  init: RequestInit & { token?: string } = {}
+): Promise<Response> {
   const baseUrl = (
     process.env.FABRIC_CONTROL_PLANE_URL ?? DEFAULT_CONTROL_PLANE_URL
   ).replace(/\/$/, "")
   const headers = new Headers(init.headers)
-  headers.set("Accept", "application/json")
+  if (!headers.has("Accept")) headers.set("Accept", "application/json")
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json")
   }
@@ -71,6 +81,5 @@ export async function controlPlaneRequest<T>(
   })
 
   if (!response.ok) throw await parseFailure(response)
-  if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  return response
 }

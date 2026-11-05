@@ -40,15 +40,20 @@ def event(kind, response):
 def responses_host(plane):
     requests = []
     stream_bytes = (
-        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"hi"}\n\n'
         + event("response.completed", response_body())
     )
 
     def handler(request):
         payload = json.loads(request.content)
-        requests.append({"path": request.url.path, "payload": payload, "headers": dict(request.headers)})
+        requests.append(
+            {"path": request.url.path, "payload": payload, "headers": dict(request.headers)}
+        )
         if payload.get("stream"):
-            return httpx.Response(200, content=stream_bytes, headers={"content-type": "text/event-stream"})
+            return httpx.Response(
+                200, content=stream_bytes, headers={"content-type": "text/event-stream"}
+            )
         return httpx.Response(200, json=response_body(payload["model"]))
 
     plane.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -69,7 +74,10 @@ async def test_responses_preserve_native_inputs_tools_output_and_accounting(
         "model": "launch-model", "input": history, "instructions": "Use the supplied function.",
         "tools": tools, "tool_choice": "auto", "text": {"format": {"type": "text"}},
     }
-    reply = await client.post(RESPONSES_PATH, json=payload, headers={"Authorization": f"Bearer {signing_key.issue()}"})
+    reply = await client.post(
+        RESPONSES_PATH, json=payload,
+        headers={"Authorization": f"Bearer {signing_key.issue()}"},
+    )
     assert reply.status_code == 200
     assert reply.json()["output"] == response_body()["output"]
     assert reply.json()["model"] == "launch-model"
@@ -78,7 +86,8 @@ async def test_responses_preserve_native_inputs_tools_output_and_accounting(
     assert "authorization" not in requests[0]["headers"]
     records = plane.usage.drain()
     assert len(records) == 1
-    assert (records[0].input_tokens, records[0].output_tokens, records[0].streamed) == (11, 7, False)
+    record = records[0]
+    assert (record.input_tokens, record.output_tokens, record.streamed) == (11, 7, False)
     assert plane.concurrency.snapshot()["in_flight"] == 0
 
 
@@ -108,7 +117,9 @@ async def test_responses_invalid_usage_never_becomes_a_zero_or_chat_usage_record
 ):
     body = response_body()
     body["usage"] = usage
-    plane.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+    plane.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+    )
     reply = await client.post(
         RESPONSES_PATH, json={"model": "launch-model", "input": "hello"},
         headers={"Authorization": f"Bearer {signing_key.issue()}"},
@@ -123,8 +134,12 @@ async def test_responses_invalid_usage_never_becomes_a_zero_or_chat_usage_record
 async def test_responses_stream_preserves_initial_host_http_rejection(
     client, plane, signing_key, status
 ):
-    body = {"error": {"type": "BadRequestError", "message": "Tools unsupported by this runtime", "code": status}}
-    plane.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body)))
+    body = {"error": {
+        "type": "BadRequestError", "message": "Tools unsupported by this runtime", "code": status,
+    }}
+    plane.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body))
+    )
     reply = await client.post(
         RESPONSES_PATH, json={"model": "launch-model", "input": "hello", "stream": True},
         headers={"Authorization": f"Bearer {signing_key.issue()}"},
@@ -189,7 +204,10 @@ def test_responses_partial_or_malformed_usage_is_not_billed_as_a_final_total():
 
 def test_responses_opaque_event_type_passes_through_without_aborting_meter():
     meter = UsageMeter(forward_usage_frame=True, responses=True)
-    frame = b'event: unknown\ndata: {"type":{},"response":{"usage":{"input_tokens":1,"output_tokens":2}}}\n\n'
+    frame = (
+        b'event: unknown\n'
+        b'data: {"type":{},"response":{"usage":{"input_tokens":1,"output_tokens":2}}}\n\n'
+    )
     assert meter.feed(frame) == frame
     assert meter.usage is None
 
@@ -243,12 +261,17 @@ async def test_responses_body_limit_precedes_upstream_and_admission(
     assert plane.concurrency.snapshot()["in_flight"] == 0
 
 
-async def test_responses_deep_invalid_json_is_a_client_error(client, plane, signing_key, responses_host):
+async def test_responses_deep_invalid_json_is_a_client_error(
+    client, plane, signing_key, responses_host
+):
     requests, _ = responses_host
     body = '{"model":"launch-model","input":' + '[' * 2000 + '0' + ']' * 2000 + '}'
     reply = await client.post(
         RESPONSES_PATH, content=body,
-        headers={"Authorization": f"Bearer {signing_key.issue()}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {signing_key.issue()}",
+            "Content-Type": "application/json",
+        },
     )
     assert reply.status_code == 400
     assert reply.json()["error"]["code"] == "invalid_json"
@@ -262,9 +285,13 @@ async def test_responses_share_rate_allowance_with_chat(
     plane.rate_limiter = RateLimiter(RateLimit(requests_per_minute=1, burst=1))
     plane.limits = LocalLimitManager(plane.rate_limiter, plane.concurrency)
     headers = {"Authorization": f"Bearer {signing_key.issue()}"}
-    first = await client.post(RESPONSES_PATH, json={"model": "launch-model", "input": "hello"}, headers=headers)
+    first = await client.post(
+        RESPONSES_PATH, json={"model": "launch-model", "input": "hello"}, headers=headers
+    )
     assert first.status_code == 200
-    second = await client.post("/v1/chat/completions", json={"model": "launch-model", "messages": []}, headers=headers)
+    second = await client.post(
+        "/v1/chat/completions", json={"model": "launch-model", "messages": []}, headers=headers
+    )
     assert second.status_code == 429
     assert len(requests) == 1
 
@@ -292,7 +319,9 @@ async def test_responses_auto_selects_owned_vision_model_and_consumes_only_routi
 
 
 def test_responses_routing_includes_instructions_and_output_budget():
-    profile = profile_for_json("chat", {"input": "hi", "instructions": "Write Python code", "max_output_tokens": 32000})
+    profile = profile_for_json(
+        "chat", {"input": "hi", "instructions": "Write Python code", "max_output_tokens": 32000}
+    )
     assert profile.task == "code"
     assert profile.estimated_tokens > 32000
 
@@ -318,7 +347,10 @@ async def test_responses_disconnect_releases_backend_and_shared_account_lease(pl
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
         "method": "POST", "scheme": "http", "path": RESPONSES_PATH,
         "raw_path": RESPONSES_PATH.encode(), "query_string": b"",
-        "headers": [(b"authorization", f"Bearer {signing_key.issue()}".encode()), (b"content-type", b"application/json")],
+        "headers": [
+            (b"authorization", f"Bearer {signing_key.issue()}".encode()),
+            (b"content-type", b"application/json"),
+        ],
         "client": ("127.0.0.1", 1234), "server": ("inference.test", 80),
     }
     received = False
@@ -343,7 +375,8 @@ async def test_responses_disconnect_releases_backend_and_shared_account_lease(pl
         await task
     assert plane.concurrency.snapshot()["in_flight"] == 0
     assert not plane._admitted_streams
-    assert all(value == 0 for value in plane.pool_for(plane.registry.resolve("launch-model", account_id=ACCOUNT_A)).health.in_flight().values())
+    deployment = plane.registry.resolve("launch-model", account_id=ACCOUNT_A)
+    assert all(value == 0 for value in plane.pool_for(deployment).health.in_flight().values())
     assert plane.usage.drain() == []
 
 
@@ -357,8 +390,17 @@ def responses_request(signing_key):
         "client": ("127.0.0.1", 1234), "server": ("inference.test", 80),
     }
 
+    delivered = False
+
     async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
+        # Like an ASGI server: deliver the body once, then block until disconnect.
+        # Returning the body on every call never suspends, so a disconnect listener
+        # spins forever and cannot be cancelled.
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await asyncio.Event().wait()
 
     return Request(scope, receive)
 
@@ -385,7 +427,9 @@ async def test_responses_cancel_before_host_headers_releases_admitted_leases(pla
     assert plane.usage.drain() == []
 
 
-async def test_responses_response_start_failure_closes_host_before_body_iteration(plane, signing_key):
+async def test_responses_response_start_failure_closes_host_before_body_iteration(
+    plane, signing_key
+):
     class UnreadStream(httpx.AsyncByteStream):
         def __init__(self):
             self.closed = False
@@ -408,8 +452,11 @@ async def test_responses_response_start_failure_closes_host_before_body_iteratio
     async def send(message):
         raise RuntimeError("downstream response-start failed")
 
-    with pytest.raises(RuntimeError):
+    # Starlette's streaming task group reports the send failure inside an ExceptionGroup.
+    with pytest.raises((RuntimeError, ExceptionGroup)) as raised:
         await response(request.scope, request.receive, send)
+    if isinstance(raised.value, ExceptionGroup):
+        assert raised.value.subgroup(RuntimeError) is not None
     assert host_stream.closed
     assert not host_stream.iterated
     assert plane.concurrency.snapshot()["in_flight"] == 0

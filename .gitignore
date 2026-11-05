@@ -7,3 +7,6 @@ __pycache__/
 .venv/
 .ruff_cache/
 examples/.env
+
+# uv writes a lockfile on every run; dependencies are pinned in each pyproject.toml
+uv.lock
