@@ -167,8 +167,7 @@ jobs:
           for test_file in tests/*.test.mjs; do
             node "$test_file"
           done
-          npx tsc --target es2022 --module commonjs --moduleResolution node \
-            --esModuleInterop --skipLibCheck --outDir /tmp/fabric-console-tests tests/*.test.ts
+          npx tsc -p tests/tsconfig.json --outDir /tmp/fabric-console-tests
           for test_file in /tmp/fabric-console-tests/tests/*.test.js; do
             node "$test_file"
           done
