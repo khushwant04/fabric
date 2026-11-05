@@ -368,8 +368,9 @@ when both the control plane and data plane are importable.
   Managed homogeneous replicas currently publish equal weights. `prefix_aware` (ADR
   0019) keeps a bounded, process-local index of prompt-prefix block hashes to the
   backends that served them and sends a request to the backend matching the longest
-  run of its leading blocks, among backends within 1.25 times the mean in-flight load;
-  with no match it falls back to least-in-flight. It needs no session key. Every
+  run of its leading blocks, among backends within 1.25 times the mean in-flight load
+  (`FABRIC_DP_PREFIX_ROUTING_LOAD_FACTOR`); with no match it falls back to
+  least-in-flight. It needs no session key. Every
   strategy chooses only among healthy backends, so none can return an ejected host.
 - A non-streamed request retries another backend only when connection establishment is
   known to have failed. Read, write, protocol, and explicit HTTP 5xx failures are not
