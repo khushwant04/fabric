@@ -45,6 +45,9 @@ updates:
       # TypeScript 7 makes lint crash. Take a new major once it is supported.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      # eslint-config-next's eslint-plugin-import declares peer support up to ESLint 9.
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /deploy/images
