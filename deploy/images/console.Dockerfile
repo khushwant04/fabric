@@ -1,6 +1,6 @@
 # Build from the repository root. The Dockerfile-specific ignore file excludes
 # environment files and credentials before the context is uploaded.
-FROM node:22-alpine AS dependencies
+FROM node:26-alpine AS dependencies
 WORKDIR /app
 COPY v1/package.json v1/package-lock.json ./
 RUN npm ci
@@ -10,7 +10,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY v1/ ./
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
