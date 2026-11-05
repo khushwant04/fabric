@@ -56,6 +56,15 @@ class RunConfig:
     time_scale: float = 0.25
     #: Simulated seconds after which an unfinished request counts as failed.
     request_timeout_seconds: float = 300.0
+    #: The gateway's ``prefix_routing_load_factor``; read only by ``prefix_aware``.
+    prefix_load_factor: float = 1.25
+
+    @property
+    def label(self) -> str:
+        """The strategy as reported: prefix-aware runs carry their load bound."""
+        if self.strategy == "prefix_aware":
+            return f"prefix_aware ×{self.prefix_load_factor:g}"
+        return self.strategy
 
 
 @dataclasses.dataclass(frozen=True)
@@ -161,6 +170,7 @@ class _Gateway:
             deployments_file="does-not-exist.json",
             usage_buffer_size=1_000_000,
             upstream_timeout_seconds=config.request_timeout_seconds * config.time_scale,
+            prefix_routing_load_factor=config.prefix_load_factor,
         )
         keys = KeyCache(
             settings,

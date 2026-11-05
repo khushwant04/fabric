@@ -368,11 +368,13 @@ class DataPlane:
                         list(deployment.backends),
                         health=pool.health,
                         strategy=strategy,
+                        prefix_load_factor=self.settings.prefix_routing_load_factor,
                     )
                 else:
                     pool = deployment.build_pool(
                         failure_threshold=self.settings.backend_failure_threshold,
                         recovery_seconds=self.settings.backend_recovery_seconds,
+                        prefix_load_factor=self.settings.prefix_routing_load_factor,
                     )
                 self._pools[deployment.deployment_id] = pool
 

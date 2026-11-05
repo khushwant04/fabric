@@ -144,7 +144,11 @@ def build_artifact(
         "calibration": calibration,
         "runs": [
             {
-                "strategy": run.config.strategy,
+                "strategy": run.config.label,
+                "routing": {
+                    "strategy": run.config.strategy,
+                    "prefix_load_factor": run.config.prefix_load_factor,
+                },
                 "workload": dataclasses.asdict(run.config.workload),
                 "summary": summarize(run, slo),
                 "host_stats": run.host_stats,
@@ -164,7 +168,7 @@ def write_requests_csv(path: pathlib.Path, runs: list[RunResult]) -> None:
             for request in run.requests:
                 row = dataclasses.asdict(request)
                 writer.writerow([
-                    run.config.strategy, workload.kind, workload.rate, workload.seed,
+                    run.config.label, workload.kind, workload.rate, workload.seed,
                     *(row[name] for name in fields),
                 ])
 

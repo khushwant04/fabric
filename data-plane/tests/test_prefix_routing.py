@@ -242,3 +242,35 @@ def test_the_registry_accepts_prefix_aware_from_configuration() -> None:
     )
     deployment = registry.resolve("launch-model", account_id=ACCOUNT_A)
     assert deployment.strategy == "prefix_aware"
+
+
+def test_the_load_bound_comes_from_the_data_plane_settings(control_plane) -> None:
+    fleet = FleetUpstream()
+    plane = _make_plane(fleet, control_plane, prefix_routing_load_factor=1.5)
+    deployment = _registry(strategy="prefix_aware").resolve("launch-model", account_id=ACCOUNT_A)
+    pool = plane.pool_for(deployment)
+    assert isinstance(pool.strategy, PrefixAwareStrategy)
+    assert pool.strategy._load_factor == 1.5
+    # A strategy change rebuilds the pool; the new strategy reads the same setting.
+    plane.pool_for(dataclasses.replace(deployment, strategy="round_robin"))
+    rebuilt = plane.pool_for(deployment)
+    assert isinstance(rebuilt.strategy, PrefixAwareStrategy)
+    assert rebuilt.strategy._load_factor == 1.5
+
+
+def test_a_bound_of_one_never_lets_a_cached_backend_run_ahead_of_the_rest() -> None:
+    pool, health, _ = _pool("a", "b", "c", "d", load_factor=1.0)
+    conversation = prefix_blocks(_chat("question " * 60))
+    holder = pool.select(prefix=conversation)
+    health.acquire(holder)
+    # The holder already carries one more request than the others: at 1.0 it must wait.
+    assert pool.select(prefix=conversation) != holder
+
+
+def test_benchmark_runs_label_prefix_aware_with_its_bound() -> None:
+    from benchmarks.routing.harness import RunConfig
+    from benchmarks.routing.workload import WorkloadConfig
+
+    workload = WorkloadConfig()
+    assert RunConfig("prefix_aware", workload, prefix_load_factor=1.1).label == "prefix_aware ×1.1"
+    assert RunConfig("round_robin", workload).label == "round_robin"

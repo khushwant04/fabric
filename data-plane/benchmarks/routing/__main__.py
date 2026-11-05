@@ -44,6 +44,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--backends", type=int, default=4)
     parser.add_argument("--time-scale", type=float, default=0.25,
                         help="wall seconds per simulated second")
+    parser.add_argument("--prefix-load-factors", type=lambda v: [float(x) for x in _csv(v)],
+                        default=[1.25],
+                        help="load bounds to run prefix_aware with, each as its own variant")
     parser.add_argument("--system-prompts", type=int, default=WorkloadConfig.system_prompts,
                         help="distinct system prompts; more than fit in one host's cache "
                              "makes where a request lands matter for shared prefixes")
@@ -71,16 +74,22 @@ async def _main(arguments: argparse.Namespace, argv: list[str]) -> pathlib.Path:
     print(f"calibrating gateway overhead at time scale {arguments.time_scale} ...", flush=True)
     calibration = await calibrate(time_scale=arguments.time_scale)
     runs = []
+    variants = [
+        (strategy, factor)
+        for strategy in arguments.strategies
+        for factor in (arguments.prefix_load_factors if strategy == "prefix_aware" else [1.25])
+    ]
     points = [
-        (workload, rate, seed, strategy)
+        (workload, rate, seed, strategy, factor)
         for workload in arguments.workloads
         for rate in arguments.rates
         for seed in range(arguments.seed, arguments.seed + arguments.repeats)
-        for strategy in arguments.strategies
+        for strategy, factor in variants
     ]
-    for index, (workload, rate, seed, strategy) in enumerate(points, start=1):
+    for index, (workload, rate, seed, strategy, factor) in enumerate(points, start=1):
         config = RunConfig(
             strategy=strategy,
+            prefix_load_factor=factor,
             workload=WorkloadConfig(
                 kind=workload, rate=rate, duration_seconds=arguments.duration, seed=seed,
                 system_prompts=arguments.system_prompts,
@@ -92,7 +101,7 @@ async def _main(arguments: argparse.Namespace, argv: list[str]) -> pathlib.Path:
         )
         result = await run(config)
         ok = sum(1 for request in result.requests if request.ok)
-        print(f"[{index}/{len(points)}] {workload} rate={rate:g} seed={seed} {strategy}: "
+        print(f"[{index}/{len(points)}] {workload} rate={rate:g} seed={seed} {config.label}: "
               f"{ok}/{len(result.requests)} completed in {result.wall_seconds:.1f}s", flush=True)
         runs.append(result)
     slo = Slo(ttft_ms=arguments.slo_ttft_ms, tpot_ms=arguments.slo_tpot_ms)

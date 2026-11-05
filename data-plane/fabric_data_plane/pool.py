@@ -361,7 +361,9 @@ class PrefixAwareStrategy(Strategy):
                 del self._index[block]
 
 
-def build_strategy(name: str | None, health: BackendHealth) -> Strategy:
+def build_strategy(
+    name: str | None, health: BackendHealth, *, prefix_load_factor: float = 1.25
+) -> Strategy:
     match name:
         case "round_robin":
             return RoundRobinStrategy()
@@ -370,7 +372,7 @@ def build_strategy(name: str | None, health: BackendHealth) -> Strategy:
         case "weighted":
             return WeightedStrategy()
         case "prefix_aware":
-            return PrefixAwareStrategy(health)
+            return PrefixAwareStrategy(health, load_factor=prefix_load_factor)
         case _:
             # Unknown values fail open to the validated default so a newer control plane
             # cannot stop an older data plane from serving.
@@ -385,13 +387,17 @@ class BackendPool:
         backends: list[Backend],
         health: BackendHealth | None = None,
         strategy: Strategy | str | None = None,
+        *,
+        prefix_load_factor: float = 1.25,
     ) -> None:
         if not backends:
             raise ValueError("a deployment must have at least one backend")
         self._backends = list(backends)
         self.health = health or BackendHealth(self._backends)
         self._strategy = (
-            strategy if isinstance(strategy, Strategy) else build_strategy(strategy, self.health)
+            strategy
+            if isinstance(strategy, Strategy)
+            else build_strategy(strategy, self.health, prefix_load_factor=prefix_load_factor)
         )
         self._lock = threading.Lock()
 
