@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.25.0"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -18,8 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest==8.3.4",
-  "ruff==0.8.4",
+  "pytest==9.2.0",
+  "ruff==0.17.3",
 ]
 # Optimized library baseline. Pinned because an artifact must name the exact
 # baseline it was measured against; the suite runs without it and records the

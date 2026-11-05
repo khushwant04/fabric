@@ -66,8 +66,7 @@ check-console:
 	cd v1 && npm run lint && npx next typegen && npx tsc --noEmit
 	cd v1 && for test_file in tests/*.test.mjs; do node "$$test_file" || exit 1; done
 	cd v1 && out=$$(mktemp -d) \
-		&& npx tsc --target es2022 --module commonjs --moduleResolution node \
-			--esModuleInterop --skipLibCheck --outDir "$$out" tests/*.test.ts \
+		&& npx tsc -p tests/tsconfig.json --outDir "$$out" \
 		&& for test_file in "$$out"/tests/*.test.js; do node "$$test_file" || exit 1; done
 
 test-postgres:

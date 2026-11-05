@@ -338,6 +338,7 @@
             "type": "string"
           },
           "metadata": {
+            "additionalProperties": true,
             "title": "Metadata",
             "type": "object"
           },
@@ -418,6 +419,7 @@
             "type": "string"
           },
           "desired_spec": {
+            "additionalProperties": true,
             "title": "Desired Spec",
             "type": "object"
           },
@@ -504,6 +506,7 @@
         "properties": {
           "conditions": {
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Conditions",
@@ -679,6 +682,7 @@
             "type": "string"
           },
           "spec": {
+            "additionalProperties": true,
             "title": "Spec",
             "type": "object"
           }
@@ -2045,6 +2049,7 @@
             "type": "string"
           },
           "capabilities": {
+            "additionalProperties": true,
             "title": "Capabilities",
             "type": "object"
           },
@@ -2616,6 +2621,13 @@
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -2686,6 +2698,7 @@
                 "schema": {
                   "additionalProperties": {
                     "items": {
+                      "additionalProperties": true,
                       "type": "object"
                     },
                     "type": "array"

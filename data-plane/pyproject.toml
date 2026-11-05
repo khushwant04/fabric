@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.25.0"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -9,25 +9,25 @@ description = "Fabric inference ingress: local token verification, routing, and 
 requires-python = ">=3.12"
 
 dependencies = [
-  "fastapi==0.115.6",
-  "uvicorn[standard]==0.32.1",
+  "fastapi==0.162.0",
+  "uvicorn[standard]==0.54.0",
   "httpx==0.28.1",
-  "pydantic==2.10.3",
-  "pydantic-settings==2.6.1",
-  "pyjwt[crypto]==2.10.1",
-  "cryptography==44.0.0",
-  "python-json-logger==2.0.7",
+  "pydantic==2.14.2",
+  "pydantic-settings==2.16.2",
+  "pyjwt[crypto]==2.15.1",
+  "cryptography==50.0.2",
+  "python-json-logger==4.2.0",
   # Starlette parses multipart bodies only when this is installed, and the audio
   # endpoints are multipart. Without it those routes raise at request time rather
   # than at import, so the gap would not show until a caller sent audio.
-  "python-multipart==0.0.20",
+  "python-multipart==0.0.33",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest==8.3.4",
-  "pytest-asyncio==0.24.0",
-  "ruff==0.8.4",
+  "pytest==9.2.0",
+  "pytest-asyncio==1.4.1.post1",
+  "ruff==0.17.3",
 ]
 
 [tool.hatch.build.targets.wheel]

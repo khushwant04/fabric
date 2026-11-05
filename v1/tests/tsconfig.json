@@ -1,0 +1,14 @@
+{
+  // Compiles tests/*.test.ts to CommonJS for plain `node`, outside Next's bundler
+  // config. Used by `make check-console` and CI: tsc -p tests/tsconfig.json --outDir <dir>
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "rootDir": ".."
+  },
+  "include": ["*.test.ts"]
+}

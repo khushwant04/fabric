@@ -24,9 +24,9 @@ jobs:
       run:
         working-directory: ${{ matrix.component }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Test control plane
@@ -69,9 +69,9 @@ jobs:
     env:
       PGPASSWORD: postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Create the restricted application role
@@ -96,9 +96,9 @@ jobs:
       UV_INDEX: https://download.pytorch.org/whl/cpu
       UV_INDEX_STRATEGY: unsafe-best-match
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Test runtime kernels and harness
@@ -122,12 +122,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: agent/go.mod
       - name: Run the platform loop
@@ -140,8 +140,8 @@ jobs:
       run:
         working-directory: agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: agent/go.mod
       - name: Format
@@ -158,8 +158,8 @@ jobs:
       run:
         working-directory: v1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -177,8 +177,7 @@ jobs:
           for test_file in tests/*.test.mjs; do
             node "$test_file"
           done
-          npx tsc --target es2022 --module commonjs --moduleResolution node \
-            --esModuleInterop --skipLibCheck --outDir /tmp/fabric-console-tests tests/*.test.ts
+          npx tsc -p tests/tsconfig.json --outDir /tmp/fabric-console-tests
           for test_file in /tmp/fabric-console-tests/tests/*.test.js; do
             node "$test_file"
           done
@@ -190,9 +189,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install chart test dependency
