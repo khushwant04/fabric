@@ -105,7 +105,62 @@ cache benefit.
 
 ### Across load
 
-<!-- FINAL-SWEEP -->
+The full sweep is 5 seeds per point, all four strategies, and the default bound of 1.1.
+The three workloads ran as three concurrent processes. Gateway overhead was 4.8–5.2 ms
+wall at p50, against 4.4 ms when run alone, and it is included in every TTFT.
+
+**Below saturation (1 and 2 sessions/s).** Prefix-aware routing came within 10 ms of
+session affinity's median TTFT, 29–39% below least in flight's. It kept least in flight's
+p95, within a few milliseconds, and its goodput (99.0–99.5%).
+
+| Workload, rate | Strategy | TTFT p50 / p95 (ms) | Cache hits | Goodput |
+|---|---|---|---|---|
+| Multi-turn, 1/s | `least_in_flight` | 127 / 342 | 72.8% | 99.9% |
+| | `session_affinity` | 78 / 331 | 86.9% | 99.9% |
+| | `prefix_aware` | 78 / 331 | 85.4% | 99.5% |
+| Multi-turn, 2/s | `least_in_flight` | 145 / 332 | 75.2% | 99.8% |
+| | `session_affinity` | 93 / 371 | 89.5% | 97.8% |
+| | `prefix_aware` | 102 / 327 | 86.5% | 99.5% |
+| Mixed, 1/s | `least_in_flight` | 111 / 407 | 67.2% | 97.4% |
+| | `session_affinity` | 79 / 337 | 82.9% | 99.5% |
+| | `prefix_aware` | 78 / 338 | 83.8% | 99.5% |
+| Mixed, 2/s | `least_in_flight` | 116 / 347 | 73.5% | 98.5% |
+| | `session_affinity` | 82 / 335 | 87.5% | 98.7% |
+| | `prefix_aware` | 82 / 351 | 85.5% | 99.0% |
+
+Round robin tracked least in flight within a few milliseconds and is omitted.
+
+**At 4 sessions/s.** Means over seeds hide what happens here, so it is reported per seed.
+
+- *Mixed traffic.* Prefix-aware routing had the best p95 on four of five seeds: 318–334 ms
+  against least in flight's 361–462. Goodput was 98–99% against 96–98%. It lost the
+  burstiest seed (seed 0): 1,159 ms against 558 ms, goodput 87% against 94%. Session
+  affinity reached 2.9 s and 3.8 s on two seeds. Cache hits averaged 88.6% for
+  prefix-aware, 75.8% for least in flight and 90.4% for affinity.
+- *Multi-turn.* Seeds 3 and 4 saturate the fleet for every strategy (goodput 46–63%), as
+  in the bound sweep. On the other three seeds, prefix-aware p95 was 301–427 ms against
+  least in flight's 345–383. Session affinity's was 825–1,784 ms.
+
+**Shared prefixes beyond one host's cache.** 64 distinct 1,024-token system prompts, more
+than one host's 32k-token cache holds, single-turn requests. A prompt's first use is
+always a miss, so the reachable cache-hit rate is limited by how often prompts repeat
+within the run: about 25%, 38% and 58% at 1, 2 and 4 sessions/s.
+
+| Rate | Reachable | `prefix_aware` | `least_in_flight` | `round_robin` | `session_affinity` |
+|---|---|---|---|---|---|
+| 1/s | 25% | 19.8% | 4.7% | 6.2% | 9.6% |
+| 2/s | 38% | 28.6% | 12.7% | 12.0% | 14.3% |
+| 4/s | 58% | 45.7% | 21.4% | 21.1% | 22.1% |
+
+Prefix-aware routing reached 75–79% of what is reachable; the others reached 19–38%.
+Median TTFT barely moved, because most requests here are first uses. At 4 sessions/s its
+p95 was 441 ms against round robin's 364 ms and least in flight's 526 ms. Goodput was
+96.2% against 99.3% and 93.8%. Concentrating a popular prompt on the hosts that hold it
+costs some tail when most traffic is cold.
+
+**What this does not show.** Simulated hosts, a single gateway, and four backends.
+Absolute numbers are not a GPU's. A claim about real hardware needs the same workloads
+replayed against real engines, which `prefix_blocks` approximates but does not reproduce.
 
 ## Consequences
 
