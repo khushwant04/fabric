@@ -368,7 +368,9 @@ async def test_disconnect_during_response_start_releases_stream_leases(
         if message["type"] == "http.response.start":
             raise RuntimeError("client disconnected during response start")
 
-    with pytest.raises(BaseExceptionGroup):
+    # Starlette before 1.0 wraps the client's error in an ExceptionGroup; 1.x raises it
+    # as is. Either way it reaches the server, and what matters is the cleanup below.
+    with pytest.raises((RuntimeError, BaseExceptionGroup)):
         await app(scope, receive, send)
 
     deployment = router_plane.registry.resolve("launch-model", account_id=ACCOUNT_A)
