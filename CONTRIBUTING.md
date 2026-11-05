@@ -13,7 +13,7 @@ Run the checks for every component you touched. `make check` runs them all.
 | `control-plane/` on PostgreSQL | `FABRIC_TEST_DATABASE_URL=postgresql+asyncpg://fabric_app:…@localhost/fabric_test uv run --extra dev pytest -q`, with the role from `scripts/create-app-role.sql` |
 | `data-plane/` | `uv run --with-editable . --with pytest==8.3.4 --with pytest-asyncio==0.24.0 pytest -q`, plus ruff |
 | `agent/` | `gofmt -l .` (must print nothing), `go vet ./...`, `go test ./...` |
-| `runtime/`, `serving/` | see the `runtime` job in [`ci.yaml`](.github/workflows/ci.yaml); CPU wheels are enough |
+| `runtime/`, `serving/` | see the `runtime` job in [`ci.yaml`](.depot/workflows/ci.yaml); CPU wheels are enough |
 | `v1/` | `npm run lint`, `npx next typegen && npx tsc --noEmit`, and the files in `tests/` |
 | `deploy/helm/` | `helm lint` and the `deploy/scripts/test-*` chart checks |
 

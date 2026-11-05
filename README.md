@@ -310,7 +310,7 @@ Cluster                              end-to-end on a throwaway cluster
 ```
 
 Everything above except the GPU, vLLM and cluster runs is executed by
-[CI](.github/workflows/ci.yaml) on every pull request.
+[CI](.depot/workflows/ci.yaml) on every pull request.
 
 The control-plane suite runs against both engines because row-level security is a no-op on
 SQLite: only the PostgreSQL run proves isolation is enforced.

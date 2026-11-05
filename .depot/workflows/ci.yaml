@@ -1,3 +1,14 @@
+# Depot CI workflow, migrated from .github/workflows/ci.yaml.
+#
+# Changes from the GitHub Actions original:
+#   - runs-on: ubuntu-latest -> depot-ubuntu-latest
+#   - the routing-benchmark smoke run falls back to mktemp when RUNNER_TEMP is unset
+#   - new `images` job: publishes the release images to Amazon ECR Public after
+#     every check passes, for pushes to main only
+#
+# deploy-azure.yaml stays on GitHub Actions: Depot CI does not support
+# `environment:` protection rules, and Azure federated credentials cannot match
+# Depot's per-run OIDC subject.
 name: CI
 
 on:
@@ -14,7 +25,7 @@ concurrency:
 
 jobs:
   python:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -38,12 +49,13 @@ jobs:
       - name: Smoke-run the routing benchmark
         if: matrix.component == 'data-plane'
         run: |
+          out="${RUNNER_TEMP:-$(mktemp -d)}/routing-smoke"
           uv run --with-editable . python -m benchmarks.routing \
             --workloads multi_turn --rates 1 --duration 5 --time-scale 0.1 \
-            --out "$RUNNER_TEMP/routing-smoke"
+            --out "$out"
           python -c "import json,sys; a=json.load(open(sys.argv[1])); \
             assert a['runs'] and all(r['summary']['failed'] == 0 for r in a['runs']), a" \
-            "$RUNNER_TEMP/routing-smoke/results.json"
+            "$out/results.json"
       - name: Lint
         run: uv run --with 'ruff==0.8.4' ruff check .
 
@@ -51,7 +63,7 @@ jobs:
   # proven here: PostgreSQL, with the application connected as a role that has
   # neither SUPERUSER nor BYPASSRLS.
   control-plane-postgres:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     services:
       postgres:
@@ -90,7 +102,7 @@ jobs:
   # GPU-only cases skip themselves; vLLM itself is not installed (multi-GB CUDA
   # wheels), so the serving tests that need it skip too.
   runtime:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     env:
       UV_INDEX: https://download.pytorch.org/whl/cpu
@@ -119,7 +131,7 @@ jobs:
   # collector, and the data plane serving from the file the agent wrote, with a stub
   # model host. Unit suites stub each other and cannot show that the pieces agree.
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -134,7 +146,7 @@ jobs:
         run: make demo
 
   agent:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
@@ -152,7 +164,7 @@ jobs:
         run: go test ./...
 
   console:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
@@ -186,7 +198,7 @@ jobs:
         run: docker build -f deploy/images/console.Dockerfile -t fabric/console:ci .
 
   packaging:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -220,3 +232,36 @@ jobs:
           bash deploy/scripts/test-stamp-exposure-chart.sh
       - name: Verify upgrades from legacy release values
         run: python deploy/scripts/test_upgrade_automation.py
+
+  # Publish the release images to Amazon ECR Public (public.ecr.aws/hexelstudio/fabric/*)
+  # once every check above has passed. Pushes to main only, never pull requests.
+  # Authenticates with Depot CI's OIDC token: the role's trust policy must allow
+  # identity.depot.dev, and the role must be allowed to push to the fabric/* repositories.
+  # Tags are `git-<commit sha>`, matching the Azure release workflow.
+  images:
+    needs: [python, control-plane-postgres, runtime, e2e, agent, console, packaging]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: depot-ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [control-plane, agent, data-plane, console]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::281882181879:role/ecr-github-cicd
+          aws-region: us-east-1
+      - uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+      - name: Build and push ${{ matrix.component }}
+        env:
+          IMAGE: public.ecr.aws/hexelstudio/fabric/${{ matrix.component }}:git-${{ github.sha }}
+        run: |
+          docker build -f "deploy/images/${{ matrix.component }}.Dockerfile" -t "$IMAGE" .
+          docker push "$IMAGE"
