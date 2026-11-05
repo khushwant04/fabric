@@ -1000,7 +1000,9 @@ async def test_a_stream_cut_short_by_the_client_is_counted_rather_than_part_bill
         if delivered == 2:
             raise RuntimeError("client hung up mid-stream")
 
-    with pytest.raises(BaseExceptionGroup):
+    # Starlette before 1.0 wraps the client's error in an ExceptionGroup; 1.x raises it
+    # as is. Either way it reaches the server, and what matters is the cleanup below.
+    with pytest.raises((RuntimeError, BaseExceptionGroup)):
         await app(scope, receive, send)
     assert delivered == 2, "the client hung up before any frame was forwarded"
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.routing import iter_route_contexts
 
 from tests.conftest import (
     ACCOUNT_A,
@@ -267,8 +268,12 @@ async def test_usage_buffer_is_bounded_and_reports_drops(plane) -> None:
 
 async def test_admin_listener_carries_no_inference_routes(admin_app, inference_app) -> None:
     """AR-DP03: administrative and inference listeners are separate apps."""
-    admin_paths = {route.path for route in admin_app.routes if hasattr(route, "path")}
-    inference_paths = {route.path for route in inference_app.routes if hasattr(route, "path")}
+    # FastAPI keeps an included router as one entry in ``app.routes``; this expands it.
+    def paths(app) -> set[str]:
+        return {c.path for c in iter_route_contexts(app.routes) if c.path is not None}
+
+    admin_paths = paths(admin_app)
+    inference_paths = paths(inference_app)
 
     assert "/v1/chat/completions" in inference_paths
     assert "/v1/chat/completions" not in admin_paths
