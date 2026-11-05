@@ -24,6 +24,7 @@ from typing import Any
 
 from fabric_data_plane.errors import Forbidden, NotFound
 from fabric_data_plane.pool import (
+    DEFAULT_PREFIX_LOAD_FACTOR,
     DEFAULT_STRATEGY,
     STRATEGIES,
     Backend,
@@ -104,7 +105,7 @@ class Deployment:
         *,
         failure_threshold: int = 3,
         recovery_seconds: float = 30.0,
-        prefix_load_factor: float = 1.25,
+        prefix_load_factor: float = DEFAULT_PREFIX_LOAD_FACTOR,
     ) -> BackendPool:
         """Build a fresh pool with per-backend health and this deployment's strategy.
 

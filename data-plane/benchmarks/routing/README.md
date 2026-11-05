@@ -12,9 +12,9 @@ uv run --with-editable . --with matplotlib==3.9.2 python -m benchmarks.routing \
 ```
 
 By default it compares `round_robin`, `least_in_flight`, `session_affinity` and
-`prefix_aware` (ADR 0019); `--strategies` picks others. `--prefix-load-factors 1.0,1.25`
+`prefix_aware` (ADR 0019); `--strategies` picks others. `--prefix-load-factors 1.0,1.1,1.25`
 runs `prefix_aware` once per load bound (the gateway's `prefix_routing_load_factor`),
-each reported as its own variant, e.g. `prefix_aware ×1.25`.
+each reported as its own variant, e.g. `prefix_aware ×1.1`.
 
 From the repository root, `make bench-routing` runs the same thing. A full sweep takes a
 few minutes; `--duration` and `--time-scale` trade fidelity for speed.

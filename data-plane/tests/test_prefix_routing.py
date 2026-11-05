@@ -7,6 +7,7 @@ import dataclasses
 import httpx
 
 from fabric_data_plane.pool import (
+    DEFAULT_PREFIX_LOAD_FACTOR,
     STRATEGIES,
     Backend,
     BackendHealth,
@@ -15,7 +16,7 @@ from fabric_data_plane.pool import (
 )
 from fabric_data_plane.prefix import BLOCK_CHARS, prefix_blocks, prompt_text
 from fabric_data_plane.registry import DeploymentRegistry
-from tests.conftest import ACCOUNT_A, SigningKey
+from tests.conftest import ACCOUNT_A, SigningKey, make_settings
 from tests.test_router import FleetUpstream, _make_plane, _registry
 
 SYSTEM = "You are a careful assistant. " * 40  # several blocks long
@@ -90,6 +91,11 @@ def test_prefix_aware_is_a_published_strategy() -> None:
     assert "prefix_aware" in STRATEGIES
     single = [Backend(url="http://a", backend_id="a")]
     assert BackendPool(single, strategy="prefix_aware").uses_prefix
+    # The setting's default and the strategy's agree, so an unset deployment gets 1.1.
+    built = BackendPool(single, strategy="prefix_aware").strategy
+    assert isinstance(built, PrefixAwareStrategy)
+    assert built._load_factor == DEFAULT_PREFIX_LOAD_FACTOR == 1.1
+    assert make_settings().prefix_routing_load_factor == DEFAULT_PREFIX_LOAD_FACTOR
     assert not BackendPool(single).uses_prefix
 
 

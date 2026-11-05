@@ -21,6 +21,10 @@ from collections.abc import Sequence
 
 STRATEGIES = ("least_in_flight", "round_robin", "session_affinity", "weighted", "prefix_aware")
 DEFAULT_STRATEGY = "least_in_flight"
+#: Prefix-aware routing's load bound (ADR 0019). 1.1 kept 88% of session affinity's
+#: cache hits while matching least-in-flight's tail latency in the routing benchmark;
+#: 1.25 and above traded tail latency for a few more hits.
+DEFAULT_PREFIX_LOAD_FACTOR = 1.1
 
 
 @dataclasses.dataclass(frozen=True)
@@ -280,7 +284,7 @@ class PrefixAwareStrategy(Strategy):
         health: BackendHealth,
         *,
         capacity_blocks: int = 65_536,
-        load_factor: float = 1.25,
+        load_factor: float = DEFAULT_PREFIX_LOAD_FACTOR,
         owners_per_block: int = 4,
     ) -> None:
         self._health = health
@@ -362,7 +366,10 @@ class PrefixAwareStrategy(Strategy):
 
 
 def build_strategy(
-    name: str | None, health: BackendHealth, *, prefix_load_factor: float = 1.25
+    name: str | None,
+    health: BackendHealth,
+    *,
+    prefix_load_factor: float = DEFAULT_PREFIX_LOAD_FACTOR,
 ) -> Strategy:
     match name:
         case "round_robin":
@@ -388,7 +395,7 @@ class BackendPool:
         health: BackendHealth | None = None,
         strategy: Strategy | str | None = None,
         *,
-        prefix_load_factor: float = 1.25,
+        prefix_load_factor: float = DEFAULT_PREFIX_LOAD_FACTOR,
     ) -> None:
         if not backends:
             raise ValueError("a deployment must have at least one backend")

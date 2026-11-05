@@ -36,7 +36,7 @@ from benchmarks.routing.workload import Turn, WorkloadConfig, generate
 from fabric_data_plane.app import DataPlane, create_inference_app
 from fabric_data_plane.config import Settings
 from fabric_data_plane.keys import KeyCache
-from fabric_data_plane.pool import Backend
+from fabric_data_plane.pool import DEFAULT_PREFIX_LOAD_FACTOR, Backend
 from fabric_data_plane.registry import Deployment, DeploymentRegistry
 
 ISSUER = "https://control.bench.test"
@@ -57,7 +57,7 @@ class RunConfig:
     #: Simulated seconds after which an unfinished request counts as failed.
     request_timeout_seconds: float = 300.0
     #: The gateway's ``prefix_routing_load_factor``; read only by ``prefix_aware``.
-    prefix_load_factor: float = 1.25
+    prefix_load_factor: float = DEFAULT_PREFIX_LOAD_FACTOR
 
     @property
     def label(self) -> str:

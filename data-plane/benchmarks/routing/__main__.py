@@ -21,7 +21,7 @@ from benchmarks.routing.harness import RunConfig, calibrate, run
 from benchmarks.routing.report import Slo, write_all
 from benchmarks.routing.simhost import HostModel
 from benchmarks.routing.workload import WORKLOADS, WorkloadConfig
-from fabric_data_plane.pool import STRATEGIES
+from fabric_data_plane.pool import DEFAULT_PREFIX_LOAD_FACTOR, STRATEGIES
 
 
 def _csv(value: str) -> list[str]:
@@ -45,7 +45,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--time-scale", type=float, default=0.25,
                         help="wall seconds per simulated second")
     parser.add_argument("--prefix-load-factors", type=lambda v: [float(x) for x in _csv(v)],
-                        default=[1.25],
+                        default=[DEFAULT_PREFIX_LOAD_FACTOR],
                         help="load bounds to run prefix_aware with, each as its own variant")
     parser.add_argument("--system-prompts", type=int, default=WorkloadConfig.system_prompts,
                         help="distinct system prompts; more than fit in one host's cache "
@@ -77,7 +77,11 @@ async def _main(arguments: argparse.Namespace, argv: list[str]) -> pathlib.Path:
     variants = [
         (strategy, factor)
         for strategy in arguments.strategies
-        for factor in (arguments.prefix_load_factors if strategy == "prefix_aware" else [1.25])
+        for factor in (
+            arguments.prefix_load_factors
+            if strategy == "prefix_aware"
+            else [DEFAULT_PREFIX_LOAD_FACTOR]
+        )
     ]
     points = [
         (workload, rate, seed, strategy, factor)
