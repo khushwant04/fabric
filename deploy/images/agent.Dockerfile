@@ -8,7 +8,7 @@
 # Build from the repository root:
 #   docker build -f deploy/images/agent.Dockerfile -t fabric/agent:dev .
 
-FROM golang:1.22-bookworm AS build
+FROM golang:1.25-bookworm AS build
 
 WORKDIR /src
 
