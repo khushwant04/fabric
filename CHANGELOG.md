@@ -8,6 +8,15 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Prefix-aware routing (ADR 0019): a `prefix_aware` deployment strategy that sends each
+  request to the backend most likely to hold its prompt prefix in cache, within a bounded
+  load, without needing a session key. Accepted by the control plane, CRD and agent.
+- Routing benchmark (`make bench-routing`): the production gateway in front of simulated
+  model hosts with a prefix cache, comparing strategies on time to first token, cache
+  hits, load balance and SLO goodput, with a versioned results artifact.
+- Console: the Overview is built from the Hexel Studio ui-registry (theme generated from
+  its tokens, Panel, StatTile, Status, Meter, BarList and Table components); buttons are
+  the registry's pills and every status is a dot beside a plain label.
 - Audit-trail API: `GET /v1/accounts/{id}/audit-events` (filters, keyset pagination)
   and `/export` (NDJSON, bounded pages, recorded as `audit.exported`), guarded by a new
   `audit:read` scope for owners and admins. Console audit log page with filters and

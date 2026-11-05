@@ -23,6 +23,7 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0016](0016-limits-are-coordinated-once-per-stamp.md) | Coordinate rate and concurrency admission once per stamp with renewable crash-recovery leases | Implemented shared primitive; horizontal gateway packaging remains separate |
 | [0017](0017-token-rate-limits-are-debited-from-metered-usage.md) | Limit model tokens per minute with a debt bucket debited from metered usage, idempotently through the coordinator | Implemented; per-account policies and budgets open |
 | [0018](0018-stamp-credentials-rotate-with-an-overlap.md) | Rotate stamp machine credentials from the stamp, overlapping the old ones; by age or on an operator's request | Implemented |
+| [0019](0019-prefix-aware-routing-with-bounded-load.md) | Route each request to the backend likely to hold its prompt prefix in cache, within a load bound of 1.1x the mean | Implemented in the data plane |
 
 ## ADR status vocabulary
 

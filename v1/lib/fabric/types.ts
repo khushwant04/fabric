@@ -35,7 +35,7 @@ export type FabricSelf = {
 export type RuntimeSpec = {
   release: string
   kernel_mode: "auto" | "fabric" | "standard"
-  strategy: "least_in_flight" | "round_robin" | "session_affinity" | "weighted"
+  strategy: "least_in_flight" | "round_robin" | "session_affinity" | "weighted" | "prefix_aware"
   max_model_len?: number | null
   max_num_seqs?: number | null
   gpu_memory_utilization?: number | null

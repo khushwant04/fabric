@@ -153,6 +153,12 @@ class Settings(BaseSettings):
     #: ejection is a cooldown rather than a permanent write-off.
     backend_recovery_seconds: float = Field(default=30.0, ge=0)
 
+    #: The load bound of prefix-aware routing (ADR 0019): a backend is eligible for a
+    #: request while its in-flight count, with this request, stays within this multiple of
+    #: the pool's mean. Lower keeps load more even and gives up more cache hits; 1.0 is
+    #: as even as least-in-flight. Only deployments using ``prefix_aware`` read it.
+    prefix_routing_load_factor: float = Field(default=1.1, ge=1.0, le=4.0)
+
     #: How many backends a single non-streamed request may try before giving up. On a
     #: connection failure the request is retried against another healthy backend; this
     #: bounds that retry so a pool where every backend is failing degrades to a clear

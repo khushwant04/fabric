@@ -1605,7 +1605,8 @@
               "least_in_flight",
               "round_robin",
               "session_affinity",
-              "weighted"
+              "weighted",
+              "prefix_aware"
             ],
             "title": "Strategy",
             "type": "string"

@@ -1259,3 +1259,14 @@ func TestStrategyReachesTheSinkAsSpecStrategy(t *testing.T) {
 		t.Fatalf("strategy reaching the sink = %q, want session_affinity", got)
 	}
 }
+
+func TestEveryPublishedStrategyIsCarried(t *testing.T) {
+	// The agent passes the control plane's strategy vocabulary through unchanged; a name
+	// it dropped would silently fall back to least-in-flight on the stamp.
+	for _, strategy := range []string{"least_in_flight", "round_robin", "session_affinity", "weighted", "prefix_aware"} {
+		spec := map[string]any{"runtime": map[string]any{"strategy": strategy}}
+		if got := strategyFromSpec(spec); got != strategy {
+			t.Fatalf("strategyFromSpec(%q) = %q", strategy, got)
+		}
+	}
+}

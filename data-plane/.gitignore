@@ -9,3 +9,6 @@ __pycache__/
 .env
 *.pem
 deployments.json
+
+# Benchmark output (python -m benchmarks.routing)
+results/

@@ -365,8 +365,13 @@ when both the control plane and data plane are importable.
   `session_affinity` uses rendezvous hashing over a caller-supplied session header or
   the OpenAI `user` field, while keyless traffic still rotates; `weighted` picks
   proportionally to each backend's published weight, with zero meaning drained.
-  Managed homogeneous replicas currently publish equal weights. Every strategy chooses
-  only among healthy backends, so none can return an ejected host.
+  Managed homogeneous replicas currently publish equal weights. `prefix_aware` (ADR
+  0019) keeps a bounded, process-local index of prompt-prefix block hashes to the
+  backends that served them and sends a request to the backend matching the longest
+  run of its leading blocks, among backends within 1.1 times the mean in-flight load
+  (`FABRIC_DP_PREFIX_ROUTING_LOAD_FACTOR`); with no match it falls back to
+  least-in-flight. It needs no session key. Every
+  strategy chooses only among healthy backends, so none can return an ejected host.
 - A non-streamed request retries another backend only when connection establishment is
   known to have failed. Read, write, protocol, and explicit HTTP 5xx failures are not
   replayed because the first host may already have accepted this non-idempotent request.

@@ -915,7 +915,7 @@ func strategyFromSpec(spec map[string]any) string {
 	}
 	strategy, _ := runtime["strategy"].(string)
 	switch strategy {
-	case "least_in_flight", "round_robin", "session_affinity", "weighted":
+	case "least_in_flight", "round_robin", "session_affinity", "weighted", "prefix_aware":
 		return strategy
 	default:
 		return ""

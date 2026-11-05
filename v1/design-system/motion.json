@@ -1,0 +1,15 @@
+{
+  "note": "Motion is not a colour or a length, so it lives beside tokens.json. Durations collapse to 0ms under prefers-reduced-motion.",
+  "tokens": [
+    {"name": "motion-fast", "value": "100ms", "usage": "Colour, opacity and fills on hover; menus, popovers and tooltips appearing and leaving (`animate-pop-in`, `animate-pop-out`: a fade and a 2px nudge, no scale). Anything anchored to a click."},
+    {"name": "motion-glide", "value": "150ms", "usage": "Small moves that should still read as motion: a chevron turning, the bulk bar arriving, a drawer opening. Hover and highlights never animate; they are instant."},
+    {"name": "motion-base", "value": "180ms", "usage": "Dialogs, tab panels, switches, chevrons, the sidebar section swap."},
+    {"name": "motion-slow", "value": "260ms", "usage": "Sheets, panels, progress."},
+    {"name": "motion-story", "value": "520ms", "usage": "The site only: a passive reveal, a figure settling, the Aurora fading in."},
+    {"name": "motion-field", "value": "900ms", "usage": "The brand only: the thread art changing mode, the stat marker gliding."},
+    {"name": "ease-strong", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "usage": "The house curve for anything entering: a fast start that settles."},
+    {"name": "ease-sharp", "value": "cubic-bezier(0.32, 0.72, 0, 1)", "usage": "Small moves inside the product and menus appearing: a quick start and a firm landing, with no float."},
+    {"name": "ease-in-strong", "value": "cubic-bezier(0.7, 0, 0.84, 0)", "usage": "Exits: a closing surface gets out of the way."},
+    {"name": "ease-emphasis", "value": "cubic-bezier(0.34, 1.56, 0.64, 1)", "usage": "One small overshoot: a verdict landing, an icon hop. Never on layout."}
+  ]
+}

@@ -19,6 +19,10 @@ updates:
   - package-ecosystem: pip
     directories: [/runtime, /serving]
     schedule: { interval: monthly }
+    # One pull request for both directories: separate ones edit neighbouring lines of the
+    # same pyproject.toml and conflict as soon as the first is merged.
+    groups:
+      research-tooling: { patterns: ["*"] }
     ignore:
       - dependency-name: torch
       - dependency-name: triton
@@ -36,7 +40,19 @@ updates:
     schedule: { interval: weekly }
     groups:
       console: { patterns: ["*"] }
+    ignore:
+      # typescript-eslint (through eslint-config-next) supports TypeScript 6 at most;
+      # TypeScript 7 makes lint crash. Take a new major once it is supported.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # eslint-config-next's eslint-plugin-import declares peer support up to ESLint 9.
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /deploy/images
     schedule: { interval: weekly }
+    ignore:
+      # The model-host and kernel-bench images carry the same pinned vLLM as serving/
+      # (see above); a new vLLM changes the kernels the benchmarks measured.
+      - dependency-name: vllm/vllm-openai
