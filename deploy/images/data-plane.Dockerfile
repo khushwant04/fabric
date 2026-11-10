@@ -3,7 +3,7 @@
 # Build from the repository root:
 #   docker build -f deploy/images/data-plane.Dockerfile -t fabric/data-plane:dev .
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.15-slim-bookworm AS build
 
 WORKDIR /src
 COPY data-plane/pyproject.toml ./
@@ -18,7 +18,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip==24.3.1 && \
     /opt/venv/bin/pip install --no-cache-dir .
 
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 # A dedicated unprivileged user: the data plane holds no credential and needs no
 # write access to anything except its own temporary files.
