@@ -1,0 +1,121 @@
+{{- $host := .Values.operator.managedModelHost -}}
+{{- if and (include "fabric-stamp.managesModelHost" .) $host.prepull.enabled }}
+{{- /*
+Model-host pre-pull (docs/model-host-prepull.md). One pod per GPU node pulls the
+model-host image as soon as the node joins and, with prepull.models set, downloads those
+weights into the node's model cache. A deployment placed later finds both on local disk
+instead of spending minutes on a multi-gigabyte pull and a weight download.
+
+It requests no GPU, so it never competes with a model host for a device; it only needs to
+land on the same nodes, so it reuses the GPU node selector and tolerations. Changing the
+image tag rolls the DaemonSet, which pulls the new release before a rollout needs it.
+*/}}
+{{- $cacheHostPath := and (eq $host.cache.mode "hostPath") ($host.cache.hostPath | default "/mnt/fabric/model-cache") }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-prepull
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-host-prepull
+spec:
+  selector:
+    matchLabels:
+      {{- include "fabric-stamp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: model-host-prepull
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 100%
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-stamp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-host-prepull
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 5
+      {{- with $host.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.gpu.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gpu.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Pulling is the point: the container itself does nothing.
+        - name: pull-model-host
+          image: {{ $host.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "true"]
+          resources:
+            {{- toYaml $host.prepull.resources | nindent 12 }}
+        {{- if and $host.prepull.models $cacheHostPath }}
+        # The same cache layout the operator gives model hosts (HF_HOME, HF_HUB_CACHE), so
+        # a host started later reads these files instead of downloading them. Failures
+        # are logged and ignored: a missing weight is fetched by the host as before.
+        - name: warm-weights
+          image: {{ $host.image }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import sys
+              from huggingface_hub import snapshot_download
+              for repo in sys.argv[1:]:
+                  try:
+                      path = snapshot_download(repo, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.tiktoken", "*.py"])
+                      print(f"cached {repo} at {path}", flush=True)
+                  except Exception as error:
+                      print(f"could not cache {repo}: {error}", flush=True)
+            {{- range $host.prepull.models }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: HF_HOME
+              value: /model-cache
+            - name: HF_HUB_CACHE
+              value: /model-cache/hub
+            - name: HF_HUB_DISABLE_TELEMETRY
+              value: "1"
+            {{- with $host.huggingFace.existingSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $host.huggingFace.tokenKey | default "token" }}
+            {{- end }}
+          volumeMounts:
+            - name: cache
+              mountPath: /model-cache
+          resources:
+            {{- toYaml $host.prepull.warmResources | nindent 12 }}
+        {{- end }}
+      containers:
+        # Keeps the pod, and with it the pulled image, in place: kubelet garbage
+        # collection never removes an image a running pod uses.
+        - name: hold
+          image: {{ $host.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "trap 'exit 0' TERM; while true; do sleep 3600 & wait $!; done"]
+          resources:
+            {{- toYaml $host.prepull.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+      {{- if and $host.prepull.models $cacheHostPath }}
+      volumes:
+        - name: cache
+          hostPath:
+            path: {{ $cacheHostPath }}
+            type: DirectoryOrCreate
+      {{- end }}
+{{- end }}

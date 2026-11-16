@@ -166,6 +166,29 @@ operator:
       # AKS mounts the ephemeral disk at /mnt.
       hostPath: /mnt/fabric/model-cache
       claim: ""
+    # One pod per GPU node pulls the model-host image when the node joins, so a new
+    # deployment does not wait minutes for a multi-gigabyte pull. With models listed and
+    # the hostPath cache, it also downloads those weights into the node's cache. It
+    # requests no GPU. See docs/model-host-prepull.md.
+    prepull:
+      enabled: true
+      # Hugging Face repositories to cache on every GPU node, e.g. Qwen/Qwen3.5-2B.
+      models: []
+      # The image pull and the pod that keeps the image in place.
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 256Mi
+      # The weight download. Hugging Face's downloader buffers multi-gigabyte files in
+      # memory; 2Gi was OOM-killed fetching a 4B model.
+      warmResources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 10Gi
     runtimeClassName: ""
   # The ConfigMap the operator renders and the data plane mounts.
   configMapName: fabric-deployments
