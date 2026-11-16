@@ -430,8 +430,10 @@ STAMP_ID=""
 STARTED=$(date +%s)
 LAST_NOTE=0
 while :; do
-    AGENT_LOG=$( { "${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --previous --tail=200 2>/dev/null
-                   "${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --tail=400 2>/dev/null; } || true)
+    # By pod name: "logs statefulset/..." resolves pods by label, and the operator's pod shares
+    # those labels, so kubectl can pick it and fail with "container agent is not valid".
+    AGENT_LOG=$( { "${KUBECTL[@]}" -n "$NAMESPACE" logs "pod/$NAME-fabric-stamp-0" -c agent --previous --tail=200 2>/dev/null
+                   "${KUBECTL[@]}" -n "$NAMESPACE" logs "pod/$NAME-fabric-stamp-0" -c agent 2>/dev/null; } || true)
     if printf '%s' "$AGENT_LOG" | grep -qE '"msg":"(enrolled|using persisted stamp identity)"'; then
         STAMP_ID=$(printf '%s' "$AGENT_LOG" | grep -oE '"stamp_id":"[0-9a-f-]{36}"' | tail -1 | cut -d'"' -f4 || true)
         break
@@ -457,7 +459,7 @@ while :; do
             die "the agent image could not be pulled ($POD_REASON). Check outbound HTTPS to the registry; release ${RELEASE:0:12} must have published images." ;;
     esac
     ELAPSED=$(( $(date +%s) - STARTED ))
-    [ "$ELAPSED" -lt 900 ] || die "the agent did not enroll within 15 minutes; check: sudo k3s kubectl -n $NAMESPACE logs statefulset/$NAME-fabric-stamp -c agent"
+    [ "$ELAPSED" -lt 900 ] || die "the agent did not enroll within 15 minutes; check: sudo k3s kubectl -n $NAMESPACE logs $NAME-fabric-stamp-0 -c agent"
     if [ $((ELAPSED - LAST_NOTE)) -ge 15 ]; then
         LAST_MSG=$(printf '%s' "$AGENT_LOG" | grep -oE '"msg":"[^"]*"' | tail -1 | cut -d'"' -f4 | cut -c1-120 || true)
         PHASE=$("${KUBECTL[@]}" -n "$NAMESPACE" get pod "$NAME-fabric-stamp-0" -o jsonpath='{.status.phase}' 2>/dev/null || true)
