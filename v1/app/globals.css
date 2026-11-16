@@ -84,7 +84,16 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  /* Square corners everywhere: every radius token resolves to zero, including the Hexel
+     design system's named radii that hexel.css declares. */
+  --radius: 0;
+  --radius-inline: 0;
+  --radius-control: 0;
+  --radius-surface: 0;
+  --radius-panel: 0;
+  --radius-card: 0;
+  --radius-composer: 0;
+  --radius-pill: 0;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -150,7 +159,7 @@
 .fabric-page-content { scrollbar-gutter: stable; }
 
 @media (min-width: 768px) {
-  .fabric-inset { margin-top: 0; border-radius: 1rem; }
+  .fabric-inset { margin-top: 0; border-radius: 0; }
 }
 @media (max-width: 1023px) {
   .fabric-layout { --console-header-height: 3.5rem; }
@@ -159,7 +168,7 @@
 }
 @media (max-width: 767px) {
   .fabric-topbar { gap: .5rem; }
-  .fabric-inset { margin: 0 .5rem .5rem; border-radius: 1rem; }
+  .fabric-inset { margin: 0 .5rem .5rem; border-radius: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -196,7 +205,7 @@
 
 ::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
-  border-radius: 999px;
+  border-radius: 0;
   background-color: var(--scrollbar-thumb);
   background-clip: padding-box;
 }

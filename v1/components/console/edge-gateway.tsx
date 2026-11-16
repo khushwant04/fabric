@@ -11,13 +11,13 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 // The edge gateway (ADR 0021) is one public inference URL in front of every stamp. These
 // cards appear only when the console is configured with it (FABRIC_EDGE_INFERENCE_URL).
 
-function GatewayUrl({ url }: { url: string }) {
+export function GatewayUrl({ url, compact = false }: { url: string; compact?: boolean }) {
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
   return <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-    <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"><WaypointsIcon className="size-4" /></span>
-    <code className="min-w-0 flex-1 text-sm break-all">{url}</code>
-    <Button variant="outline" size="sm" type="button" onClick={async () => {
+    {compact ? null : <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center bg-muted text-muted-foreground"><WaypointsIcon className="size-4" /></span>}
+    <code className={compact ? "min-w-0 flex-1 truncate font-mono text-xs" : "min-w-0 flex-1 text-sm break-all"}>{url}</code>
+    <Button variant="outline" size={compact ? "xs" : "sm"} type="button" onClick={async () => {
       try { await navigator.clipboard.writeText(url); setCopied(true); setFailed(false); window.setTimeout(() => setCopied(false), 1500) }
       catch { setFailed(true) }
     }}>{copied ? <CheckIcon /> : <CopyIcon />}{copied ? "Copied" : "Copy URL"}</Button>

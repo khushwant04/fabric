@@ -98,7 +98,7 @@ function MessageCodeBlock({ code, language, incomplete }: { code: string; langua
       <CodeContents code={code} />
     </MessageRenderCard>
     <Dialog open={expanded} onOpenChange={setExpanded}>
-      <DialogContent finalFocus={expandRef} className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-[16px] p-0 sm:max-w-[min(1200px,calc(100%-2rem))]">
+      <DialogContent finalFocus={expandRef} className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-none p-0 sm:max-w-[min(1200px,calc(100%-2rem))]">
         <div className="shrink-0 border-b border-border/40 px-4 py-4 pr-12"><DialogTitle className="text-sm">{label} code</DialogTitle><DialogDescription className="sr-only">Expanded code block. Scroll to read the full source.</DialogDescription></div>
         <CodeContents code={code} expanded />
       </DialogContent>

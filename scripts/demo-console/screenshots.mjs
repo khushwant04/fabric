@@ -178,6 +178,12 @@ await visit("20-architecture", "/architecture")
 await visit("21-agents-runs", "/agents/runs")
 await visit("22-agents-run-detail", "/agents/runs/trip-planner-7f2c")
 await visit("23-agents-playground", "/agents/playground")
+// The Ctrl+K palette: actions first, then every console page.
+await visit("24-command-palette", "/dashboard", async (current) => {
+  await current.keyboard.press("Control+k")
+  await current.getByRole("dialog").waitFor()
+  await current.waitForTimeout(300)
+})
 
 // --- dark theme -------------------------------------------------------------------------
 if (want("04-dashboard-dark")) {

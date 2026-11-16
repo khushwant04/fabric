@@ -19,7 +19,7 @@ function Panel({ className, ...props }: React.ComponentProps<"section">) {
     <section
       data-slot="panel"
       className={cn(
-        "flex flex-col rounded-[var(--radius-surface)] bg-[color-mix(in_oklab,var(--muted)_65%,var(--background))] shadow-[inset_0_0_0_1px_var(--border)] dark:bg-[color-mix(in_oklab,var(--background)_78%,black)]",
+        "flex flex-col rounded-none bg-[color-mix(in_oklab,var(--muted)_65%,var(--background))] shadow-[inset_0_0_0_1px_var(--border)] dark:bg-[color-mix(in_oklab,var(--background)_78%,black)]",
         className
       )}
       {...props}
@@ -67,7 +67,7 @@ function PanelContent({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="panel-content"
       className={cn(
-        "relative -mx-px flex flex-col rounded-[var(--radius-surface)] bg-card shadow-[0_0_0_1px_var(--border),0_1px_2px_rgb(0_0_0/0.04)] last:-mb-px",
+        "relative -mx-px flex flex-col rounded-none bg-card shadow-[0_0_0_1px_var(--border),0_1px_2px_rgb(0_0_0/0.04)] last:-mb-px",
         className
       )}
       {...props}

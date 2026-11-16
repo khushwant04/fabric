@@ -125,7 +125,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
                   "flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:px-3",
                   panel === item.id ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}>
-                  <span aria-hidden="true" className={cn("hidden size-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-medium tabular-nums sm:flex", panel === item.id ? "border-foreground/20 bg-background text-foreground" : "border-border")}>{done ? <CheckIcon className="size-3.5" /> : index + 1}</span>
+                  <span aria-hidden="true" className={cn("hidden size-6 shrink-0 items-center justify-center rounded-none border text-[11px] font-medium tabular-nums sm:flex", panel === item.id ? "border-foreground/20 bg-background text-foreground" : "border-border")}>{done ? <CheckIcon className="size-3.5" /> : index + 1}</span>
                   <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium sm:text-[13px]">{item.title}</span><span className="mt-0.5 hidden truncate text-[11px] font-normal text-muted-foreground md:block">{item.description}</span></span>
                 </button>
               </li>
