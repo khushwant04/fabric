@@ -6,6 +6,11 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ## Unreleased
 
+### Changed
+
+- CI publishes `model-host` (vLLM with the Fabric kernel) to ECR Public with the other
+  release images; the images job's timeout is 60 minutes to fit its first push.
+
 ## 0.1.0 — 2026-11-16
 
 First tagged release. It covers everything below and the dated summaries that follow:
