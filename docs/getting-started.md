@@ -40,6 +40,38 @@ cd runtime && .venv/bin/python -m harness.runner --target rtx4070-dev
 Declaring a harness target that does not match the GPU present fails closed, so a development
 measurement cannot be recorded as a production result.
 
+## Turn a GPU VM into a stamp with one command
+
+On an Ubuntu 22.04/24.04 x86_64 VM with a working NVIDIA driver (`nvidia-smi`), the console's
+**Inference stamps → Enroll stamp** dialog gives you one command, with the single-use token
+filled in:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh | sudo bash -s -- \
+  --name gpu-01 --control-plane https://api.example.com --token '<token>' \
+  --host gpu-01.stamps.example.com --email ops@example.com
+```
+
+`scripts/bootstrap-stamp.sh` does the following:
+- installs k3s with NVIDIA support and the `nvidia` RuntimeClass
+- picks the model dtype from the GPU: bf16 on compute capability 8.0 and newer, fp16 on T4
+- installs cert-manager and a Let's Encrypt issuer for `--host`
+- stores the token in a Secret
+- installs the stamp chart and images of one pinned release
+- waits until the agent has enrolled
+
+Before running it, point a DNS A record for `--host` at the VM and open inbound ports 80 and 443.
+Without `--host`, the stamp enrolls, but the edge gateway cannot route to it.
+
+Re-running the command upgrades or repairs the stamp in place. The agent keeps its identity, so
+no new token is needed. Other options:
+- `--region`: placement region
+- `--prepull`: models to cache on the node
+- `--dtype`: override the automatic choice
+- `--no-gpu`: install without GPU support
+- `--release`: install a different release
+- `--dry-run`: print the plan without changing anything
+
 ## Bootstrap a Kubernetes stamp
 
 `deploy/scripts/kind-e2e.sh` runs the complete loop on a disposable local cluster. To connect a persistent Kubernetes cluster to an existing Fabric control plane, use the workflow below.

@@ -257,6 +257,40 @@ async def test_a_weaker_gpu_does_not_satisfy_a_stronger_class(client: AsyncClien
     assert details["required_compute_capability"] == "8.9"
 
 
+async def test_an_rtx_pro_6000_satisfies_its_own_class_and_a_t4_does_not(
+    client: AsyncClient,
+) -> None:
+    """The class matches what a Blackwell RTX PRO 6000 reports: 97,887 MiB, compute 12.0."""
+    account_id, token = await onboard(client, "class-rtx", "class-rtx-account")
+    deployment = await create_deployment(
+        client, account_id, token, resources={"gpu_count": 1, "gpu_class": "rtx-pro-6000"}
+    )
+    blackwell = await enroll_stamp(
+        client,
+        account_id,
+        token,
+        capabilities=default_capabilities(
+            gpus=1,
+            product="NVIDIA RTX PRO 6000 Blackwell Server Edition",
+            memory_bytes=97887 * 1024 * 1024,
+            compute_capability="12.0",
+        ),
+    )
+    placed = await place(
+        client, account_id, token, deployment["id"], stamp_id=blackwell["stamp"]["id"]
+    )
+    assert placed.status_code == 201, placed.text
+
+    other = await create_deployment(
+        client, account_id, token, name="second",
+        resources={"gpu_count": 1, "gpu_class": "rtx-pro-6000"},
+    )
+    t4 = await enroll_stamp(client, account_id, token, capabilities=default_capabilities(gpus=1))
+    refused = await place(client, account_id, token, other["id"], stamp_id=t4["stamp"]["id"])
+    assert refused.status_code == 409
+    assert _error(refused)["details"]["reason"] == "gpu_class_not_satisfied"
+
+
 async def test_the_weakest_gpu_in_a_mixed_stamp_decides(client: AsyncClient) -> None:
     """A pod may land on any GPU node, so the best one cannot carry the guarantee."""
     account_id, token = await onboard(client, "class-mixed", "class-mixed-account")
