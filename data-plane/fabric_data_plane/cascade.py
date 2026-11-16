@@ -246,6 +246,9 @@ class CascadeResult:
     #: Why each rejected attempt was escalated, in order.
     reasons: list[str] = field(default_factory=list)
     streaming: bool = False
+    #: Tokens every answered attempt reported, accepted or not: what the cascade cost.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     @property
     def escalations(self) -> int:
@@ -323,6 +326,10 @@ async def run_cascade(
             continue
         body = _json_body(response)
         result.response, result.body = response, body
+        usage = body.get("usage") if isinstance(body, dict) else None
+        if isinstance(usage, dict):
+            result.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+            result.completion_tokens += int(usage.get("completion_tokens") or 0)
         if response.status_code >= 400:
             if last or response.status_code not in _ESCALATE_ON_STATUS:
                 return result

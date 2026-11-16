@@ -8,6 +8,29 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Server-side agent tool loop (`docs/agent-tool-loop.md`): `POST /v1/agent/runs` runs a whole
+  tool-using agent in one request. Tools declare an `x-fabric-executor`: built-in
+  `calculator` (AST arithmetic, never `eval`) and `current_time`, or `http` POSTs to hosts in
+  `FABRIC_DP_AGENT_TOOL_ALLOWED_HOSTS` (empty disables HTTP tools; loopback, link-local and
+  metadata addresses refused even when listed and after DNS resolution; no redirects; reply
+  size cap; caller headers never forwarded). Tools without an executor return
+  `status: "requires_action"` for the client to run and resume. Parallel tool execution with a
+  concurrency cap, `max_steps` / `max_tool_calls` with operator ceilings, step summaries with
+  no prompt text, SSE streaming (`step.started`, `model.completed`, `tool.started`,
+  `tool.completed`, `run.completed`, `error`) where a client disconnect cancels the run. Every
+  model call goes through the ordinary proxy path (authenticated, limited, metered) as a step
+  of an agent run, so run budgets and `GET /v1/runs/{id}` apply.
+- Model cascade (`docs/model-cascade.md`): `model: "cascade"` on chat completions and agent
+  runs tries the account's smallest deployment first (optional `cascade_tier` in
+  `deployments.json`, else `capabilities.priority` ascending) and escalates on cheap checks:
+  `finish_reason: length`, empty answer, invalid tool-call JSON or unknown tool, invalid JSON
+  or JSON-schema mismatch for `response_format`. Bounded by `FABRIC_DP_CASCADE_MAX_ESCALATIONS`
+  (default 2); every attempt metered; `X-Fabric-Cascade-Path`, `-Escalations` and `-Reason`
+  headers. Streaming goes to the first tier without escalation. Inert unless the model is
+  literally `cascade`.
+- `make demo-agent-loop` and `make demo-cascade`: the local platform loop with a deterministic
+  stub host (`agent/scripts/agent_loop_demo_host.py`), running
+  `examples/python/scripts/agent_loop_demo.py` and `examples/python/scripts/cascade_demo.py`.
 - Agent runs on the data plane (`docs/agent-runs.md`): `X-Fabric-Run-Id` with optional
   `X-Fabric-Run-Budget-Tokens` / `-Steps` on chat completions, completions, responses and
   messages; an account-scoped, in-memory run store (idle TTL, LRU cap; stamp-local and

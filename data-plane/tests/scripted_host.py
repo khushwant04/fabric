@@ -141,7 +141,7 @@ def build_plane(
     plane = DataPlane(
         settings=config,
         keys=KeyCache(config, client=control_plane.client()),
-        registry=registry or default_registry(),
+        registry=registry if registry is not None else default_registry(),
         client=host.client(),
     )
 

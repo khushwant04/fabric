@@ -74,9 +74,7 @@ def auth(signing_key) -> dict[str, str]:
 # --------------------------------------------------------------------------- the loop
 
 
-async def test_multi_step_loop_runs_builtin_tools_and_meters_every_call(
-    control_plane, host, auth
-):
+async def test_multi_step_loop_runs_builtin_tools_and_meters_every_call(control_plane, host, auth):
     host.replies = [
         completion(
             None,
@@ -128,9 +126,7 @@ async def test_return_messages_includes_full_history(control_plane, host, auth):
     ]
     async with gateway(build_plane(control_plane, host)) as client:
         body = (
-            await client.post(
-                RUNS, headers=auth, json=run_body([CALCULATOR], return_messages=True)
-            )
+            await client.post(RUNS, headers=auth, json=run_body([CALCULATOR], return_messages=True))
         ).json()
     roles = [m["role"] for m in body["messages"]]
     assert roles == ["user", "assistant", "tool", "assistant"]
@@ -167,8 +163,15 @@ async def test_tool_errors_are_reported_to_the_model_and_the_run_continues(
 
 @pytest.mark.parametrize(
     ("expression", "expected"),
-    [("1 + 2 * 3", 7), ("(1 + 2) * 3", 9), ("2^10", 1024), ("sqrt(16) + abs(-2)", 6),
-     ("10 / 4", 2.5), ("-3 ** 2", -9), ("round(pi, 2)", 3.14)],
+    [
+        ("1 + 2 * 3", 7),
+        ("(1 + 2) * 3", 9),
+        ("2^10", 1024),
+        ("sqrt(16) + abs(-2)", 6),
+        ("10 / 4", 2.5),
+        ("-3 ** 2", -9),
+        ("round(pi, 2)", 3.14),
+    ],
 )
 def test_calculator_evaluates_arithmetic(expression, expected):
     assert calculate(expression) == expected
@@ -176,8 +179,18 @@ def test_calculator_evaluates_arithmetic(expression, expected):
 
 @pytest.mark.parametrize(
     "expression",
-    ["__import__('os')", "open('/etc/passwd')", "(1).__class__", "2 ** 100000",
-     "9" * 300, "1 / 0", "[1, 2]", "lambda: 1", "x", ""],
+    [
+        "__import__('os')",
+        "open('/etc/passwd')",
+        "(1).__class__",
+        "2 ** 100000",
+        "9" * 300,
+        "1 / 0",
+        "[1, 2]",
+        "lambda: 1",
+        "x",
+        "",
+    ],
 )
 def test_calculator_refuses_anything_but_arithmetic(expression):
     with pytest.raises(ToolError):
@@ -341,8 +354,16 @@ async def test_http_tool_targets_outside_the_allowlist_are_refused(
 
 
 def test_blocked_addresses():
-    for address in ("169.254.169.254", "127.0.0.1", "::1", "0.0.0.0", "fe80::1",
-                    "100.100.100.200", "fd00:ec2::254", "::ffff:169.254.169.254"):
+    for address in (
+        "169.254.169.254",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "fe80::1",
+        "100.100.100.200",
+        "fd00:ec2::254",
+        "::ffff:169.254.169.254",
+    ):
         assert blocked_address(address), address
     assert not blocked_address("203.0.113.10")
     assert not blocked_address("10.0.0.5")
@@ -390,9 +411,7 @@ async def test_http_tool_reply_is_truncated_at_the_cap(control_plane, host, auth
         completion(None, tool_calls=[tool_call("c1", "weather", {})]),
         completion("ok"),
     ]
-    plane = build_plane(
-        control_plane, host, tool_handler=tools, agent_tool_max_response_bytes=1024
-    )
+    plane = build_plane(control_plane, host, tool_handler=tools, agent_tool_max_response_bytes=1024)
     async with gateway(plane) as client:
         body = (
             await client.post(RUNS, headers=auth, json=run_body([http_tool("https://tools.test/")]))
@@ -455,8 +474,9 @@ async def test_another_accounts_deployment_cannot_be_used(control_plane, host, s
 async def test_a_limit_refusal_before_any_step_is_an_http_error(control_plane, host, auth):
     plane = build_plane(control_plane, host, rate_limit_requests_per_minute=1)
     async with gateway(plane) as client:
-        await client.post("/v1/chat/completions", headers=auth,
-                          json={"model": "launch-model", "messages": []})
+        await client.post(
+            "/v1/chat/completions", headers=auth, json={"model": "launch-model", "messages": []}
+        )
         response = await client.post(RUNS, headers=auth, json=run_body([CALCULATOR]))
     assert response.status_code == 429
     assert response.headers.get("retry-after")
@@ -502,9 +522,7 @@ async def test_streaming_reports_each_step(control_plane, host, auth):
         completion("2"),
     ]
     async with gateway(build_plane(control_plane, host)) as client:
-        response = await client.post(
-            RUNS, headers=auth, json=run_body([CALCULATOR], stream=True)
-        )
+        response = await client.post(RUNS, headers=auth, json=run_body([CALCULATOR], stream=True))
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = parse_sse(response.text)
@@ -527,9 +545,7 @@ async def test_streaming_reports_each_step(control_plane, host, auth):
 async def test_streaming_failure_emits_error_then_run_completed(control_plane, host, auth):
     host.down.add("internal-release-1")
     async with gateway(build_plane(control_plane, host)) as client:
-        response = await client.post(
-            RUNS, headers=auth, json=run_body([CALCULATOR], stream=True)
-        )
+        response = await client.post(RUNS, headers=auth, json=run_body([CALCULATOR], stream=True))
     events = parse_sse(response.text)
     assert [name for name, _ in events][-2:] == ["error", "run.completed"]
     assert events[-1][1]["status"] == "failed"

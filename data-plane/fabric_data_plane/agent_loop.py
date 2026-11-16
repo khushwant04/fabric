@@ -224,6 +224,11 @@ class AgentLoop:
                 "escalations": result.escalations,
                 "reasons": result.reasons,
             }
+            # The step's usage is what every attempt cost, not just the accepted one.
+            info["usage"] = {
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+            }
         else:
             payload.pop("cascade", None)
             response = await self.proxy(
@@ -251,7 +256,8 @@ class AgentLoop:
                 started = time.perf_counter()
                 body, info = await self._call_model()
                 message, finish_reason = _assistant_message(body)
-                usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+                usage = info.pop("usage", None) or body.get("usage")
+                usage = usage if isinstance(usage, dict) else {}
                 prompt = int(usage.get("prompt_tokens") or 0)
                 completion = int(usage.get("completion_tokens") or 0)
                 state.usage["prompt_tokens"] += prompt
