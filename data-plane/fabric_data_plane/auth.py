@@ -29,6 +29,11 @@ STRIPPED_REQUEST_HEADERS = (
     "x-fabric-deployment-id",
     "x-fabric-stamp-id",
     "x-fabric-principal",
+    # Agent-run and tool-guard controls are for this gateway, not the model host.
+    "x-fabric-run-id",
+    "x-fabric-run-budget-tokens",
+    "x-fabric-run-budget-steps",
+    "x-fabric-tool-guard",
 )
 
 

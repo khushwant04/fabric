@@ -58,6 +58,7 @@ The agent polls outbound only. The control plane never dials into a customer clu
 | **OpenAI-compatible serving** | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, streaming. Verified against the official `openai` Python SDK |
 | **Responses format** | `POST /v1/responses` with native JSON/SSE, stateless input history, account routing, and input/output usage accounting. Requires an updated data-plane image and a supporting model host; see [Responses setup](docs/openai-responses.md) |
 | **Anthropic Messages API** | `POST /v1/messages`, including streaming, tools and images, translated to chat completions at the gateway so routing, limits and metering are unchanged. Works with the official `anthropic` Python SDK; see [Messages setup](docs/anthropic-messages.md) |
+| **Agent runs** | Group an agent loop's calls with `X-Fabric-Run-Id`, cap it with a token/step budget (refused with `429 run_budget_exhausted` before the model is called), read its per-step trace at `GET /v1/runs/{id}` (no prompt text kept), and let the gateway re-ask the model when a tool call does not match its schema. `make demo-agent` runs it without a GPU; see [Agent runs](docs/agent-runs.md) |
 | **Context-aware model routing** | Use `model: "auto"` to select an account-owned, healthy deployment by endpoint, modality, context bound, code/reasoning fit, and configured priority—without a request-time control-plane call |
 | **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
 | **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
@@ -87,7 +88,9 @@ inference data plane, with a stub model host standing in for vLLM. It enrolls a 
 single-use token, places a deployment, serves an authorized OpenAI-style request, refuses a
 forged token, and meters the usage back to the account exactly once. Set
 `FABRIC_E2E_UPSTREAM` to a running OpenAI-compatible host to use a real model. `make check`
-runs every test and lint suite; see [CONTRIBUTING.md](CONTRIBUTING.md).
+runs every test and lint suite; see [CONTRIBUTING.md](CONTRIBUTING.md). `make demo-agent`
+runs the same loop and then a multi-step agent under a budget, with its trace and the tool-call
+guard ([Agent runs](docs/agent-runs.md)).
 
 ### Call a deployed Fabric
 

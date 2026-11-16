@@ -8,6 +8,21 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Agent runs on the data plane (`docs/agent-runs.md`): `X-Fabric-Run-Id` with optional
+  `X-Fabric-Run-Budget-Tokens` / `-Steps` on chat completions, completions, responses and
+  messages; an account-scoped, in-memory run store (idle TTL, LRU cap; stamp-local and
+  non-durable); `429 run_budget_exhausted` before the model host is reached; run headers on
+  every response; `GET`/`DELETE /v1/runs/{id}` and `GET /v1/runs` traces with per-step tokens,
+  latency, finish reason, tool-call names and validity, and no prompt or completion text.
+- Tool-call guard for non-streaming chat completions: tool calls are checked against the
+  declared tools' JSON schemas and an invalid reply is re-asked up to
+  `FABRIC_DP_TOOL_GUARD_MAX_RETRIES` times (default 1), every retry metered and charged;
+  `X-Fabric-Tool-Guard` reports `valid`, `repaired; attempts=N` or `failed; attempts=N`, and
+  `X-Fabric-Tool-Guard: off` opts out. Prometheus counters for run steps, budget refusals and
+  guard outcomes.
+- `make demo-agent`: the local platform loop plus a multi-step trip-planning agent
+  (`examples/python/scripts/agent_demo.py`) against a deterministic tool-calling stub host, or a
+  real host with `FABRIC_E2E_UPSTREAM`.
 - Anthropic Messages API on the data plane: `POST /v1/messages`, streaming and
   non-streaming, translated to chat completions at the gateway and sent through the
   existing proxy path, so authentication (`x-api-key` or bearer), `model: "auto"`,
