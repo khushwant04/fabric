@@ -1,3 +1,5 @@
+import type { DeploymentCapabilities } from "@/lib/fabric/deployment-options"
+
 export type Account = {
   id: string
   slug: string
@@ -48,6 +50,7 @@ export type DeploymentSpec = {
   runtime: RuntimeSpec
   replicas: number
   resources: { gpu_count: number; gpu_class: string }
+  capabilities?: DeploymentCapabilities
   limits_policy_ref?: string | null
 }
 

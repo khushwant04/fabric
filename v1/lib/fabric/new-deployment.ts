@@ -1,3 +1,11 @@
+import { balancingStrategies, capabilityFlags, cascadeTierRange, kernelModes, priorityRange, type BalancingStrategy, type CapabilityFlag, type KernelMode } from "./deployment-options"
+
+export type DeploymentCapabilitiesInput = Record<CapabilityFlag, boolean> & {
+  auto_enabled: boolean
+  priority: number
+  cascade_tier: number | null
+}
+
 export type NewDeploymentInput = {
   name: string
   modelAlias: string
@@ -11,6 +19,10 @@ export type NewDeploymentInput = {
   execution: "eager" | "cuda_graph" | null
   enableAutoToolChoice: boolean | null
   toolCallParser: string | null
+  kernelMode: KernelMode
+  strategy: BalancingStrategy
+  /** Null when the form carried no routing section, which keeps the control plane's defaults. */
+  capabilities: DeploymentCapabilitiesInput | null
 }
 
 function optionalInteger(form: FormData, key: string, minimum: number, maximum: number) {
@@ -62,14 +74,48 @@ export function parseNewDeployment(form: FormData): NewDeploymentInput {
   if (autoToolChoice === "disabled" && toolCallParser) {
     throw new Error("Clear the tool parser to disable automatic tool calling.")
   }
+  const kernelMode = read("kernelMode") || "auto"
+  const strategy = read("strategy") || "least_in_flight"
+  if (!kernelModes.some((mode) => mode.value === kernelMode)) {
+    throw new Error("Choose a supported kernel mode.")
+  }
+  if (!balancingStrategies.some((option) => option.value === strategy)) {
+    throw new Error("Choose a supported balancing strategy.")
+  }
   return {
     name, modelAlias, modelRef, replicas, gpuCount, gpuClass,
+    kernelMode: kernelMode as KernelMode,
+    strategy: strategy as BalancingStrategy,
+    capabilities: parseCapabilities(form),
     stampId: stampId && stampId !== "auto" ? stampId : null,
     maxModelLen: optionalInteger(form, "maxModelLen", 64, 1_048_576),
     maxNumSeqs: optionalInteger(form, "maxNumSeqs", 1, 1024),
     execution: execution === "eager" || execution === "cuda_graph" ? execution : null,
     enableAutoToolChoice: autoToolChoice === "enabled" ? true : autoToolChoice === "disabled" ? false : null,
     toolCallParser: toolCallParser || null,
+  }
+}
+
+/**
+ * The routing section posts a marker so that "every capability unchecked" stays distinct
+ * from a form that has no routing section at all (an older page, or a scripted post).
+ */
+function parseCapabilities(form: FormData): DeploymentCapabilitiesInput | null {
+  if (String(form.get("routing") ?? "") !== "1") return null
+  const checked = new Set(form.getAll("capabilities").map((value) => String(value)))
+  for (const value of checked) {
+    if (!capabilityFlags.some((flag) => flag.value === value)) throw new Error("Choose supported model capabilities.")
+  }
+  const flags = Object.fromEntries(capabilityFlags.map((flag) => [flag.value, checked.has(flag.value)])) as Record<CapabilityFlag, boolean>
+  const autoEnabled = String(form.get("autoEnabled") ?? "") === "on"
+  if (autoEnabled && !Object.values(flags).some(Boolean)) {
+    throw new Error("Choose at least one capability, or turn off automatic routing for this deployment.")
+  }
+  return {
+    ...flags,
+    auto_enabled: autoEnabled,
+    priority: optionalInteger(form, "priority", priorityRange.min, priorityRange.max) ?? 0,
+    cascade_tier: optionalInteger(form, "cascadeTier", cascadeTierRange.min, cascadeTierRange.max),
   }
 }
 

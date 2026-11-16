@@ -1,6 +1,6 @@
 "use client"
 
-import { useActionState } from "react"
+import { useActionState, useState } from "react"
 import { useFormStatus } from "react-dom"
 import { PlusIcon, RocketIcon } from "lucide-react"
 
@@ -8,10 +8,12 @@ import { createDeployment, type ActionState } from "@/app/(console)/actions"
 import { FormDrawer } from "@/components/console/form-drawer"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { balancingStrategies, capabilityFlags, cascadeTierRange, defaultCapabilities, kernelModes, priorityRange } from "@/lib/fabric/deployment-options"
 import type { DeploymentStampOption } from "@/lib/fabric/resource-state"
 
 const executionModes = [{ value: "default", label: "Cluster default" }, { value: "eager", label: "Eager" }, { value: "cuda_graph", label: "CUDA graphs" }]
@@ -41,6 +43,8 @@ export function DeploymentFields({ stamps, disabled = false, onSelectChange }: {
   disabled?: boolean
   onSelectChange?: () => void
 }) {
+  const [kernelMode, setKernelMode] = useState<string>("auto")
+  const [strategy, setStrategy] = useState<string>("least_in_flight")
   return <div className="@container">
     <FieldGroup>
       <Field><FieldLabel htmlFor="modelRef">Model repository</FieldLabel><Input id="modelRef" name="modelRef" placeholder="Qwen/Qwen3.5-4B" required maxLength={200} disabled={disabled} autoComplete="off" /><FieldDescription>The model-host image must support this model architecture. Gated models need a download credential configured on the cluster.</FieldDescription></Field>
@@ -59,8 +63,19 @@ export function DeploymentFields({ stamps, disabled = false, onSelectChange }: {
         <Field><FieldLabel htmlFor="maxNumSeqs">Concurrent sequences</FieldLabel><Input id="maxNumSeqs" name="maxNumSeqs" type="number" min={1} max={1024} placeholder="Cluster default" disabled={disabled} /></Field>
         <Field><FieldLabel htmlFor="execution">Execution</FieldLabel><Select name="execution" defaultValue="default" items={executionModes} disabled={disabled} onValueChange={onSelectChange}><SelectTrigger id="execution" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Cluster default</SelectItem><SelectItem value="eager">Eager</SelectItem><SelectItem value="cuda_graph">CUDA graphs</SelectItem></SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="autoToolChoice">Automatic tool calling</FieldLabel><Select name="autoToolChoice" defaultValue="default" items={toolChoiceModes} disabled={disabled} onValueChange={onSelectChange}><SelectTrigger id="autoToolChoice" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Model default</SelectItem><SelectItem value="enabled">Enabled</SelectItem><SelectItem value="disabled">Disabled</SelectItem></SelectContent></Select><FieldDescription>Allow the model to select tools supplied in an API request.</FieldDescription></Field>
+        <Field className="@lg:col-span-3"><FieldLabel htmlFor="kernelMode">Kernel mode</FieldLabel><Select name="kernelMode" value={kernelMode} items={kernelModes.map(({ value, label }) => ({ value, label }))} disabled={disabled} onValueChange={(value) => { setKernelMode(String(value)); onSelectChange?.() }}><SelectTrigger id="kernelMode" className="w-full @lg:w-1/3"><SelectValue /></SelectTrigger><SelectContent>{kernelModes.map((mode) => <SelectItem key={mode.value} value={mode.value}>{mode.label}</SelectItem>)}</SelectContent></Select><FieldDescription>{kernelModes.find((mode) => mode.value === kernelMode)?.description}</FieldDescription></Field>
         <Field className="@lg:col-span-2"><FieldLabel htmlFor="toolCallParser">Tool parser</FieldLabel><Input id="toolCallParser" name="toolCallParser" placeholder="Model default" maxLength={64} pattern="[a-z][a-z0-9_-]*" disabled={disabled} autoComplete="off" /><FieldDescription>Known Qwen models select a compatible parser automatically. Use hermes for Qwen3-VL or qwen3_xml for Qwen3.5. Other models need a parser supported by the model-host image.</FieldDescription></Field>
       </div><p className="mt-4 text-xs text-muted-foreground">The operator selects a supported dtype from the GPU profile. Model memory fit still depends on model size, context, and serving settings.</p></details>
+      <details className="group rounded-xl border border-border/70 p-4" data-section="routing"><summary className="cursor-pointer rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">Routing</summary><div className="mt-5 grid gap-5">
+        <input type="hidden" name="routing" value="1" />
+        <Field><FieldLabel htmlFor="strategy">Balancing strategy</FieldLabel><Select name="strategy" value={strategy} items={balancingStrategies.map(({ value, label }) => ({ value, label }))} disabled={disabled} onValueChange={(value) => { setStrategy(String(value)); onSelectChange?.() }}><SelectTrigger id="strategy" className="w-full @lg:w-1/2"><SelectValue /></SelectTrigger><SelectContent>{balancingStrategies.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><FieldDescription>How the gateway spreads requests across this deployment’s replicas. {balancingStrategies.find((option) => option.value === strategy)?.description}</FieldDescription></Field>
+        <Field><FieldLabel id="capabilities-label">Capabilities</FieldLabel><div role="group" aria-labelledby="capabilities-label" className="grid gap-2 rounded-xl border border-border/70 p-3 @md:grid-cols-2 @lg:grid-cols-4">{capabilityFlags.map((flag) => <label key={flag.value} className="flex items-start gap-2 text-sm" title={flag.description}><Checkbox name="capabilities" value={flag.value} defaultChecked={defaultCapabilities.includes(flag.value)} disabled={disabled} onCheckedChange={onSelectChange} className="mt-0.5" /><span className="min-w-0"><span className="block leading-5">{flag.label}</span><span className="block text-xs text-muted-foreground">{flag.description}</span></span></label>)}</div><FieldDescription>What this model can serve. With <code className="font-mono text-xs">model: &quot;auto&quot;</code>, the gateway picks among the account’s deployments whose capabilities fit the request.</FieldDescription></Field>
+        <label className="flex items-start gap-2 text-sm"><Checkbox name="autoEnabled" defaultChecked disabled={disabled} onCheckedChange={onSelectChange} className="mt-0.5" /><span><span className="block leading-5">Eligible for automatic routing</span><span className="block text-xs text-muted-foreground">Clear to serve this deployment only by its API model name.</span></span></label>
+        <div className="grid gap-5 @lg:grid-cols-2">
+          <Field><FieldLabel htmlFor="priority">Priority</FieldLabel><Input id="priority" name="priority" type="number" min={priorityRange.min} max={priorityRange.max} step={1} defaultValue={0} disabled={disabled} /><FieldDescription>Breaks ties between deployments that fit an automatic request equally well; higher wins. From {priorityRange.min} to {priorityRange.max}.</FieldDescription></Field>
+          <Field><FieldLabel htmlFor="cascadeTier">Cascade tier</FieldLabel><Input id="cascadeTier" name="cascadeTier" type="number" min={cascadeTierRange.min} max={cascadeTierRange.max} step={1} placeholder="Not in an explicit ladder" disabled={disabled} /><FieldDescription>Optional. With <code className="font-mono text-xs">model: &quot;cascade&quot;</code>, tiered deployments are tried lowest tier first and escalate when an answer fails its checks. Without any tiers, the ladder follows priority, lowest first.</FieldDescription></Field>
+        </div>
+      </div></details>
     </FieldGroup>
   </div>
 }

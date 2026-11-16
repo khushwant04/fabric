@@ -63,8 +63,8 @@ export async function createDeployment(_previous: ActionState, formData: FormDat
         spec: {
           runtime: {
             release: input.modelRef,
-            kernel_mode: "standard",
-            strategy: "least_in_flight",
+            kernel_mode: input.kernelMode,
+            strategy: input.strategy,
             ...(input.maxModelLen ? { max_model_len: input.maxModelLen } : {}),
             ...(input.maxNumSeqs ? { max_num_seqs: input.maxNumSeqs } : {}),
             ...(input.execution ? { execution: input.execution } : {}),
@@ -73,6 +73,7 @@ export async function createDeployment(_previous: ActionState, formData: FormDat
           },
           replicas: input.replicas,
           resources: { gpu_count: input.gpuCount, gpu_class: input.gpuClass },
+          ...(input.capabilities ? { capabilities: input.capabilities } : {}),
         },
       }),
     }
