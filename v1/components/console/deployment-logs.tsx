@@ -12,8 +12,7 @@ import { Progress } from "@/components/ui/progress"
 import {
   diagnoseHost, elapsedSeconds, formatBytes, formatDuration, hostPollDelay, hostStages, hostSummary,
   isFailureEvent, isFollowing, logFileName, logLines, pullInfo, queuedStages, stageStartedAt, weightProgress,
-  type LogLevel, type Stage,
-} from "@/lib/fabric/host-status"
+  type LogLevel, type Stage, isStartupWait } from "@/lib/fabric/host-status"
 import type { DeploymentHosts, HostSnapshot } from "@/lib/fabric/types"
 import { formatRelative, shortId } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -266,6 +265,7 @@ function EventList({ host }: { host: HostSnapshot }) {
           <time className="shrink-0 tabular-nums text-muted-foreground" dateTime={event.at}>{formatRelative(event.at)}</time>
         </div>
         <p className={cn("mt-0.5 break-words", isFailureEvent(event) ? "text-destructive/90" : "text-muted-foreground")}>{event.message}</p>
+        {isStartupWait(event) ? <p className="mt-0.5 text-muted-foreground">Expected while the model starts: the server opens its port once the weights are loaded.</p> : null}
       </li>)}
     </ul> : <p className="mt-2 text-muted-foreground">No recent events. Kubernetes keeps events for about an hour.</p>}
   </details>

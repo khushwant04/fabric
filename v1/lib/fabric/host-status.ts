@@ -202,6 +202,16 @@ export type HostTone = "good" | "warning" | "critical" | "info" | "neutral"
 
 export type HostSummary = { tone: HostTone; label: string; detail: string | null }
 
+/**
+ * A startup-probe miss while the server is still coming up ("connection refused" or a timeout
+ * before vLLM listens). Kubernetes records it as a Warning, but it is the expected state for the
+ * whole weight download and load, often many minutes for a large model.
+ */
+export function isStartupWait(event: HostEvent) {
+  return event.reason === "Unhealthy" && /^Startup probe failed/i.test(event.message) &&
+    /connection refused|timeout|deadline exceeded|no route to host/i.test(event.message)
+}
+
 function probeFailures(host: HostSnapshot) {
   return host.events.filter((event) => event.type === "Warning" && event.reason === "Unhealthy").reduce((total, event) => total + Math.max(1, event.count), 0)
 }
@@ -218,7 +228,9 @@ export function hostSummary(host: HostSnapshot): HostSummary {
   if (host.ready) return { tone: "good", label: "Ready", detail: host.restart_count ? `Restarted ${host.restart_count} time${host.restart_count === 1 ? "" : "s"}` : null }
   const current = stages.find((stage) => stage.state === "current")
   const probes = probeFailures(host)
-  const detail = probes ? `Health probe not passing yet (${probes} failed check${probes === 1 ? "" : "s"})` : host.container_message || null
+  const detail = probes
+    ? `Server not answering yet (${probes} check${probes === 1 ? "" : "s"}); normal while weights download and load`
+    : host.container_message || null
   return { tone: "info", label: current?.label ?? host.phase, detail }
 }
 
@@ -228,6 +240,7 @@ export function lastWarning(host: HostSnapshot): HostEvent | undefined {
 
 /** Events worth drawing in red: warnings, and anything named for a failure. */
 export function isFailureEvent(event: HostEvent) {
+  if (isStartupWait(event)) return false
   return event.type === "Warning" || /fail|backoff|error|kill/i.test(event.reason)
 }
 
