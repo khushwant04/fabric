@@ -33,7 +33,8 @@ spec:
       # Mounted when the agent has a reason to reach the API server: to declare intent for
       # an operator, or to measure this stamp's GPU capacity. With neither it needs no
       # Kubernetes access at all, and the agent falls back to the configured stamp.gpus.
-      automountServiceAccountToken: {{ or .Values.operator.enabled .Values.stamp.measureCapacity }}
+      # Serving metrics also read the API server, to find model hosts and DCGM exporters.
+      automountServiceAccountToken: {{ if or .Values.operator.enabled .Values.stamp.measureCapacity (include "fabric-stamp.metricsUseKube" .) }}true{{ else }}false{{ end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -113,6 +114,18 @@ spec:
             {{- end }}
             {{- if eq (toString .Values.agent.reportActivity) "false" }}
             - --report-activity=false
+            {{- end }}
+            {{- if include "fabric-stamp.reportsMetrics" . }}
+            # Serving metrics for the console's charts (docs/serving-metrics.md): the gateway
+            # in this pod, the model hosts' vLLM metrics, and any DCGM exporter.
+            - --report-metrics
+            - --metrics-interval={{ .Values.agent.metricsInterval | default "30s" }}
+            - --gateway-metrics-url=http://127.0.0.1:8080/metrics
+            {{- range (include "fabric-stamp.dcgmServices" . | trim | splitList "\n") }}
+            {{- with (trim .) }}
+            - --dcgm-service={{ . }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           env:
             {{- if include "fabric-stamp.measuresWeights" . }}

@@ -26,6 +26,7 @@ import (
 	"github.com/khushwant04/fabric/agent/internal/hostreport"
 	"github.com/khushwant04/fabric/agent/internal/kube"
 	"github.com/khushwant04/fabric/agent/internal/operator"
+	"github.com/khushwant04/fabric/agent/internal/servingmetrics"
 	"github.com/khushwant04/fabric/agent/internal/weights"
 )
 
@@ -102,6 +103,14 @@ func main() {
 		"the node this agent runs on; a hostPath model cache is only measured for hosts on it")
 	hfEndpoint := flag.String("hf-endpoint", envOr("HF_ENDPOINT", weights.DefaultEndpoint),
 		"Hugging Face API used to learn a model's total weight size")
+	reportMetrics := flag.Bool("report-metrics", os.Getenv("FABRIC_AGENT_REPORT_METRICS") == "true",
+		"push serving metrics (requests, latency, tokens, queue, KV cache, GPU use) from the "+
+			"local gateway, the model hosts and DCGM exporters to the control plane for the console")
+	metricsInterval := flag.Duration("metrics-interval", servingmetrics.DefaultInterval,
+		"how often serving metrics are sampled and sent")
+	gatewayMetricsURL := flag.String("gateway-metrics-url",
+		envOr("FABRIC_AGENT_GATEWAY_METRICS_URL", servingmetrics.DefaultGatewayURL),
+		"the stamp gateway's Prometheus endpoint; \"-\" skips it")
 	credentialMaxAge := flag.Duration("credential-max-age",
 		envDuration("FABRIC_AGENT_CREDENTIAL_MAX_AGE", 30*24*time.Hour),
 		"rotate the machine credentials once they are this old; 0 rotates only on request")
@@ -114,6 +123,11 @@ func main() {
 	var gpuNodeSelector multiFlag
 	flag.Var(&gpuNodeSelector, "gpu-node-selector",
 		"restrict capacity measurement to nodes matching key=value; repeat for several")
+	// The Service in front of a DCGM exporter, read through its Endpoints so every node's
+	// exporter is scraped rather than whichever one the Service picks.
+	var dcgmServices multiFlag
+	flag.Var(&dcgmServices, "dcgm-service",
+		"namespace/name of a DCGM exporter Service to read GPU metrics from; repeat for several")
 
 	flag.Parse()
 
@@ -181,7 +195,13 @@ func main() {
 	// Kubernetes permissions at all; measuring capacity needs only read access, and
 	// degrades to the configured --gpus when it is absent.
 	var client *kube.Client
-	if *publish == "kubernetes" || *measureCapacity || *reportHosts {
+	dcgm, err := parseDCGMServices(dcgmServices)
+	if err != nil {
+		log.Error("invalid --dcgm-service", "error", err)
+		os.Exit(1)
+	}
+
+	if *publish == "kubernetes" || *measureCapacity || *reportHosts || *reportMetrics {
 		client, err = kube.InCluster()
 		if err != nil {
 			if *publish == "kubernetes" {
@@ -224,6 +244,22 @@ func main() {
 			SteadyInterval: *hostReportSteadyInterval,
 		}
 		config.HostReporter = reporter
+	}
+
+	if *reportMetrics {
+		// The gateway is read over localhost in the same pod, so metrics are reported even
+		// with no Kubernetes access; model hosts and DCGM exporters need the client.
+		reporter := &servingmetrics.Reporter{
+			GatewayURL: *gatewayMetricsURL,
+			Interval:   *metricsInterval,
+			Log:        log,
+		}
+		if client != nil {
+			reporter.Kube = client
+			reporter.Namespace = client.Namespace
+			reporter.DCGM = dcgm
+		}
+		config.MetricsReporter = reporter
 	}
 
 	instance := agent.New(config, log)
@@ -270,6 +306,19 @@ func orDefault(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// parseDCGMServices reads namespace/name pairs.
+func parseDCGMServices(values []string) ([]servingmetrics.DCGMService, error) {
+	services := []servingmetrics.DCGMService{}
+	for _, value := range values {
+		namespace, name, ok := strings.Cut(value, "/")
+		if !ok || namespace == "" || name == "" || strings.Contains(name, "/") {
+			return nil, fmt.Errorf("%q is not namespace/name", value)
+		}
+		services = append(services, servingmetrics.DCGMService{Namespace: namespace, Name: name})
+	}
+	return services, nil
 }
 
 // multiFlag collects a flag given more than once.

@@ -24,6 +24,115 @@
         "title": "AccountCreateRequest",
         "type": "object"
       },
+      "AccountMetricsPoint": {
+        "properties": {
+          "errors_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errors Per Min"
+          },
+          "output_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens Per S"
+          },
+          "requests_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Per Min"
+          },
+          "t": {
+            "format": "date-time",
+            "title": "T",
+            "type": "string"
+          }
+        },
+        "required": [
+          "t"
+        ],
+        "title": "AccountMetricsPoint",
+        "type": "object"
+      },
+      "AccountMetricsResponse": {
+        "description": "Every deployment of the account together, for the overview's sparklines.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/AccountMetricsPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "step_seconds": {
+            "title": "Step Seconds",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/MetricsSummary"
+          },
+          "window": {
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "step_seconds",
+          "start",
+          "end",
+          "reported_at",
+          "summary",
+          "points"
+        ],
+        "title": "AccountMetricsResponse",
+        "type": "object"
+      },
       "AccountResponse": {
         "properties": {
           "created_at": {
@@ -444,6 +553,447 @@
           "hosts"
         ],
         "title": "DeploymentHostsResponse",
+        "type": "object"
+      },
+      "DeploymentMetricPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "gpu_memory_total_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Total Bytes"
+          },
+          "gpu_memory_used_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Used Bytes"
+          },
+          "gpu_utilization_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Utilization Percent"
+          },
+          "gpus": {
+            "default": 0,
+            "maximum": 128.0,
+            "minimum": 0.0,
+            "title": "Gpus",
+            "type": "integer"
+          },
+          "hosts": {
+            "default": 0,
+            "maximum": 1024.0,
+            "minimum": 0.0,
+            "title": "Hosts",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Tokens",
+            "type": "number"
+          },
+          "itl_seconds": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Itl Seconds"
+          },
+          "kv_cache_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kv Cache Percent"
+          },
+          "latency_seconds": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Seconds"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output Tokens",
+            "type": "number"
+          },
+          "requests": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "propertyNames": {
+              "enum": [
+                "2xx",
+                "4xx",
+                "5xx",
+                "cancelled"
+              ]
+            },
+            "title": "Requests",
+            "type": "object"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          },
+          "ttft_seconds": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft Seconds"
+          },
+          "waiting": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting"
+          }
+        },
+        "required": [
+          "deployment_id"
+        ],
+        "title": "DeploymentMetricPoint",
+        "type": "object"
+      },
+      "DeploymentMetricsPoint": {
+        "description": "One chart step. ``None`` means no stamp reported during the step.",
+        "properties": {
+          "errors_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errors Per Min"
+          },
+          "gpu_memory_total_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Total Bytes"
+          },
+          "gpu_memory_used_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Used Bytes"
+          },
+          "gpu_utilization_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Utilization Percent"
+          },
+          "input_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens Per S"
+          },
+          "itl_p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Itl P50 Ms"
+          },
+          "kv_cache_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kv Cache Percent"
+          },
+          "latency_p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency P50 Ms"
+          },
+          "latency_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency P95 Ms"
+          },
+          "output_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens Per S"
+          },
+          "requests_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Per Min"
+          },
+          "running": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running"
+          },
+          "status_per_min": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Per Min"
+          },
+          "t": {
+            "format": "date-time",
+            "title": "T",
+            "type": "string"
+          },
+          "ttft_p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft P50 Ms"
+          },
+          "ttft_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft P95 Ms"
+          },
+          "waiting": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting"
+          }
+        },
+        "required": [
+          "t"
+        ],
+        "title": "DeploymentMetricsPoint",
+        "type": "object"
+      },
+      "DeploymentMetricsResponse": {
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentMetricsPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "step_seconds": {
+            "title": "Step Seconds",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/MetricsSummary"
+          },
+          "window": {
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "window",
+          "step_seconds",
+          "start",
+          "end",
+          "reported_at",
+          "sources",
+          "summary",
+          "points"
+        ],
+        "title": "DeploymentMetricsResponse",
         "type": "object"
       },
       "DeploymentResponse": {
@@ -1077,6 +1627,71 @@
         "title": "FabricGpuClaim",
         "type": "object"
       },
+      "GPUMetricPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "index": {
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Index",
+            "type": "string"
+          },
+          "memory_total_bytes": {
+            "minimum": 0.0,
+            "title": "Memory Total Bytes",
+            "type": "number"
+          },
+          "memory_used_bytes": {
+            "minimum": 0.0,
+            "title": "Memory Used Bytes",
+            "type": "number"
+          },
+          "node": {
+            "maxLength": 253,
+            "title": "Node",
+            "type": "string"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product"
+          },
+          "utilization_percent": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Utilization Percent",
+            "type": "number"
+          }
+        },
+        "required": [
+          "node",
+          "index",
+          "utilization_percent",
+          "memory_used_bytes",
+          "memory_total_bytes"
+        ],
+        "title": "GPUMetricPoint",
+        "type": "object"
+      },
       "GPUSampleRequest": {
         "additionalProperties": false,
         "description": "One reading of one device on a stamp.",
@@ -1149,6 +1764,115 @@
           "sm_clock_max_mhz"
         ],
         "title": "GPUSampleRequest",
+        "type": "object"
+      },
+      "GPUSeries": {
+        "properties": {
+          "deployment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "index": {
+            "title": "Index",
+            "type": "string"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GPUSeriesPoint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/GPUSeriesPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product"
+          }
+        },
+        "required": [
+          "node",
+          "index",
+          "product",
+          "deployment_id",
+          "latest",
+          "points"
+        ],
+        "title": "GPUSeries",
+        "type": "object"
+      },
+      "GPUSeriesPoint": {
+        "properties": {
+          "memory_total_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Total Bytes"
+          },
+          "memory_used_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Used Bytes"
+          },
+          "t": {
+            "format": "date-time",
+            "title": "T",
+            "type": "string"
+          },
+          "utilization_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Utilization Percent"
+          }
+        },
+        "required": [
+          "t"
+        ],
+        "title": "GPUSeriesPoint",
         "type": "object"
       },
       "GpuCapability": {
@@ -1967,6 +2691,115 @@
         "title": "MemberResponse",
         "type": "object"
       },
+      "MetricReportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/MetricSample"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "samples"
+        ],
+        "title": "MetricReportRequest",
+        "type": "object"
+      },
+      "MetricReportResponse": {
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "title": "Accepted At",
+            "type": "string"
+          },
+          "accepted_samples": {
+            "title": "Accepted Samples",
+            "type": "integer"
+          },
+          "ignored_deployments": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Ignored Deployments",
+            "type": "array"
+          },
+          "skipped_samples": {
+            "title": "Skipped Samples",
+            "type": "integer"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "accepted_at",
+          "accepted_samples",
+          "skipped_samples",
+          "ignored_deployments"
+        ],
+        "title": "MetricReportResponse",
+        "type": "object"
+      },
+      "MetricSample": {
+        "additionalProperties": false,
+        "properties": {
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentMetricPoint"
+            },
+            "maxItems": 64,
+            "title": "Deployments",
+            "type": "array"
+          },
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/GPUMetricPoint"
+            },
+            "maxItems": 128,
+            "title": "Gpus",
+            "type": "array"
+          },
+          "interval_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 3600.0,
+            "title": "Interval Seconds",
+            "type": "number"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "enum": [
+                "gateway",
+                "model_host",
+                "dcgm"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "observed_at",
+          "interval_seconds"
+        ],
+        "title": "MetricSample",
+        "type": "object"
+      },
       "MetricsAcceptedResponse": {
         "properties": {
           "gpus_recorded": {
@@ -2016,6 +2849,105 @@
           "collected_at"
         ],
         "title": "MetricsReportRequest",
+        "type": "object"
+      },
+      "MetricsSummary": {
+        "description": "Whole-window figures for the headline numbers above the charts.",
+        "properties": {
+          "error_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Rate"
+          },
+          "errors": {
+            "default": 0,
+            "title": "Errors",
+            "type": "number"
+          },
+          "latency_p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency P50 Ms"
+          },
+          "latency_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency P95 Ms"
+          },
+          "output_tokens": {
+            "default": 0,
+            "title": "Output Tokens",
+            "type": "number"
+          },
+          "output_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens Per S"
+          },
+          "requests": {
+            "default": 0,
+            "title": "Requests",
+            "type": "number"
+          },
+          "requests_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Per Min"
+          },
+          "ttft_p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft P50 Ms"
+          },
+          "ttft_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft P95 Ms"
+          }
+        },
+        "title": "MetricsSummary",
         "type": "object"
       },
       "ModelCapabilities": {
@@ -3151,6 +4083,154 @@
           "events"
         ],
         "title": "StampEventsResponse",
+        "type": "object"
+      },
+      "StampMetricsPoint": {
+        "properties": {
+          "gpu_memory_total_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Total Bytes"
+          },
+          "gpu_memory_used_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Memory Used Bytes"
+          },
+          "gpu_utilization_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Utilization Percent"
+          },
+          "output_tokens_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens Per S"
+          },
+          "requests_per_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Per Min"
+          },
+          "t": {
+            "format": "date-time",
+            "title": "T",
+            "type": "string"
+          }
+        },
+        "required": [
+          "t"
+        ],
+        "title": "StampMetricsPoint",
+        "type": "object"
+      },
+      "StampMetricsResponse": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/GPUSeries"
+            },
+            "title": "Gpus",
+            "type": "array"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "step_seconds": {
+            "title": "Step Seconds",
+            "type": "integer"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/StampMetricsPoint"
+            },
+            "title": "Totals",
+            "type": "array"
+          },
+          "window": {
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "window",
+          "step_seconds",
+          "start",
+          "end",
+          "reported_at",
+          "sources",
+          "totals",
+          "gpus"
+        ],
+        "title": "StampMetricsResponse",
         "type": "object"
       },
       "StampResponse": {
@@ -4856,6 +5936,80 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/deployments/{deployment_id}/metrics": {
+      "get": {
+        "description": "Requests, errors, latency and TTFT percentiles, throughput, queue, KV cache and GPU\nuse, one point per chart step. Not cached: a console polling it wants the newest minute.",
+        "operationId": "read_deployment_metrics_v1_accounts__account_id__deployments__deployment_id__metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "How far back to chart: 1h, 6h, 24h or 7d",
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "1h",
+              "description": "How far back to chart: 1h, 6h, 24h or 7d",
+              "enum": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentMetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a deployment's serving metrics as chart series",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/deployments/{deployment_id}/placements": {
       "get": {
         "operationId": "read_placements_v1_accounts__account_id__deployments__deployment_id__placements_get",
@@ -5301,6 +6455,70 @@
         "summary": "Add or update an account member",
         "tags": [
           "accounts"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/metrics": {
+      "get": {
+        "description": "Every deployment together, for the overview's sparklines. Not cached.",
+        "operationId": "read_account_metrics_v1_accounts__account_id__metrics_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "How far back to chart: 1h, 6h, 24h or 7d",
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "1h",
+              "description": "How far back to chart: 1h, 6h, 24h or 7d",
+              "enum": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountMetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read the account's request rate and throughput across deployments",
+        "tags": [
+          "metrics"
         ]
       }
     },
@@ -5929,6 +7147,80 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/stamps/{stamp_id}/metrics": {
+      "get": {
+        "description": "Per-GPU utilisation and memory, and the stamp's totals. Not cached.",
+        "operationId": "read_stamp_metrics_v1_accounts__account_id__stamps__stamp_id__metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "How far back to chart: 1h, 6h, 24h or 7d",
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "1h",
+              "description": "How far back to chart: 1h, 6h, 24h or 7d",
+              "enum": [
+                "1h",
+                "6h",
+                "24h",
+                "7d"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampMetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a stamp's GPU and traffic metrics as chart series",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
     "/v1/edge/routing-table": {
       "get": {
         "description": "Deployments placed on live stamps that report a public gateway URL.\n\nDeliberately not account-scoped: the edge serves every account from one URL. The\ntoken must carry ``edge:routing:read`` and belong to a service principal of the Fabric\nsystem account, and the read runs in a scoped elevation that ends with the query.",
@@ -6323,6 +7615,60 @@
         "summary": "Report model-host pod status, events and log tails",
         "tags": [
           "stamps"
+        ]
+      }
+    },
+    "/v1/stamps/{stamp_id}/metrics": {
+      "post": {
+        "description": "Merge one or more samples into the per-minute series.\n\nDeployments not placed on this stamp are ignored, never stored. Samples older than the\nseven-day retention or more than five minutes in the future are skipped.",
+        "operationId": "report_metrics_v1_stamps__stamp_id__metrics_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetricReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report serving metrics for this stamp's deployments and GPUs",
+        "tags": [
+          "metrics"
         ]
       }
     },

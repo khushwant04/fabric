@@ -5,12 +5,13 @@ import { ArrowLeftIcon, TriangleAlertIcon } from "lucide-react"
 import { CredentialRotationButton } from "@/components/console/credential-rotation"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { StampActivity } from "@/components/console/stamp-activity"
+import { StampMetricsView } from "@/components/console/serving-metrics/stamp-metrics"
 import { RemoveStampButton } from "@/components/console/stamp-remove"
 import { StatusBadge } from "@/components/console/status-badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { getStampEvents, listStamps } from "@/lib/fabric/data"
+import { getStampEvents, listDeployments, listStamps } from "@/lib/fabric/data"
 import { publicGatewayBase } from "@/lib/fabric/inference-endpoints"
 import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
 import { isRemoved, isStampId } from "@/lib/fabric/stamp-activity"
@@ -21,7 +22,7 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
   const { stampId } = await params
   if (!isStampId(stampId)) notFound()
   const context = await getConsoleContext()
-  const [stampResult, eventResult] = await Promise.allSettled([listStamps(), getStampEvents(stampId)])
+  const [stampResult, eventResult, deploymentResult] = await Promise.allSettled([listStamps(), getStampEvents(stampId), hasScope(context, "deployments:read") ? listDeployments() : Promise.resolve([])])
   const stamp = stampResult.status === "fulfilled" ? stampResult.value.find((item) => item.id === stampId) : undefined
   if (stampResult.status === "fulfilled" && !stamp) notFound()
   const events = eventResult.status === "fulfilled" ? eventResult.value : null
@@ -31,9 +32,11 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
   const state = stamp ? (gone ? { status: "removed", detail: `Removed ${formatRelative(stamp.revoked_at)}; its credentials are revoked and its agent no longer syncs.` } : stampState(stamp)) : null
   const gpus = Array.isArray(stamp?.capabilities.gpus) ? stamp.capabilities.gpus as Array<Record<string, unknown>> : []
   const endpoint = publicGatewayBase(stamp?.capabilities.inference_url)
+  // Names for the GPUs the metrics attribute to a deployment (docs/serving-metrics.md).
+  const deploymentNames = Object.fromEntries((deploymentResult.status === "fulfilled" ? deploymentResult.value : []).map((deployment) => [deployment.id, deployment.name]))
 
   return <PageContainer>
-    <PageHeader title={name} description="Registration, hardware and the live activity log reported by this stamp's agent." actions={<><Button variant="outline" render={<Link href="/stamps" />}><ArrowLeftIcon /> All stamps</Button>{stamp && !gone ? <RemoveStampButton stampId={stamp.id} name={stamp.name} disabled={!canWrite} size="default" variant="destructive" label="Remove stamp" /> : null}</>}>
+    <PageHeader title={name} description="Registration, hardware, the live activity log and serving metrics reported by this stamp's agent." actions={<><Button variant="outline" render={<Link href="/stamps" />}><ArrowLeftIcon /> All stamps</Button>{stamp && !gone ? <RemoveStampButton stampId={stamp.id} name={stamp.name} disabled={!canWrite} size="default" variant="destructive" label="Remove stamp" /> : null}</>}>
       {state ? <div className="flex flex-wrap items-center gap-2 pt-1"><StatusBadge status={state.status} /><span className="text-xs text-muted-foreground">{state.detail}</span></div> : null}
     </PageHeader>
     {stampResult.status === "rejected" ? <Alert variant="destructive"><TriangleAlertIcon /><AlertTitle>Stamp details are unavailable</AlertTitle><AlertDescription>Refresh to try again. The activity log below still updates.</AlertDescription></Alert> : null}
@@ -59,5 +62,6 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
         </CardContent>
       </Card> : null}
     </div>
+    <StampMetricsView stampId={stampId} deploymentNames={deploymentNames} />
   </PageContainer>
 }

@@ -136,6 +136,26 @@ if (state.removed_stamp_deployment_id) {
     await current.getByText("Stamp removed").first().waitFor()
   })
 }
+// Metrics: the serving charts pushed by the stamp agent (docs/serving-metrics.md), for the
+// last hour and then the last day, which shows the backfilled working-day curve.
+// The page scrolls inside the shell rather than the document, so a taller window stands in
+// for a full-page capture, scrolled to put the charts in view.
+async function tall(run) {
+  await page.setViewportSize({ width: 1440, height: 1900 })
+  try { await run() } finally { await page.setViewportSize({ width: 1440, height: 900 }) }
+}
+async function openMetrics(current, window) {
+  if (window) await current.getByRole("button", { name: `Last ${window}` }).click()
+  await current.locator("[data-metric-chart] .recharts-line, [data-metric-chart] .recharts-area").first().waitFor()
+  await current.locator("[role='tablist']").evaluate((element) => element.scrollIntoView({ block: "start" }))
+  await current.waitForTimeout(800)
+}
+if (want("06f-deployment-metrics")) await tall(() => visit("06f-deployment-metrics", `/deployments/${deploymentId}?tab=metrics`, (current) => openMetrics(current)))
+if (want("06g-deployment-metrics-24h")) await tall(() => visit("06g-deployment-metrics-24h", `/deployments/${deploymentId}?tab=metrics`, (current) => openMetrics(current, "24 hours")))
+if (want("09f-stamp-metrics")) await tall(() => visit("09f-stamp-metrics", `/stamps/${state.stamps["aks-gpu"]}`, async (current) => {
+  await current.locator("[data-gpu]").first().waitFor()
+  await current.waitForTimeout(800)
+}))
 await visit("07-deployment-detail-failed-status", `/deployments/${state.deployment_ids["long-context-eval"]}`, async (current) => {
   await current.getByRole("tab", { name: "Status" }).click()
 })

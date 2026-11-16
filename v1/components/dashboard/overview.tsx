@@ -7,6 +7,7 @@ import { GatewayUrl } from "@/components/console/edge-gateway"
 import { LiveRefresh } from "@/components/console/live-refresh"
 import { PageContainer } from "@/components/console/page-header"
 import { IconTile, Metric, MetricGrid, Section, SectionEmpty, SectionLink, labelClass } from "@/components/console/section"
+import { AccountMetricsProvider, OverviewSparkline } from "@/components/console/serving-metrics/overview-sparkline"
 import { StatusBadge, statusTone } from "@/components/console/status-badge"
 import { TruncatedText } from "@/components/console/truncated-text"
 import { Greeting } from "@/components/dashboard/greeting"
@@ -173,8 +174,14 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
         <Metric label="GPUs requested" value={capacity ? <>{capacity.used}<span className="text-muted-foreground">/{capacity.total}</span></> : unavailable} detail={capacity ? `${capacity.total ? Math.round(capacity.used / capacity.total * 100) : 0}% of account-owned capacity` : "Not every active stamp has reported GPUs"}>
           {capacity ? <UsageBar used={capacity.used} total={capacity.total} /> : <div className="h-1.5 rounded-full bg-muted" />}
         </Metric>
-        <Metric label="Requests" value={usage ? formatNumber(usage.events) : unavailable} detail={usage ? usage.last_occurred_at ? `Last request ${formatRelative(usage.last_occurred_at)}` : "No usage reported yet" : "Could not be checked"} />
-        <Metric label="Tokens" value={usage ? formatNumber(usage.input_tokens + usage.output_tokens) : unavailable} detail={usage ? `${formatNumber(usage.input_tokens)} in · ${formatNumber(usage.output_tokens)} out` : "Could not be checked"} />
+        <AccountMetricsProvider enabled={deployments !== null}>
+          <Metric label="Requests" value={usage ? formatNumber(usage.events) : unavailable} detail={usage ? usage.last_occurred_at ? `Last request ${formatRelative(usage.last_occurred_at)}` : "No usage reported yet" : "Could not be checked"}>
+            <OverviewSparkline field="requests_per_min" />
+          </Metric>
+          <Metric label="Tokens" value={usage ? formatNumber(usage.input_tokens + usage.output_tokens) : unavailable} detail={usage ? `${formatNumber(usage.input_tokens)} in · ${formatNumber(usage.output_tokens)} out` : "Could not be checked"}>
+            <OverviewSparkline field="output_tokens_per_s" />
+          </Metric>
+        </AccountMetricsProvider>
       </MetricGrid>
       {edge ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-border bg-card px-5 py-3.5 shadow-[0_1px_2px_rgb(0_0_0/0.025)]">
         <span className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground"><WaypointsIcon className="size-4" />Inference endpoint</span>

@@ -91,6 +91,11 @@ agent:
   # The stamp's activity log (enrolled, GPUs measured, GPU runtime, rotations, image
   # pulls, errors) shown on the console's stamp page.
   reportActivity: true
+  # Push serving metrics (requests, latency, TTFT, tokens/s, queue, KV cache, GPU use) for
+  # the console's charts, read from the gateway in this pod, the model hosts' vLLM metrics
+  # and any DCGM exporter under gpuMetrics. Outbound only. See docs/serving-metrics.md.
+  reportMetrics: true
+  metricsInterval: 30s
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
@@ -516,6 +521,36 @@ gpu:
   # Spreads hosts across nodes, so two deployments on one stamp do not contend for one
   # device while another node sits idle.
   spreadAcrossNodes: true
+
+# GPU utilisation and memory for the console's serving metrics (docs/serving-metrics.md).
+# The agent reads an NVIDIA DCGM exporter through its Service's Endpoints. Without one, the
+# console still charts traffic, latency and vLLM's KV-cache use, but no GPU utilisation.
+gpuMetrics:
+  # An exporter the cluster already runs, such as the AKS observability stack's
+  # fabric-observability/dcgm-dcgm-exporter. Grants the agent get on that one Endpoints
+  # object in that namespace, which must exist.
+  external:
+    enabled: false
+    namespace: fabric-observability
+    service: dcgm-dcgm-exporter
+  # Run a small exporter on each GPU node with this stamp, for a cluster that has none (a
+  # k3s VM). Uses gpu.nodeSelector, gpu.tolerations and gpu.runtimeClassName, and reads the
+  # devices without requesting nvidia.com/gpu.
+  dcgmExporter:
+    enabled: false
+    image:
+      repository: nvcr.io/nvidia/k8s/dcgm-exporter
+      tag: 3.3.9-3.6.1-ubuntu22.04
+      pullPolicy: IfNotPresent
+    # Extra node labels beyond gpu.nodeSelector.
+    nodeSelector: {}
+    # Label each device with the pod holding it (reads the kubelet's pod-resources socket
+    # through a read-only hostPath), so GPUs are charted per deployment even when two
+    # deployments share a node. Without it a node serving one deployment is still attributed.
+    podAttribution: false
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 250m, memory: 512Mi}
 
 nodeSelector: {}
 tolerations: []

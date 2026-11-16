@@ -124,6 +124,9 @@ type Config struct {
 	Activity *activity.Recorder
 	// ReportActivity uploads the activity log to POST /v1/stamps/{id}/events.
 	ReportActivity bool
+	// MetricsReporter, when set, pushes serving metrics (requests, latency, tokens, queue,
+	// KV cache, GPU use) for the console's charts. Nil sends none.
+	MetricsReporter MetricsReporter
 }
 
 // Agent holds one stamp's reconciliation state.
@@ -1273,6 +1276,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.startHostReporter(ctx)
 	a.startActivityReporter(ctx)
+	a.startMetricsReporter(ctx)
 
 	ticker := time.NewTicker(a.config.PollInterval)
 	defer ticker.Stop()
