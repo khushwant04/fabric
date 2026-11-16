@@ -1,9 +1,17 @@
 # Model-host pre-pull and the node cache
 
+**Pre-pull is off by default.** The customer chooses a model in the console and watches the
+first deployment come up live in its **Logs** tab: the model runtime image pull (with elapsed
+time and, once pulled, its size), the weight download (with byte progress), weight loading and
+warm-up. The first deployment on a machine downloads the model runtime image once; every later
+deployment on that machine starts from the local copy. Turn pre-pull on when start-up time
+matters more than that experience, for example on an autoscaled pool where every new node would
+otherwise pay the pull while a request waits.
+
 A cold model host spends most of its start on work that does not depend on the request.
 Measured on a fresh AKS `Standard_NC8as_T4_v3` node serving `Qwen/Qwen3.5-2B`:
 
-| Step | Time on a fresh node | With pre-pull and a warm cache |
+| Step | Time on a fresh node | With pre-pull (opt-in) and a warm cache |
 |---|---|---|
 | Pull the model-host image (8.9 GB, ECR Public) | 4 min 34 s | none: already on the node |
 | Engine start | ~1 min | ~1 min |
@@ -24,10 +32,10 @@ local disk.
 The cache lives on the node's ephemeral disk. It is lost when a node is replaced or a pool
 scales to zero. To keep it across nodes, use `cache.mode=pvc` with a ReadWriteMany claim.
 
-## Pre-pull (on by default)
+## Pre-pull (opt-in)
 
-`operator.managedModelHost.prepull` runs one pod per GPU node (a DaemonSet on
-`gpu.nodeSelector` and `gpu.tolerations`).
+`operator.managedModelHost.prepull.enabled=true` runs one pod per GPU node (a DaemonSet on
+`gpu.nodeSelector` and `gpu.tolerations`). It defaults to `false`.
 
 - **Image:** the pod pulls the model-host image as soon as a node joins, and keeps it in
   place so the kubelet never garbage-collects it. Changing the image tag rolls the
@@ -39,8 +47,16 @@ scales to zero. To keep it across nodes, use `cache.mode=pvc` with a ReadWriteMa
 
 ```bash
 helm upgrade stamp deploy/helm/fabric-stamp -n fabric-stamp --reset-then-reuse-values \
+  --set operator.managedModelHost.prepull.enabled=true \
   --set 'operator.managedModelHost.prepull.models={Qwen/Qwen3.5-2B,Qwen/Qwen3.5-4B}'
 ```
+
+`scripts/bootstrap-stamp.sh` installs stamps with pre-pull off and no longer suggests it. For an
+existing command that still passes `--prepull MODELS`, the script keeps working and turns
+pre-pull on for those repositories.
+
+Stamps installed before this default changed keep pre-pulling until their next upgrade with the
+current chart; `helm upgrade` without `--reuse-values` picks up the new default.
 
 Kernel compilation needs the GPU, so pre-pull cannot do it. The first host on each node
 still compiles once, and the node cache keeps the result for every later start.

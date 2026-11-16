@@ -338,6 +338,14 @@ func (c *Client) ReportHosts(ctx context.Context, stampID string, report any) er
 	return c.do(ctx, http.MethodPost, path, report, nil, true)
 }
 
+// ReportEvents appends to this stamp's activity log (see internal/activity). Each event
+// carries an id the control plane deduplicates on, so a retried upload is stored once.
+func (c *Client) ReportEvents(ctx context.Context, stampID string, events any) error {
+	path := "/v1/stamps/" + url.PathEscape(stampID) + "/events"
+	body := map[string]any{"events": events}
+	return c.do(ctx, http.MethodPost, path, body, nil, true)
+}
+
 // MaxUsageBatch matches the server's per-request limit, so a larger backlog is
 // chunked rather than rejected wholesale.
 const MaxUsageBatch = 500

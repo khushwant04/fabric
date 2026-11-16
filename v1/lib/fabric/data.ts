@@ -18,6 +18,7 @@ import type {
   Placement,
   ServicePrincipal,
   Stamp,
+  StampEvents,
 } from "@/lib/fabric/types"
 
 // React's cache lasts only for the current server render. The account-bound
@@ -108,6 +109,18 @@ export async function getDeploymentUsage(deploymentId: string) {
 export async function listStamps() {
   const context = await getConsoleContext()
   return accountRequest<Stamp[]>(`/v1/accounts/${context.account.id}/stamps`)
+}
+
+export async function getStampEvents(stampId: string) {
+  const context = await getConsoleContext()
+  try {
+    return await accountRequest<StampEvents>(
+      `/v1/accounts/${context.account.id}/stamps/${encodeURIComponent(stampId)}/events`
+    )
+  } catch (error) {
+    if (error instanceof FabricApiError && error.status === 404) return null
+    throw error
+  }
 }
 
 export async function listMembers() {

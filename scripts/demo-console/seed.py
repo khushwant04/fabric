@@ -18,6 +18,9 @@ stamp-authenticated APIs a production stamp uses:
   forwards that verdict. With no operator the agent can only say it wrote a file, so this
   script reports the operator-style observation (Applied/Available/Progressing) with the
   stamp's agent credential.
+* Activity and host logs. The agent runs here with --once, so its activity uploader and
+  host reporter never start; this script pushes what they would (POST /v1/stamps/{id}/events
+  and /hosts) with each stamp's own agent credential.
 
 After seeding it writes state.json (read by run.sh and the screenshot script) and keeps
 running: heartbeats every 30 s so stamps stay "active", and a collector pass every 30 s
@@ -73,7 +76,20 @@ STAMPS = [
         "region": "westeurope", "per_node": 1, "driver": "570.133.20",
         "gpus": [(A10, 1), (T4, 1)],  # two single-GPU VMs
     },
+    {
+        # A VM bootstrapped with scripts/bootstrap-stamp.sh a few minutes ago: its first
+        # deployment is pulling the model runtime image right now.
+        "name": "rtx-pro-6000", "orchestrator": "k3s", "orchestrator_version": "v1.36.5+k3s1",
+        "region": "asia-southeast1", "per_node": 1, "driver": "580.82.07",
+        "gpus": [(RTX_PRO_6000, 1)],
+    },
 ]
+
+# Enrolled, then removed from the console: hidden behind "Show removed (1)".
+REMOVED_STAMP = {
+    "name": "a10-lab-old", "orchestrator": "k3s", "orchestrator_version": "v1.31.4+k3s1",
+    "region": "westeurope", "per_node": 1, "driver": "550.120", "gpus": [(A10, 1)],
+}
 
 # name, alias, release, stamp (None = not placed), outcome, extra spec, requests to send.
 # Small Qwen3.5 models served by vLLM. cascade_tier orders model="cascade": chat-fast first,
@@ -98,6 +114,10 @@ DEPLOYMENTS = [
      {"resources": {"gpu_class": "t4"}, "runtime": {"max_model_len": 262144}}, 0),
     ("research-pool", "qwen3.5-2b-research", "Qwen/Qwen3.5-2B", None, "waiting",
      {"replicas": 4, "resources": {"gpu_class": "a10"}}, 0),
+    # The first deployment on the freshly bootstrapped machine: no pre-pull, so the Logs tab
+    # shows the model runtime image downloading.
+    ("docs-qa", "qwen3.5-4b-docs", "Qwen/Qwen3.5-4B", "rtx-pro-6000", "pulling",
+     {"resources": {"gpu_class": "rtx-pro-6000"}, "runtime": {"max_model_len": 32768}}, 0),
 ]
 
 PROMPTS = [
@@ -137,6 +157,9 @@ class Demo:
         self.account_id = ""
         self.token = ""
         self.keys: dict[str, str] = {}
+        # Fixed reference times, so a re-sent host report keeps its timeline moving forward.
+        self.started = time.time()
+        self.removed_deployment_id = ""
 
     # --- helpers -------------------------------------------------------------------
 
@@ -343,6 +366,7 @@ class Demo:
             self.heartbeat(stamp)
         self.report_observations()
         self.report_hosts()
+        self.report_activity()
 
     def placement_generation(self, deployment: dict) -> int:
         placements = self.call("GET", self.acct(f"/deployments/{deployment['id']}/placements"))
@@ -375,11 +399,21 @@ class Demo:
                 phase, ready, unavailable = "progressing", 0, replicas
                 conditions = [
                     condition("Applied", "False", "DesiredReleaseProgressing",
-                              "Pulling model weights to the node cache (2.9 of 4.4 GiB)"),
+                              "Model host started; downloading weights to the node cache"),
                     condition("Available", "False", "NoReadyModelHost",
                               "No model-host replica is ready yet"),
                     condition("Progressing", "True", "DownloadingWeights",
-                              "Pulling model weights to the node cache (2.9 of 4.4 GiB)"),
+                              "Model host started; downloading weights to the node cache"),
+                ]
+            elif outcome == "pulling":
+                phase, ready, unavailable = "progressing", 0, replicas
+                conditions = [
+                    condition("Applied", "False", "DesiredReleaseProgressing",
+                              "Pulling the model runtime image on a new node"),
+                    condition("Available", "False", "NoReadyModelHost",
+                              "No model-host replica is ready yet"),
+                    condition("Progressing", "True", "PullingImage",
+                              "Pulling the model runtime image on a new node"),
                 ]
             else:  # failed
                 phase, ready, unavailable = "failed", 0, replicas
@@ -421,6 +455,8 @@ class Demo:
             return f"{level} {clock} [{source}] {text}"
 
         image = "public.ecr.aws/hexelstudio/fabric/model-host:git-4f1c2a9"
+        # How long ago the seed started, so in-progress work advances between reports.
+        running = now - self.started
         by_stamp: dict[str, list[dict]] = {}
         for name, deployment in self.deployments.items():
             if not deployment["stamp"]:
@@ -488,17 +524,51 @@ class Demo:
                         "events": scheduled,
                         "log": "\n".join(log_lines),
                     })
+                elif outcome == "pulling":
+                    # A fresh machine: the runtime image is still coming down.
+                    pull_started = 75 + running
+                    pods.append({
+                        "name": pod_name, "phase": "Pending", "ready": False,
+                        "restart_count": 0, "container_state": "waiting",
+                        "container_reason": "ContainerCreating",
+                        "started_at": at(pull_started + 2),
+                        "conditions": [
+                            {"type": "PodScheduled", "status": "True",
+                             "last_transition_time": at(pull_started + 2)},
+                            {"type": "Initialized", "status": "True",
+                             "last_transition_time": at(pull_started + 1)},
+                            {"type": "ContainersReady", "status": "False",
+                             "reason": "ContainersNotReady", "last_transition_time": at(pull_started)},
+                            {"type": "Ready", "status": "False", "reason": "ContainersNotReady",
+                             "last_transition_time": at(pull_started)},
+                        ],
+                        "events": [
+                            event("Normal", "Scheduled",
+                                  f"Successfully assigned fabric-stamp/{pod_name} to rtx-pro-6000",
+                                  pull_started + 2),
+                            event("Normal", "Pulling", f'Pulling image "{image}"', pull_started),
+                        ],
+                        "log": "",
+                        "log_error": "container has not started yet",
+                    })
                 elif outcome == "deploying":
+                    # Weights are downloading; the agent measures the node cache against the
+                    # 4.4 GB the Hugging Face API lists, and the bar advances between reports.
+                    total = 4_400_000_000
+                    downloaded = min(int(total * 0.97), int(total * 0.58 + 9_000_000 * running))
                     log_lines = startup + [
-                        stamp_line(120, "INFO", "weight_utils.py:449",
+                        stamp_line(760, "INFO", "weight_utils.py:449",
                                    "Using model weights format ['*.safetensors']"),
-                    ] + [
-                        stamp_line(100 - 12 * i, "INFO", "default_loader.py:268",
-                                   f"Loading safetensors checkpoint shards: {i + 1}/8 "
-                                   f"[{(i + 1) * 12.5:.0f}%]")
-                        for i in range(5)
+                        stamp_line(759, "WARNING", "__init__.py:1182",
+                                   "HF_HUB_ENABLE_HF_TRANSFER is unset; downloading with the "
+                                   "default backend"),
                     ]
                     pods.append({
+                        "weights": {
+                            "repository": release, "downloaded_bytes": downloaded,
+                            "total_bytes": total, "in_progress_files": 1,
+                            "measured_at": at(0),
+                        },
                         "name": pod_name, "phase": "Running", "ready": False,
                         "restart_count": 0, "container_state": "running", "started_at": at(900),
                         "conditions": conditions_ready + [
@@ -568,6 +638,129 @@ class Demo:
             stamp = self.stamps[stamp_name]
             self.call("POST", f"/v1/stamps/{stamp['id']}/hosts", token=stamp["agent_credential"],
                       body={"observed_at": at(0), "deployments": deployments})
+
+    # --- activity logs ---------------------------------------------------------------
+
+    def report_activity(self) -> None:
+        """What each stamp's agent would have recorded since it was bootstrapped.
+
+        Event ids are fixed, so a re-run is stored once (the control plane deduplicates).
+        """
+        now = time.time()
+        image = "public.ecr.aws/hexelstudio/fabric/model-host:git-4f1c2a9"
+
+        def at(seconds_ago: float) -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - seconds_ago))
+
+        def gpus_line(stamp: dict) -> str:
+            return ", ".join(f"{count} × {gpu['product']} found ({gpu['memory_bytes'] / GIB:.0f} GiB)"
+                             for gpu, count in stamp["gpus"])
+
+        def story(stamp: dict, enrolled_ago: float, extra: list[tuple]) -> list[dict]:
+            total = self.total_gpus(stamp)
+            first, count = stamp["gpus"][0]
+            base = [
+                (enrolled_ago, "enrolled", "success", f"Enrolled with the control plane as {stamp['name']}",
+                 None, {"mode": "byoi"}),
+                (enrolled_ago - 1, "gpus_measured", "info", gpus_line(stamp), None,
+                 {"product": first["product"], "count": count,
+                  "memory_gib": round(first["memory_bytes"] / GIB, 1), "allocatable_gpus": total}),
+                (enrolled_ago - 2, "gpu_runtime", "success",
+                 f"GPU runtime OK: {total} nvidia.com/gpu allocatable", None,
+                 {"allocatable_gpus": total, "ok": True}),
+                (enrolled_ago - 3, "ready", "success", "Ready for deployments", None,
+                 {"allocatable_gpus": total}),
+            ]
+            events = []
+            for index, (ago, kind, severity, message, hint, details) in enumerate(base + extra):
+                events.append({"id": f"demo-{stamp['name']}-{index:03d}", "kind": kind,
+                               "severity": severity, "message": message, "hint": hint,
+                               "details": details or {}, "at": at(ago)})
+            return events
+
+        pull_hint = ("The first deployment on this machine downloads the model runtime once; "
+                     "later deployments start from the local copy.")
+        stories = {
+            "aks-gpu": story(self.stamps["aks-gpu"], 5400, [
+                (1000, "desired_state_applied", "info",
+                 "Applied desired-state generation 2: configured qwen3.5-2b, configured qwen3.5-0.8b",
+                 None, {"generation": 2, "changes": 2}),
+                (898, "image_pull_started", "info", "Pulling the model runtime image for qwen3.5-2b",
+                 pull_hint, {"image": image}),
+                (796, "image_pull_finished", "success", "Model runtime image pulled in 1m42s (9.9 GB)",
+                 None, {"image": image, "seconds": 102, "size_bytes": 9876543210}),
+                (420, "credentials_rotated", "success",
+                 "Rotated machine credentials (version 2, requested from the console)", None,
+                 {"credential_version": 2, "reason": "requested"}),
+            ]),
+            "gcp-rtx6000": story(self.stamps["gcp-rtx6000"], 4200, [
+                (950, "desired_state_applied", "info",
+                 "Applied desired-state generation 2: configured qwen3.5-2b-large, configured qwen3.5-2b-code",
+                 None, {"generation": 2, "changes": 2}),
+                (898, "image_pull_started", "info",
+                 "Pulling the model runtime image for qwen3.5-2b-large", pull_hint, {"image": image}),
+                (796, "image_pull_finished", "success", "Model runtime image pulled in 1m42s (9.9 GB)",
+                 None, {"image": image, "seconds": 102, "size_bytes": 9876543210}),
+            ]),
+            "vm-gpu": story(self.stamps["vm-gpu"], 7200, [
+                (6900, "gpu_runtime", "warning",
+                 "GPU runtime missing: 1 GPU node(s) advertise no allocatable nvidia.com/gpu",
+                 "The NVIDIA device plugin is not running or cannot reach the driver. On k3s, "
+                 "re-run the bootstrap command; otherwise check nvidia-smi on the node and the "
+                 "nvidia-device-plugin pods in kube-system.", {"ok": False, "unequipped_nodes": 1}),
+                (6600, "gpu_runtime", "success", "GPU runtime OK: 2 nvidia.com/gpu allocatable", None,
+                 {"allocatable_gpus": 2, "ok": True}),
+                (960, "desired_state_applied", "info",
+                 "Applied desired-state generation 2: configured qwen3.5-0.8b-batch, configured qwen3.5-2b-longctx",
+                 None, {"generation": 2, "changes": 2}),
+                (796, "image_pull_finished", "success", "Model runtime image pulled in 1m42s (9.9 GB)",
+                 None, {"image": image, "seconds": 102, "size_bytes": 9876543210}),
+                (300, "model_host_failed", "error",
+                 "Model host for qwen3.5-2b-longctx failed: The model does not fit in GPU memory with these settings.",
+                 "Lower max_model_len or max_num_seqs, raise gpu_memory_utilization slightly, or "
+                 "deploy on a GPU with more memory.", {"reason": "GPUOutOfMemory", "restarts": 3}),
+            ]),
+            "rtx-pro-6000": story(self.stamps["rtx-pro-6000"], 480, [
+                (90, "desired_state_applied", "info",
+                 "Applied desired-state generation 1: configured qwen3.5-4b-docs", None,
+                 {"generation": 1, "changes": 1}),
+                (75, "image_pull_started", "info", "Pulling the model runtime image for qwen3.5-4b-docs",
+                 pull_hint, {"image": image}),
+            ]),
+        }
+        # The vm-gpu story has two GPU runtime checks before "ready"; keep its order honest.
+        stories["vm-gpu"][3]["at"] = at(6590)
+        for name, events in stories.items():
+            stamp = self.stamps[name]
+            self.call("POST", f"/v1/stamps/{stamp['id']}/events", token=stamp["agent_credential"],
+                      body={"events": events})
+        log("activity logs: " + ", ".join(f"{name} {len(events)}" for name, events in stories.items()))
+
+    def enroll_removed_stamp(self) -> None:
+        """A stamp that was enrolled and later removed, kept behind "Show removed"."""
+        stamp = dict(REMOVED_STAMP)
+        stamp["inference_url"] = f"https://{stamp['name']}.gw.northstar-labs.example"
+        token = self.call("POST", self.acct("/stamp-enrollment-tokens"),
+                          body={"allowed_mode": "byoi", "expires_in_minutes": 30})
+        self.run_agent(stamp, enroll_token=token["enrollment_token"])
+        self.load_credentials(stamp)
+        self.heartbeat(stamp)
+        # A deployment that was running there, which removal leaves marked "Stamp removed".
+        created = self.call("POST", self.acct("/deployments"), body={
+            "name": "legacy-chat", "model_alias": "qwen3.5-0.8b-legacy",
+            "spec": {"runtime": {"release": "Qwen/Qwen3.5-0.8B"}, "replicas": 1,
+                     "resources": {"gpu_class": "a10"}}})
+        self.call("POST", self.acct(f"/deployments/{created['id']}/placements"),
+                  body={"stamp_id": stamp["id"]})
+        self.removed_deployment_id = created["id"]
+        now = time.time()
+        self.call("POST", f"/v1/stamps/{stamp['id']}/events", token=stamp["agent_credential"], body={
+            "events": [{"id": f"demo-{stamp['name']}-000", "kind": "enrolled", "severity": "success",
+                        "message": f"Enrolled with the control plane as {stamp['name']}",
+                        "details": {}, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                           time.gmtime(now - 86400 * 3))}]})
+        self.call("DELETE", self.acct(f"/stamps/{stamp['id']}"))
+        log(f"stamp {stamp['name']}: enrolled and removed (hidden behind Show removed)")
 
     # --- data planes, traffic, usage -----------------------------------------------
 
@@ -733,6 +926,9 @@ class Demo:
             "deployment_ids": {name: d["id"] for name, d in self.deployments.items()},
             "playground_deployment_id": playground["id"],
             "stamps": {name: s["id"] for name, s in self.stamps.items()},
+            "first_deployment_id": self.deployments["docs-qa"]["id"],
+            "downloading_deployment_id": self.deployments["code-review-bot"]["id"],
+            "removed_stamp_deployment_id": self.removed_deployment_id,
             # Where each stamp's reported gateway really listens, for the demo edge gateway's
             # address overrides: {"aks-gpu.gw.northstar-labs.example:443": "127.0.0.1:8090"}.
             "gateway_addresses": {
@@ -797,6 +993,7 @@ def main() -> None:
         demo.seed_people_and_account()
         demo.enroll_stamps()
         demo.create_deployments()
+        demo.enroll_removed_stamp()
         demo.start_data_planes()
         demo.generate_traffic()
         demo.seed_agent_runs()

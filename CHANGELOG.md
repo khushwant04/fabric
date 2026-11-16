@@ -8,6 +8,21 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Stamp activity log: the agent records enrollment, the GPUs it measured, whether the GPU
+  runtime works, readiness, credential rotations, applied desired-state generations,
+  model-host image pulls and failures, and pushes them to `POST /v1/stamps/{id}/events`. The
+  control plane keeps the newest 200 per stamp under forced row-level security; the console's
+  new stamp page shows them as a live timeline. See [docs/stamp-activity.md](docs/stamp-activity.md).
+- Remove a stamp from the console, with a confirmation. Revoked stamps leave the list and
+  totals (**Show removed**); stale stamps get a warning with **Remove**. Deployments placed on
+  a removed stamp are kept and marked `stamp_removed`, with **Redeploy**.
+- Deployment **Logs** tab (replacing Hosts): a start-up timeline from queued to ready with the
+  runtime image pull (elapsed, size), weight download progress measured in the node cache
+  against the Hugging Face API, failures with a diagnosis and hint, and a full-height log
+  viewer with follow, pause, search, filter and download. Creating a deployment opens it.
+- `scripts/bootstrap-stamp.sh` prints numbered ✓/✗ steps, checks the GPU runtime, and ends
+  with a summary pointing at the stamp's console page.
+
 - Live model-host status and log tails in the console: the stamp agent pushes each
   model-host pod's phase, container state, recent Kubernetes events and the last lines of
   its log to a new stamp-authenticated endpoint, and the deployment detail page's **Hosts**
@@ -15,6 +30,9 @@ yet, so earlier work is summarised by period from the pull-request history.
   [docs/model-host-logs.md](docs/model-host-logs.md).
 
 ### Changed
+
+- Model-host pre-pull is off by default (`operator.managedModelHost.prepull.enabled=false`)
+  and no longer suggested by the bootstrap script, so customers watch the first download live.
 
 - CI publishes `model-host` (vLLM with the Fabric kernel) to ECR Public with the other
   release images; the images job's timeout is 60 minutes to fit its first push.

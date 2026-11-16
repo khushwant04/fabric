@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/khushwant04/fabric/agent/internal/activity"
 	"github.com/khushwant04/fabric/agent/internal/agentcontract"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
 	"github.com/khushwant04/fabric/agent/internal/hardware"
@@ -118,6 +119,11 @@ type Config struct {
 	// control plane beside the reconcile loop, so the console can show a deployment
 	// starting without anyone running kubectl. Nil sends none.
 	HostReporter HostReporter
+	// Activity is the stamp's activity log. Nil gives the agent its own; events are only
+	// uploaded when ReportActivity is set.
+	Activity *activity.Recorder
+	// ReportActivity uploads the activity log to POST /v1/stamps/{id}/events.
+	ReportActivity bool
 }
 
 // Agent holds one stamp's reconciliation state.
@@ -157,6 +163,23 @@ type Agent struct {
 	// loop. Rotation replaces the credential on the loop; the host reporter reads it on its
 	// own schedule, so it reads this rather than the client's plain field.
 	agentCredential atomic.Value
+
+	// activity is the stamp's activity log (activity.go).
+	activity *activity.Recorder
+	// infos is a copy of the assignments' aliases and repositories for other goroutines.
+	infos atomic.Value
+	// gpuRuntime is whether the last measurement found allocatable GPUs.
+	gpuRuntime string
+	// weightsRejected is set once the control plane refused a host report carrying weight
+	// progress, which an older control plane does because it rejects unknown fields.
+	weightsRejected atomic.Bool
+	// preEnrollment holds a measurement taken before enrollment until it can be recorded.
+	preEnrollment *measurement
+}
+
+type measurement struct {
+	capacity hardware.Capacity
+	err      error
 }
 
 // New builds an agent. It does not perform any network call.
@@ -170,8 +193,13 @@ func New(config Config, log *slog.Logger) *Agent {
 	if config.CapacityInterval <= 0 {
 		config.CapacityInterval = time.Minute
 	}
+	recorder := config.Activity
+	if recorder == nil {
+		recorder = activity.New(log)
+	}
 	return &Agent{
 		config:              config,
+		activity:            recorder,
 		client:              controlplane.New(config.ControlPlaneURL, config.RequestTimeout),
 		log:                 log,
 		known:               map[string]state.Deployment{},
@@ -267,6 +295,7 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		}
 		a.log.Info("using persisted stamp identity",
 			"stamp_id", existing.StampID, "acked_generation", existing.AckedGeneration)
+		a.recordIdentityReused(existing.StampID)
 		return nil
 	}
 
@@ -304,6 +333,15 @@ func (a *Agent) Ensure(ctx context.Context) error {
 	a.buildSink()
 
 	a.setAgentCredential(enrolled.AgentCredential)
+	enrolledName := enrolled.Stamp.Name
+	if enrolledName == "" {
+		enrolledName = a.config.StampName
+	}
+	a.recordEnrolled(enrolled.Stamp.ID, enrolledName, enrolled.Stamp.Mode)
+	if a.preEnrollment != nil {
+		a.recordCapacity(a.preEnrollment.capacity, a.preEnrollment.err)
+		a.preEnrollment = nil
+	}
 	a.log.Info("enrolled",
 		"stamp_id", enrolled.Stamp.ID, "mode", enrolled.Stamp.Mode,
 		"stamp_account", enrolled.Stamp.AccountID)
@@ -331,8 +369,20 @@ func (a *Agent) startHostReporter(ctx context.Context) {
 	client := controlplane.New(a.config.ControlPlaneURL, a.config.RequestTimeout)
 	client.CredentialSource = a.currentAgentCredential
 	go a.config.HostReporter.Run(ctx, func(ctx context.Context, report hostreport.Report) error {
+		a.observeHosts(report)
+		if a.weightsRejected.Load() {
+			report, _ = withoutWeights(report)
+		}
 		err := client.ReportHosts(ctx, stampID, report)
 		var apiErr *controlplane.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity {
+			if stripped, had := withoutWeights(report); had {
+				// An older control plane rejects the unknown field; keep the rest.
+				a.weightsRejected.Store(true)
+				a.log.Info("control plane does not accept weight progress; sending host reports without it")
+				err = client.ReportHosts(ctx, stampID, stripped)
+			}
+		}
 		if errors.As(err, &apiErr) &&
 			(apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusMethodNotAllowed) {
 			return fmt.Errorf("%w: %v", hostreport.ErrNotAccepted, err)
@@ -356,6 +406,13 @@ func (a *Agent) refreshCapacity(ctx context.Context) {
 	}
 
 	capacity, err := a.config.Capacity.Measure(ctx)
+	if a.credentials == nil {
+		// Measured ahead of enrollment; recorded once "enrolled" is, so the activity log
+		// reads in the order an owner expects.
+		a.preEnrollment = &measurement{capacity: capacity, err: err}
+	} else {
+		a.recordCapacity(capacity, err)
+	}
 	if err != nil {
 		// Logged at warn even when part of the read succeeded, because an unmeasured
 		// stamp is one whose placements are decided on stale or declared numbers.
@@ -530,6 +587,7 @@ func (a *Agent) rotateCredentials(ctx context.Context, reason string) error {
 	a.credentials.CredentialsIssuedAt = next.CredentialsIssuedAt
 	a.setAgentCredential(next.AgentCredential)
 	a.handOffTelemetryCredential()
+	a.recordRotation(reason, rotated.CredentialVersion, nil)
 	a.log.Info("rotated machine credentials",
 		"reason", reason,
 		"credential_version", rotated.CredentialVersion,
@@ -587,11 +645,13 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		// A failed rotation does not stop reconciliation: the current credentials still
 		// work, and the control plane keeps asking for a rotation until one succeeds.
 		if err := a.rotateCredentials(ctx, reason); err != nil {
+			a.recordRotation(reason, 0, err)
 			a.log.Error("credential rotation failed; keeping the current credentials",
 				"reason", reason, "error", err)
 		}
 	}
 	a.repairTelemetryHandOff()
+	a.recordReadiness()
 
 	desired, err := a.client.DesiredState(
 		ctx, a.credentials.StampID, a.credentials.AckedGeneration,
@@ -612,7 +672,9 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		previousGenerations[id] = generation
 	}
 	previousVerification := a.verification
+	previousAck := a.credentials.AckedGeneration
 	changed := false
+	var changes []string
 	// Checked before the assignments, and on every pass rather than only when an
 	// assignment arrives: a steady-state poll returns no deployments at all, and a stamp
 	// whose issuer is wrong has to converge without waiting for an unrelated change.
@@ -631,6 +693,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 			if _, present := a.known[assignment.DeploymentID]; present {
 				delete(a.known, assignment.DeploymentID)
 				changed = true
+				changes = append(changes, "removed "+orID(assignment.ModelAlias, assignment.DeploymentID))
 				a.log.Info("withdrew deployment", "deployment_id", assignment.DeploymentID)
 			}
 			continue
@@ -659,6 +722,11 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.EnableAutoToolChoice, entry.ToolCallParser = toolCallingFromSpec(assignment.Spec)
 		if previous, present := a.known[assignment.DeploymentID]; !present || !reflect.DeepEqual(previous, entry) {
 			changed = true
+			verb := "updated "
+			if !present {
+				verb = "configured "
+			}
+			changes = append(changes, verb+orID(assignment.ModelAlias, assignment.DeploymentID))
 			a.log.Info("configured deployment",
 				"deployment_id", assignment.DeploymentID,
 				"account_id", assignment.AccountID,
@@ -686,7 +754,11 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		if err := state.SaveCredentials(a.config.CredentialsPath, a.credentials); err != nil {
 			return nil, fmt.Errorf("persist acknowledged generation: %w", err)
 		}
+		if changed && len(desired.Deployments) > 0 && desired.MaxGeneration > previousAck {
+			a.recordApplied(desired.MaxGeneration, changes)
+		}
 	}
+	a.publishDeploymentInfo()
 
 	// Desired state is requested after the acknowledged generation, so a later
 	// pass returns nothing new. A status write that failed here would never be
@@ -1200,6 +1272,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	a.startHostReporter(ctx)
+	a.startActivityReporter(ctx)
 
 	ticker := time.NewTicker(a.config.PollInterval)
 	defer ticker.Stop()
@@ -1210,7 +1283,10 @@ func (a *Agent) Run(ctx context.Context) error {
 			if errors.As(err, &apiErr) && !apiErr.Retryable() {
 				return fmt.Errorf("stopping: %w", err)
 			}
+			a.recordReconcileError(err)
 			a.log.Warn("reconcile failed, will retry", "error", err)
+		} else {
+			a.activity.Forget("reconcile-error")
 		}
 
 		select {

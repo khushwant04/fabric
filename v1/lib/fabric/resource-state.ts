@@ -5,6 +5,14 @@ import type { Deployment, DeploymentStatus, Placement, Stamp } from "./types"
 export const STAMP_LIVENESS_MS = 5 * 60 * 1000
 const stopping = new Set(["deleting", "terminating", "draining", "deleted", "terminated"])
 const failures = new Set(["failed", "error", "blocked"])
+/** Placement and deployment status after the stamp it was placed on was removed. */
+export const STAMP_REMOVED = "stamp_removed"
+const STAMP_REMOVED_DETAIL = "The stamp this deployment was placed on was removed, so nothing serves it. Redeploy it onto another stamp, or delete it."
+
+/** Placements that no longer serve: being removed, or on a stamp that is gone. */
+export function isInactivePlacement(status: string) {
+  return ["terminating", "deleted", "revoked", STAMP_REMOVED].includes(status.toLowerCase())
+}
 
 function count(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
@@ -44,8 +52,13 @@ export function deploymentState(
   const base = { readyReplicas: null, desiredReplicas: replicas }
   if (stopping.has(phase)) return { ...base, status: ["deleted", "terminated"].includes(phase) ? "deleted" : "terminating", detail: "Serving is being removed. GPUs are released after model-host cleanup is confirmed." }
   if (failures.has(phase)) return { ...base, status: "failed", detail: "The deployment has reported a failure. Check its workload observations." }
-  if (!statuses || !placements) return { ...base, status: "unverified", detail: "Workload observations could not be checked." }
-  const owned = placements.filter((item) => item.deployment_id === deployment.id && item.account_id === deployment.account_id && !stopping.has(item.status.toLowerCase()) && item.status.toLowerCase() !== "revoked")
+  if (!statuses || !placements) {
+    if (phase === STAMP_REMOVED) return { ...base, status: STAMP_REMOVED, detail: STAMP_REMOVED_DETAIL }
+    return { ...base, status: "unverified", detail: "Workload observations could not be checked." }
+  }
+  const mine = placements.filter((item) => item.deployment_id === deployment.id && item.account_id === deployment.account_id)
+  const owned = mine.filter((item) => !stopping.has(item.status.toLowerCase()) && !["revoked", STAMP_REMOVED].includes(item.status.toLowerCase()))
+  if (!owned.length && (phase === STAMP_REMOVED || mine.some((item) => item.status.toLowerCase() === STAMP_REMOVED))) return { ...base, status: STAMP_REMOVED, detail: STAMP_REMOVED_DETAIL }
   if (!owned.length) return { ...base, status: "waiting", detail: "Waiting for an active placement on compatible capacity." }
   const desiredReplicas = replicas * owned.length
   let readyReplicas = 0

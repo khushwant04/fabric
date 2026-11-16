@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
-import { confirmsModelDeletion, deploymentStampOptions, deploymentState, gpuCapacity, STAMP_LIVENESS_MS, stampState, statusReason } from "../lib/fabric/resource-state"
+import { confirmsModelDeletion, deploymentStampOptions, deploymentState, gpuCapacity, isInactivePlacement, STAMP_LIVENESS_MS, stampState, statusReason } from "../lib/fabric/resource-state"
 import type { Deployment, DeploymentStatus, Placement, Stamp } from "../lib/fabric/types"
 
 const deployment: Deployment = { id: "d1", account_id: "a1", name: "test", model_alias: "model-a", generation: 3, status: "ready", created_at: "", updated_at: "", desired_spec: { replicas: 2, resources: { gpu_count: 1, gpu_class: "t4" }, runtime: { release: "test", kernel_mode: "auto", strategy: "least_in_flight" } } }
@@ -111,4 +111,17 @@ test("create-deployment infrastructure options list only active stamps, with hon
     { id: "s2", label: "gpu-b · Kubernetes · Unknown GPUs" },
   ])
   assert.deepEqual(deploymentStampOptions([], now), [])
+})
+
+test("a deployment whose stamp was removed says so instead of claiming readiness", () => {
+  const removed = { ...placement, status: "stamp_removed" }
+  const state = deploymentState({ ...deployment, status: "stamp_removed" }, [status], [removed])
+  assert.equal(state.status, "stamp_removed")
+  assert.match(state.detail, /Redeploy/)
+  // Even before the control plane updated the deployment row, a removed placement shows.
+  assert.equal(deploymentState(deployment, [status], [removed]).status, "stamp_removed")
+  // Redeployed elsewhere: the live placement decides.
+  assert.equal(deploymentState(deployment, [status], [removed, placement]).status, "ready")
+  assert.equal(deploymentState({ ...deployment, status: "stamp_removed" }).status, "stamp_removed")
+  assert.ok(isInactivePlacement("stamp_removed") && isInactivePlacement("terminating") && !isInactivePlacement("assigned"))
 })

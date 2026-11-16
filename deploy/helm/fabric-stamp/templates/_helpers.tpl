@@ -188,6 +188,13 @@ Whether the agent pushes model-host pod status, events and log tails to the cont
 string so `helm upgrade --reuse-values` from a chart without the value keeps it on, while
 an explicit false still turns it off.
 */}}
+{{- define "fabric-stamp.measuresWeights" -}}
+{{- $host := .Values.operator.managedModelHost -}}
+{{- if and (include "fabric-stamp.reportsHosts" .) (ne (toString .Values.agent.weightProgress) "false") (eq (toString $host.cache.mode) "hostPath") -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "fabric-stamp.reportsHosts" -}}
 {{- if and (include "fabric-stamp.managesModelHost" .) (ne (toString .Values.agent.reportHosts) "false") -}}
 true

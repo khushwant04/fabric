@@ -79,7 +79,36 @@ test("the real creation action sends the model repository and chosen stamp witho
   assert.equal(payload.model_alias, "qwen3.5-4b")
   assert.deepEqual(JSON.parse(calls[1].init.body), { stamp_id: stampId })
   assert.ok(calls.every(({ path, init }) => path.startsWith("/v1/accounts/tenant-one/") && init.token === "tenant-one-token"))
-  assert.deepEqual(redirects, ["/deployments/deployment-one"])
+  // Straight to the Logs tab, so the user watches the deployment come up.
+  assert.deepEqual(redirects, ["/deployments/deployment-one?tab=logs"])
+})
+
+test("removing a stamp calls the existing revocation for the session's account only", async () => {
+  const calls = []
+  const revalidated = []
+  class FabricApiError extends Error { constructor(status, message) { super(message); this.status = status } }
+  let failWith = null
+  const actions = compile("../app/(console)/actions.ts", {
+    "node:crypto": { randomUUID: () => "unused" },
+    "next/cache": { revalidatePath: (path) => revalidated.push(path) },
+    "next/navigation": { redirect() {} },
+    "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
+    "@/lib/fabric/client": { FabricApiError, async controlPlaneRequest(path, init) { calls.push({ path, init }); if (failWith) throw failWith } },
+    "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope(_context, scope) { assert.equal(scope, "stamps:write") } },
+  })
+  const removed = await actions.removeStamp(stampId)
+  assert.equal(removed.ok, true)
+  assert.equal(calls[0].path, `/v1/accounts/tenant-one/stamps/${stampId}`)
+  assert.equal(calls[0].init.method, "DELETE")
+  assert.equal(calls[0].init.token, "tenant-one-token")
+  assert.ok(revalidated.includes("/stamps") && revalidated.includes("/deployments"))
+
+  assert.equal((await actions.removeStamp("../accounts/other")).error, "Choose an enrolled stamp.")
+  assert.equal(calls.length, 1)
+
+  failWith = new FabricApiError(404, "Inference stamp does not exist")
+  assert.match((await actions.removeStamp(stampId)).error, /unavailable/)
 })
 
 test("the creation action preserves explicit disabled tool calling and sends a selected parser", async () => {
@@ -159,7 +188,7 @@ test("a lost placement response still opens the saved deployment for review and 
   })
   await actions.createDeployment({}, form())
   assert.equal(creations, 1)
-  assert.deepEqual(redirects, ["/deployments/saved-deployment?placement=failed"])
+  assert.deepEqual(redirects, ["/deployments/saved-deployment?tab=logs&placement=failed"])
 })
 
 // Values built inside the vm context carry its prototypes, so compare their JSON shape.

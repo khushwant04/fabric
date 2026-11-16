@@ -33,12 +33,16 @@ from app.schemas import (
     StampCredentialRotationResponse,
     StampEnrollRequest,
     StampEnrollResponse,
+    StampEventsReportRequest,
+    StampEventsReportResponse,
+    StampEventsResponse,
     StampResponse,
     StatusReportRequest,
     StatusReportResponse,
 )
 from app.services.accounts import get_account
 from app.services.host_reports import ingest_host_report
+from app.services.stamp_events import ingest_stamp_events, list_stamp_events
 from app.services.stamps import (
     build_desired_state,
     create_enrollment_token,
@@ -160,6 +164,29 @@ async def revoke_account_stamp(
     )
     await commit_and_invalidate(session, [principal.account_id])
     return StampResponse.model_validate(stamp)
+
+
+@router.get(
+    "/v1/accounts/{account_id}/stamps/{stamp_id}/events",
+    response_model=StampEventsResponse,
+    summary="Read a stamp's registration and activity log, newest first",
+)
+async def read_stamp_events(
+    response: Response,
+    stamp_id: uuid.UUID = Path(...),
+    limit: int = Query(default=200, ge=1, le=200),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.STAMPS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> StampEventsResponse:
+    """Not cached: the console polls this while the stamp page is open.
+
+    A removed stamp keeps its log, so the page can still explain what happened to it.
+    """
+    events = await list_stamp_events(
+        session, account_id=principal.account_id, stamp_id=stamp_id, limit=limit
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return events
 
 
 @router.post(
@@ -319,6 +346,34 @@ async def report_hosts(
         accepted_at=accepted_at,
         accepted_pods=accepted,
         ignored_deployments=ignored,
+    )
+
+
+@router.post(
+    "/v1/stamps/{stamp_id}/events",
+    response_model=StampEventsReportResponse,
+    summary="Report stamp lifecycle events for the activity log",
+)
+async def report_events(
+    payload: StampEventsReportRequest,
+    stamp_id: uuid.UUID = Path(...),
+    context: StampContext = Depends(require_agent_credential),
+    session: AsyncSession = Depends(get_db_session),
+) -> StampEventsReportResponse:
+    """Append to this stamp's activity log.
+
+    Authorized like a host report, by the status-write scope every agent credential already
+    holds, so existing stamps need no new credential. The entries belong to the stamp's own
+    account; nothing in the body can name another.
+    """
+    require_stamp_match(context, stamp_id)
+    context.require_scopes(scope_defs.STAMP_STATUS_WRITE)
+    accepted, duplicates = await ingest_stamp_events(
+        session, stamp_id=context.stamp_id, report=payload
+    )
+    await session.commit()
+    return StampEventsReportResponse(
+        stamp_id=context.stamp_id, accepted=accepted, duplicates=duplicates
     )
 
 

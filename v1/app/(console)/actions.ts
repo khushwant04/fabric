@@ -96,8 +96,10 @@ export async function createDeployment(_previous: ActionState, formData: FormDat
     placementFailed = true
   }
   revalidatePath("/deployments")
+  // Straight to the Logs tab, so the user watches the image pull, the weight download and
+  // start-up as they happen.
   redirect(
-    `/deployments/${deployment.id}${placementFailed ? "?placement=failed" : ""}`
+    `/deployments/${deployment.id}?tab=logs${placementFailed ? "&placement=failed" : ""}`
   )
 }
 
@@ -142,6 +144,32 @@ export async function requestStampRotation(stampId: string): Promise<ActionState
     revalidatePath("/stamps")
     return { ok: true }
   } catch (error) {
+    return { error: actionError(error) }
+  }
+}
+
+// Removes a stamp: the control plane revokes its agent and telemetry credentials at once, so
+// the agent stops syncing. Deployments placed there are kept and marked "stamp removed" for
+// their owner to move or delete; nothing is deleted on the user's behalf.
+export async function removeStamp(stampId: string): Promise<ActionState> {
+  const { context, token } = await mutationContext("stamps:write")
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stampId)) {
+    return { error: "Choose an enrolled stamp." }
+  }
+  try {
+    await controlPlaneRequest(
+      `/v1/accounts/${context.account.id}/stamps/${encodeURIComponent(stampId)}`,
+      { method: "DELETE", token }
+    )
+    revalidatePath("/stamps")
+    revalidatePath(`/stamps/${stampId}`)
+    revalidatePath("/deployments")
+    revalidatePath("/dashboard")
+    return { ok: true }
+  } catch (error) {
+    if (error instanceof FabricApiError && [403, 404].includes(error.status)) {
+      return { error: "This stamp is unavailable or you do not have permission to remove it." }
+    }
     return { error: actionError(error) }
   }
 }

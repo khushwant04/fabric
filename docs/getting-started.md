@@ -52,13 +52,30 @@ curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/boo
   --host gpu-01.stamps.example.com --email ops@example.com
 ```
 
-`scripts/bootstrap-stamp.sh` does the following:
-- installs k3s with NVIDIA support and the `nvidia` RuntimeClass
-- picks the model dtype from the GPU: bf16 on compute capability 8.0 and newer, fp16 on T4
-- installs cert-manager and a Let's Encrypt issuer for `--host`
-- stores the token in a Secret
-- installs the stamp chart and images of one pinned release
-- waits until the agent has enrolled
+`scripts/bootstrap-stamp.sh` prints numbered steps with ✓ or ✗ and writes the detail to
+`/var/log/fabric-stamp-bootstrap.log`:
+
+1. **Checking GPU**: reads `nvidia-smi` and picks the model dtype (bf16 on compute capability
+   8.0 and newer, fp16 on T4).
+2. **Installing k3s**: k3s with NVIDIA support, the `nvidia` RuntimeClass and the device plugin.
+3. **GPU runtime**: checks that Kubernetes can allocate `nvidia.com/gpu`. Without it models fail
+   with "Failed to infer device type", so the script says so here rather than at the first
+   deployment.
+4. **TLS**: cert-manager and a Let's Encrypt issuer for `--host` (skipped without it).
+5. **Enrolling**: stores the token in a Secret, installs the stamp chart and images of one pinned
+   release, and waits until the agent has enrolled.
+6. **Done**: a summary with the stamp's console page (pass `--console https://console.example.com`
+   for a direct link).
+
+The stamp's page in the console (**Inference stamps → the stamp**) has a live **Activity** log
+fed by the agent. Right after the command finishes it reads, newest first: *Ready for
+deployments*, *GPU runtime OK*, *1 × NVIDIA RTX PRO 6000 Blackwell Server Edition found
+(96 GiB)*, *Enrolled*. Later entries record credential rotations, desired-state generations,
+model-host image pulls and failures with a hint.
+
+Nothing is pre-pulled. Create a deployment and the console opens its **Logs** tab: the first
+deployment on the machine downloads the model runtime image once (several GB), then the model's
+weights, and both are shown with progress. See [model-host logs](model-host-logs.md).
 
 Before running it, point a DNS A record for `--host` at the VM and open inbound ports 80 and 443.
 Without `--host`, the stamp enrolls, but the edge gateway cannot route to it.
@@ -66,7 +83,7 @@ Without `--host`, the stamp enrolls, but the edge gateway cannot route to it.
 Re-running the command upgrades or repairs the stamp in place. The agent keeps its identity, so
 no new token is needed. Other options:
 - `--region`: placement region
-- `--prepull`: models to cache on the node
+- `--console`: console origin, for a direct link to the stamp page in the summary
 - `--dtype`: override the automatic choice
 - `--no-gpu`: install without GPU support
 - `--release`: install a different release
