@@ -105,6 +105,30 @@ class MembershipResponse(BaseModel):
     status: str
 
 
+class MemberResponse(MembershipResponse):
+    """A membership with the person it belongs to, for listing an account's members.
+
+    ``email`` and ``display_name`` are the profile the member's identity provider last
+    reported at sign-in. Either may be absent: a member added by subject who has not yet
+    signed in has neither.
+    """
+
+    email: str | None = None
+    display_name: str | None = None
+
+
+class MeMembershipResponse(MembershipResponse):
+    """One of the caller's own memberships, with the account it grants access to.
+
+    The account's name and slug are included so a client can label the accounts a person
+    may switch between without reading each account separately, which would need a token
+    bound to that account first.
+    """
+
+    account_name: str | None = None
+    account_slug: str | None = None
+
+
 class MemberCreateRequest(BaseModel):
     auth0_subject: str = Field(min_length=1, max_length=255)
     email: str | None = Field(default=None, max_length=320)
@@ -136,7 +160,7 @@ class SelfResponse(BaseModel):
 
 class MeResponse(BaseModel):
     user: UserResponse
-    memberships: list[MembershipResponse]
+    memberships: list[MeMembershipResponse]
 
 
 # --- service principals ---------------------------------------------------
@@ -325,6 +349,12 @@ class ModelCapabilities(BaseModel):
     #: Tie-break deployments with otherwise equal task fit. This is deliberately a
     #: small bounded operator preference rather than a claimed universal quality score.
     priority: int = Field(default=0, ge=-100, le=100)
+    #: Place in the account's ``model="cascade"`` ladder, lowest tier first. Unset keeps
+    #: the deployment out of an explicit ladder; when no deployment of the account sets a
+    #: tier the ladder falls back to ``priority`` ascending (docs/model-cascade.md). The
+    #: agent renders it at the top level of the data plane's entry, where the cascade
+    #: reads it, so the bounds match what the data plane accepts.
+    cascade_tier: int | None = Field(default=None, ge=-1000, le=1000)
 
 
 class ResourceSpec(BaseModel):

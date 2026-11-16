@@ -1242,11 +1242,64 @@
         "title": "ManagedCapacityRequest",
         "type": "object"
       },
+      "MeMembershipResponse": {
+        "description": "One of the caller's own memberships, with the account it grants access to.\n\nThe account's name and slug are included so a client can label the accounts a person\nmay switch between without reading each account separately, which would need a token\nbound to that account first.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
+          },
+          "account_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Slug"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "user_id",
+          "role",
+          "status"
+        ],
+        "title": "MeMembershipResponse",
+        "type": "object"
+      },
       "MeResponse": {
         "properties": {
           "memberships": {
             "items": {
-              "$ref": "#/components/schemas/MembershipResponse"
+              "$ref": "#/components/schemas/MeMembershipResponse"
             },
             "title": "Memberships",
             "type": "array"
@@ -1300,12 +1353,35 @@
         "title": "MemberCreateRequest",
         "type": "object"
       },
-      "MembershipResponse": {
+      "MemberResponse": {
+        "description": "A membership with the person it belongs to, for listing an account's members.\n\n``email`` and ``display_name`` are the profile the member's identity provider last\nreported at sign-in. Either may be absent: a member added by subject who has not yet\nsigned in has neither.",
         "properties": {
           "account_id": {
             "format": "uuid",
             "title": "Account Id",
             "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
           },
           "role": {
             "title": "Role",
@@ -1327,7 +1403,7 @@
           "role",
           "status"
         ],
-        "title": "MembershipResponse",
+        "title": "MemberResponse",
         "type": "object"
       },
       "MetricsAcceptedResponse": {
@@ -1389,6 +1465,19 @@
             "default": true,
             "title": "Auto Enabled",
             "type": "boolean"
+          },
+          "cascade_tier": {
+            "anyOf": [
+              {
+                "maximum": 1000.0,
+                "minimum": -1000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cascade Tier"
           },
           "chat": {
             "default": true,
@@ -4235,6 +4324,7 @@
     },
     "/v1/accounts/{account_id}/members": {
       "get": {
+        "description": "List the account's members with the name and email each last signed in with.\n\nThe profile is shown to anyone holding ``members:read`` on this account, which every\nrole has: members of one account can already see who else administers it.",
         "operationId": "list_account_members_v1_accounts__account_id__members_get",
         "parameters": [
           {
@@ -4256,7 +4346,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/MembershipResponse"
+                    "$ref": "#/components/schemas/MemberResponse"
                   },
                   "title": "Response List Account Members V1 Accounts  Account Id  Members Get",
                   "type": "array"
@@ -4312,7 +4402,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MembershipResponse"
+                  "$ref": "#/components/schemas/MemberResponse"
                 }
               }
             },

@@ -85,6 +85,9 @@ type Spec struct {
 	// Capabilities lets the data plane choose this deployment for model=auto without
 	// consulting the control plane or inspecting any other account's assignments.
 	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
+	// CascadeTier orders this deployment in its account's model=cascade ladder, lowest
+	// first. Absent leaves it out of an explicit ladder; a pointer because zero is a tier.
+	CascadeTier *int `json:"cascadeTier,omitempty"`
 	// GPUCount is how many devices one replica needs, which becomes the container's
 	// nvidia.com/gpu limit. The control plane admits the placement by comparing
 	// replicas x this against the stamp's reported capacity (ADR 0013), so the pod has to
@@ -253,6 +256,7 @@ type dataPlaneEntry struct {
 	// deployment does not name one, so the data plane applies its own default.
 	Strategy      string             `json:"strategy,omitempty"`
 	Capabilities  *ModelCapabilities `json:"capabilities,omitempty"`
+	CascadeTier   *int               `json:"cascade_tier,omitempty"`
 	MaxModelLen   int                `json:"max_model_len,omitempty"`
 	RouteRevision string             `json:"route_revision,omitempty"`
 }
@@ -643,6 +647,7 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 			UpstreamModel: item.Spec.UpstreamModel,
 			Strategy:      item.Spec.Strategy,
 			Capabilities:  item.Spec.Capabilities,
+			CascadeTier:   item.Spec.CascadeTier,
 			MaxModelLen:   item.Spec.MaxModelLen,
 		}
 		if pool := backends[item.Spec.DeploymentID]; len(pool) > 0 {

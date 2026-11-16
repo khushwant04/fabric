@@ -22,15 +22,17 @@ Code: `data-plane/fabric_data_plane/cascade.py`. Tests: `data-plane/tests/test_c
 The candidates are the calling account's own deployments; another account's deployments are
 never considered. They are ordered small to large by this rule:
 
-1. If any of the account's deployments declares `cascade_tier` (an integer in
-   `deployments.json`), the ladder is exactly those deployments, lowest tier first (ties by
-   alias). Deployments without a tier stay out.
+1. If any of the account's deployments declares a cascade tier, the ladder is exactly those
+   deployments, lowest tier first (ties by alias). Deployments without a tier stay out.
 2. Otherwise the ladder is every chat-capable deployment with `capabilities.auto_enabled`, by
    `capabilities.priority` **ascending** (ties by alias). Give the small model a low priority
-   and the large one a high priority. `capabilities.priority` already travels from the control
-   plane's deployment spec through the agent to `deployments.json`, so this needs no new
-   control-plane field; `cascade_tier` is for operators who write `deployments.json` directly or
-   want the ladder to differ from `model: "auto"` preferences.
+   and the large one a high priority.
+
+Both travel from the control plane's deployment spec through the agent to `deployments.json`.
+Set the tier as `spec.capabilities.cascade_tier` (an integer from -1000 to 1000, or unset) when
+creating or updating a deployment, or under **Routing** in the console's deployment form; the
+agent renders it as the entry's top-level `cascade_tier`. Use it when the cascade ladder should
+differ from the `model: "auto"` preferences that `priority` expresses.
 
 The ladder is cut to `max_escalations + 1` tiers. An account with no eligible deployment gets
 `404 cascade_not_configured`.

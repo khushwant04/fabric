@@ -355,3 +355,76 @@ async def test_unusable_runtime_settings_are_refused(client: AsyncClient) -> Non
             headers=bearer(token),
         )
         assert response.status_code == 422, (runtime, response.text)
+
+
+async def test_cascade_tier_is_optional_and_flows_into_desired_state(client: AsyncClient) -> None:
+    """The agent reads spec.capabilities.cascade_tier and renders it for model=cascade.
+
+    Zero is a tier, so it has to survive as zero rather than being dropped as falsy, and a
+    deployment that does not set one keeps it unset rather than defaulting into the ladder.
+    """
+    account_id, token = await onboard(client, "cascade-tier-user", "cascade-tier-account")
+    created = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "small",
+            "model_alias": "small-model",
+            "spec": {
+                "runtime": {"release": "runtime-release-1", "strategy": "prefix_aware"},
+                "capabilities": {"code": True, "priority": -10, "cascade_tier": 0},
+            },
+        },
+        headers=bearer(token),
+    )
+    assert created.status_code == 201, created.text
+    deployment = created.json()
+    assert deployment["desired_spec"]["capabilities"]["cascade_tier"] == 0
+    assert deployment["desired_spec"]["runtime"]["strategy"] == "prefix_aware"
+
+    untiered = await client.post(
+        f"/v1/accounts/{account_id}/deployments",
+        json={
+            "name": "large",
+            "model_alias": "large-model",
+            "spec": {"runtime": {"release": "r2"}},
+        },
+        headers=bearer(token),
+    )
+    assert untiered.status_code == 201, untiered.text
+    assert untiered.json()["desired_spec"]["capabilities"]["cascade_tier"] is None
+
+    enrolled = await enroll_stamp(client, account_id, token)
+    stamp_id = enrolled["stamp"]["id"]
+    placed = await client.post(
+        f"/v1/accounts/{account_id}/deployments/{deployment['id']}/placements",
+        json={"stamp_id": stamp_id},
+        headers=bearer(token),
+    )
+    assert placed.status_code == 201, placed.text
+    desired = await client.get(
+        f"/v1/stamps/{stamp_id}/desired-state?after_generation=0",
+        headers=bearer(enrolled["agent_credential"]),
+    )
+    assert desired.status_code == 200
+    capabilities = desired.json()["deployments"][0]["spec"]["capabilities"]
+    assert capabilities["cascade_tier"] == 0
+    assert capabilities["code"] is True
+    assert capabilities["priority"] == -10
+
+
+async def test_an_out_of_range_cascade_tier_is_rejected(client: AsyncClient) -> None:
+    account_id, token = await onboard(client, "bad-tier-user", "bad-tier-account")
+    for tier in (1001, -1001, 1.5, "small"):
+        response = await client.post(
+            f"/v1/accounts/{account_id}/deployments",
+            json={
+                "name": "primary",
+                "model_alias": "launch-model",
+                "spec": {
+                    "runtime": {"release": "runtime-release-1"},
+                    "capabilities": {"cascade_tier": tier},
+                },
+            },
+            headers=bearer(token),
+        )
+        assert response.status_code == 422, (tier, response.text)

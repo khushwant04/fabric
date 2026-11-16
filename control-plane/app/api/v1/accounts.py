@@ -23,14 +23,15 @@ from app.core.security import (
     require_control_principal,
 )
 from app.core.tenancy import elevated
-from app.models import Account
+from app.models import Account, AccountMembership, User
 from app.schemas import (
     AccountCreateRequest,
     AccountResponse,
     EntitlementResponse,
     ManagedCapacityRequest,
     MemberCreateRequest,
-    MembershipResponse,
+    MemberResponse,
+    MeMembershipResponse,
     MeResponse,
     SelfResponse,
     UserResponse,
@@ -46,8 +47,15 @@ from app.services.identity import active_memberships, ensure_user
 router = APIRouter(tags=["accounts"])
 
 
-def _membership_response(account_id: uuid.UUID, user_id: uuid.UUID, role: str, statusv: str):
-    return MembershipResponse(account_id=account_id, user_id=user_id, role=role, status=statusv)
+def _member_response(membership: AccountMembership, user: User | None) -> MemberResponse:
+    return MemberResponse(
+        account_id=membership.account_id,
+        user_id=membership.user_id,
+        role=membership.role,
+        status=membership.status,
+        email=user.email if user is not None else None,
+        display_name=user.display_name if user is not None else None,
+    )
 
 
 @router.get(
@@ -84,7 +92,14 @@ async def read_me(
     return MeResponse(
         user=UserResponse.model_validate(user),
         memberships=[
-            _membership_response(account.id, user.id, membership.role, membership.status)
+            MeMembershipResponse(
+                account_id=account.id,
+                user_id=user.id,
+                role=membership.role,
+                status=membership.status,
+                account_name=account.name,
+                account_slug=account.slug,
+            )
             for membership, account in memberships
         ],
     )
@@ -135,34 +150,39 @@ async def read_account(
 
 @router.get(
     "/v1/accounts/{account_id}/members",
-    response_model=list[MembershipResponse],
+    response_model=list[MemberResponse],
     summary="List account members",
 )
 async def list_account_members(
     principal: PrincipalContext = Depends(account_scope(scope_defs.MEMBERS_READ)),
     session: AsyncSession = Depends(get_db_session),
     cache: ResponseCache = Depends(get_cache),
-) -> list[MembershipResponse]:
+) -> list[MemberResponse]:
+    """List the account's members with the name and email each last signed in with.
+
+    The profile is shown to anyone holding ``members:read`` on this account, which every
+    role has: members of one account can already see who else administers it.
+    """
     account = await get_account(session, principal.account_id)
 
-    async def load() -> list[MembershipResponse]:
-        memberships = await list_members(session, principal.account_id)
-        return [
-            _membership_response(m.account_id, m.user_id, m.role, m.status) for m in memberships
-        ]
+    async def load() -> list[MemberResponse]:
+        members = await list_members(session, principal.account_id)
+        return [_member_response(membership, user) for membership, user in members]
 
     return await cache.get_or_load(
         account_id=principal.account_id,
         version=account.cache_version,
-        resource="members",
-        response_type=list[MembershipResponse],
+        # Versioned key: entries cached before profiles were included must not be served
+        # as the new shape.
+        resource="members-v2",
+        response_type=list[MemberResponse],
         loader=load,
     )
 
 
 @router.post(
     "/v1/accounts/{account_id}/members",
-    response_model=MembershipResponse,
+    response_model=MemberResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Add or update an account member",
 )
@@ -170,7 +190,7 @@ async def upsert_account_member(
     payload: MemberCreateRequest,
     principal: PrincipalContext = Depends(account_scope(scope_defs.MEMBERS_WRITE)),
     session: AsyncSession = Depends(get_db_session),
-) -> MembershipResponse:
+) -> MemberResponse:
     membership = await add_member(
         session,
         account_id=principal.account_id,
@@ -179,10 +199,10 @@ async def upsert_account_member(
         role=payload.role,
         actor_id=principal.subject,
     )
+    user = await session.get(User, membership.user_id)
+    response = _member_response(membership, user)
     await commit_and_invalidate(session, [principal.account_id])
-    return _membership_response(
-        membership.account_id, membership.user_id, membership.role, membership.status
-    )
+    return response
 
 
 @router.get(

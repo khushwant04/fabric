@@ -141,6 +141,15 @@ spec:
                       type: integer
                       minimum: -100
                       maximum: 100
+                cascadeTier:
+                  type: integer
+                  description: |
+                    Place in the owning account's model=cascade ladder, lowest tier
+                    first. Absent leaves the deployment out of an explicit ladder; when no
+                    deployment of the account declares a tier, the ladder falls back to
+                    capabilities.priority ascending.
+                  minimum: -1000
+                  maximum: 1000
                 gpuCount:
                   type: integer
                   description: |
