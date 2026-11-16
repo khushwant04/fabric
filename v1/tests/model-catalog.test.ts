@@ -8,7 +8,7 @@ test("the catalog offers exactly the three curated models with their serving set
   assert.deepEqual(modelCatalog.map((model) => [model.modelRef, model.modelAlias, model.gpuClass, model.contextLength, model.maxNumSeqs, model.toolCalling, model.toolCallParser, model.execution]), [
     ["Qwen/Qwen3.5-2B", "qwen3.5-2b", "t4", 4096, 8, true, "qwen3_xml", "eager"],
     ["Qwen/Qwen3.5-9B", "qwen3.5-9b", "a10", 8192, 8, true, "qwen3_xml", "eager"],
-    ["Qwen/Qwen3.6-35B-A3B-FP8", "qwen3.6-35b", "a100-80gb", 65536, 16, true, "qwen3_xml", "eager"],
+    ["Qwen/Qwen3.6-35B-A3B-FP8", "qwen3.6-35b", "rtx-pro-6000", 65536, 16, true, "qwen3_xml", "eager"],
   ])
   assert.equal(new Set(modelCatalog.map((model) => model.id)).size, modelCatalog.length)
   assert.equal(catalogModel("qwen3.5-9b")?.name, "Qwen3.5 9B")

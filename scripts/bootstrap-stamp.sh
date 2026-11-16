@@ -14,7 +14,7 @@ umask 077
 
 REPOSITORY=https://github.com/khushwant04/fabric
 # Chart and images come from the same commit. CI publishes images for every commit on main.
-DEFAULT_RELEASE=b5bfb1d4404909cea2c2e705471243812eab8b01
+DEFAULT_RELEASE=f020738a9fd0b98094000f48a2000a9b18fff654
 DEFAULT_REGISTRY=public.ecr.aws/hexelstudio/fabric
 CERT_MANAGER_VERSION=v1.17.2
 NAMESPACE=fabric-stamp
