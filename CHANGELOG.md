@@ -8,6 +8,12 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Anthropic Messages API on the data plane: `POST /v1/messages`, streaming and
+  non-streaming, translated to chat completions at the gateway and sent through the
+  existing proxy path, so authentication (`x-api-key` or bearer), `model: "auto"`,
+  limits, retries and metering are shared. Text, system, images, tools, tool results,
+  thinking and stop sequences are supported; untranslatable content is rejected with
+  400. See `docs/anthropic-messages.md`.
 - Prefix-aware routing (ADR 0019): a `prefix_aware` deployment strategy that sends each
   request to the backend most likely to hold its prompt prefix in cache, within a bounded
   load, without needing a session key. Accepted by the control plane, CRD and agent.
