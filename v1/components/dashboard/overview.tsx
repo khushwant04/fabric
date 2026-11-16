@@ -1,6 +1,7 @@
 import Link from "next/link"
-import { ActivityIcon, BoxesIcon, FlaskConicalIcon, KeyRoundIcon, PlusIcon } from "lucide-react"
+import { ActivityIcon, BoxesIcon, FlaskConicalIcon, KeyRoundIcon } from "lucide-react"
 
+import { CreateDeploymentDrawer } from "@/components/console/deployment-form"
 import { LiveRefresh } from "@/components/console/live-refresh"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { StatusBadge, statusTone } from "@/components/console/status-badge"
@@ -12,6 +13,7 @@ import { StatGroup, StatTile } from "@/components/hexel/stat-tile"
 import { Status } from "@/components/hexel/status"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/hexel/table"
 import { Button } from "@/components/ui/button"
+import type { DeploymentStampOption } from "@/lib/fabric/resource-state"
 import type { AccountUsage, Deployment, Stamp } from "@/lib/fabric/types"
 import { formatNumber, formatRelative } from "@/lib/format"
 
@@ -21,6 +23,10 @@ export type DashboardOverviewProps = {
   checkedAt: string
   error: string | null
   canCreate: boolean
+  /** Active stamps offered by the create-deployment drawer. */
+  stampOptions: DeploymentStampOption[]
+  /** The stamp list could not be read, so the drawer blocks deploying. */
+  infrastructureUnavailable: boolean
   /** Null when the account's deployments could not be read. */
   deployments: { total: number; ready: number; attention: number; phases: Array<[string, number]>; recent: Array<{ deployment: Deployment; state: State }> } | null
   stamps: { total: number; active: number; rows: Array<{ stamp: Stamp; state: State }> } | null
@@ -31,7 +37,7 @@ export type DashboardOverviewProps = {
 
 // The console's Overview, laid out as the Hexel Studio console sample: headline numbers in
 // one StatGroup, then Panels (a tray carrying the title, a raised card the content).
-export function DashboardOverview({ checkedAt, error, canCreate, deployments, stamps, capacity, usage }: DashboardOverviewProps) {
+export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, infrastructureUnavailable, deployments, stamps, capacity, usage }: DashboardOverviewProps) {
   const ready = deployments?.ready ?? 0
   const attention = deployments?.attention ?? 0
   const recent = deployments?.recent ?? []
@@ -44,7 +50,7 @@ export function DashboardOverview({ checkedAt, error, canCreate, deployments, st
       description="Deployment health, GPU capacity and inference usage in one place."
       actions={<>
         <Button nativeButton={false} variant="outline" render={<Link href="/playground" />}><FlaskConicalIcon />Open playground</Button>
-        {canCreate ? <Button nativeButton={false} render={<Link href="/deployments/new" />}><PlusIcon />Create deployment</Button> : null}
+        {canCreate ? <CreateDeploymentDrawer stamps={stampOptions} infrastructureUnavailable={infrastructureUnavailable} /> : null}
       </>}
     />
 

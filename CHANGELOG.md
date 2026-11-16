@@ -197,8 +197,22 @@ yet, so earlier work is summarised by period from the pull-request history.
   `FABRIC_KERNEL_NUM_WARPS=1` and `FABRIC_KERNEL_NUM_STAGES=3` for the previous tile.
   `compare_packed.py` pins its `fabric` candidate to vLLM's tile, so its comparison does
   not change.
+- Console create forms open in drawers: a right-side sheet on desktop, a bottom drawer
+  below 768px. This covers Create deployment (Overview and Deployments), Create API key
+  (with its one-time secret, cleared when the drawer closes), Add member, Create service
+  principal, Assign infrastructure and Enroll stamp, which keeps its three steps in a
+  wide drawer. Drawers have a sticky footer with Cancel and submit, show pending state and
+  server-action errors inline, ask before discarding edited input, and return focus to
+  their trigger. `/deployments/new` still renders the full form for deep links, modified
+  clicks and visits without JavaScript. Delete deployment stays a centered confirmation.
+  Screenshots: `docs/screenshots/console/drawers/`.
 
 ### Fixed
+
+- Console stamp enrollment: pressing Continue on the first step no longer also submits
+  the form and issues an enrollment token. Selects in console forms show their option
+  label (for example "Automatic placement") instead of the raw value before they are
+  opened.
 
 - The data plane refuses request bodies nested more than 128 levels deep. It used to
   rely on the JSON decoder's recursion limit, which Python 3.12+ no longer reaches.

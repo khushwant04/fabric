@@ -111,3 +111,16 @@ export function gpuCapacity(value: unknown) {
 export function confirmsModelDeletion(typed: unknown, modelAlias: string) {
   return typeof typed === "string" && typed === modelAlias && modelAlias.length > 0
 }
+
+/** An active stamp offered as infrastructure in the create-deployment form. */
+export type DeploymentStampOption = { id: string; label: string }
+
+// Only stamps with a recent heartbeat can take a placement, so only they are offered.
+export function deploymentStampOptions(stamps: Stamp[], now = Date.now()): DeploymentStampOption[] {
+  return stamps
+    .filter((stamp) => stampState(stamp, now).status === "active")
+    .map((stamp) => ({
+      id: stamp.id,
+      label: `${stamp.name} · ${stamp.orchestrator || "Kubernetes"} · ${gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "Unknown"} GPUs`,
+    }))
+}
