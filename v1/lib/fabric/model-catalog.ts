@@ -64,9 +64,8 @@ export const modelCatalog: readonly CatalogModel[] = [
     modelRef: "Qwen/Qwen3.6-35B-A3B-FP8",
     modelAlias: "qwen3.6-35b",
     size: "35B · 3B active",
-    // The form's classes stop at 80 GB cards; an RTX PRO 6000 (96 GB) satisfies it too.
-    gpuClass: "a100-80gb",
-    gpu: "80 GB+ · A100 or RTX PRO",
+    gpuClass: "rtx-pro-6000",
+    gpu: "RTX PRO 6000 · 96 GB",
     contextLength: 65536,
     maxNumSeqs: 16,
     toolCalling: true,
@@ -87,7 +86,7 @@ export function suggestedDeploymentName(model: Pick<CatalogModel, "modelAlias">)
 
 /** The least memory per GPU a class implies, in GiB (a card reports a little under its size). */
 const classMemoryGiB: Record<string, number> = {
-  t4: 14, v100: 14, "rtx-a4000": 14, l4: 21, a10: 21, a10g: 21, a100: 38, l40s: 44, "a100-80gb": 76, h100: 76,
+  t4: 14, v100: 14, "rtx-a4000": 14, l4: 21, a10: 21, a10g: 21, a100: 38, l40s: 44, "a100-80gb": 76, h100: 76, "rtx-pro-6000": 90,
 }
 
 export function gpuClassMemoryGiB(gpuClass: string): number | null {

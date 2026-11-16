@@ -1,6 +1,6 @@
 // Keep setup commands independent of browser state and never persist their token.
 // One release pins the chart and every image: CI publishes images for each commit on main.
-export const STAMP_RELEASE = "b5bfb1d4404909cea2c2e705471243812eab8b01"
+export const STAMP_RELEASE = "f020738a9fd0b98094000f48a2000a9b18fff654"
 export const STAMP_IMAGE_REGISTRY = "public.ecr.aws/hexelstudio/fabric"
 export const STAMP_REPOSITORY = "https://github.com/khushwant04/fabric"
 export const STAMP_BOOTSTRAP_URL = "https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh"
