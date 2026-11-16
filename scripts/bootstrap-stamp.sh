@@ -19,7 +19,7 @@ umask 077
 
 REPOSITORY=https://github.com/khushwant04/fabric
 # Chart and images come from the same commit. CI publishes images for every commit on main.
-DEFAULT_RELEASE=f020738a9fd0b98094000f48a2000a9b18fff654
+DEFAULT_RELEASE=97ef926631f59de6dfd2f3a77a59ee29b8329dd6
 DEFAULT_REGISTRY=public.ecr.aws/hexelstudio/fabric
 CERT_MANAGER_VERSION=v1.17.2
 NAMESPACE=fabric-stamp
@@ -198,7 +198,8 @@ HELM_ARGS=(
 if [ "$GPU" = on ]; then
     # k3s runs GPU containers only under the nvidia RuntimeClass; without it vLLM reports
     # "Failed to infer device type". The bootstrap labels GPU nodes accelerator=nvidia.
-    HELM_ARGS+=(--set-string gpu.runtimeClassName=nvidia --set-string gpu.nodeSelector.accelerator=nvidia)
+    HELM_ARGS+=(--set-string gpu.runtimeClassName=nvidia --set-string gpu.nodeSelector.accelerator=nvidia
+        --set gpuMetrics.dcgmExporter.enabled=true)
 fi
 if [ -n "$PREPULL" ]; then
     HELM_ARGS+=(--set operator.managedModelHost.prepull.enabled=true
@@ -219,7 +220,7 @@ fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '\nDry run: release %s, images %s/*:%s, public endpoint %s\n' \
-        "${RELEASE:0:12}" "$REGISTRY" "$TAG" "${HOST:+https://$HOST}${HOST:-none}"
+        "${RELEASE:0:12}" "$REGISTRY" "$TAG" "$( [ -n "$HOST" ] && printf "https://%s" "$HOST" || printf none )"
     printf 'helm upgrade --install %q <chart:%s/deploy/helm/fabric-stamp>' "$NAME" "${RELEASE:0:12}"
     printf ' %q' "${HELM_ARGS[@]}"
     printf '\n'
