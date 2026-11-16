@@ -37,6 +37,10 @@ from kernels.gated_delta_decode import (  # noqa: E402
     gated_delta_decode,
     torch_gated_delta_decode_reference,
 )
+from kernels.launch_config import (  # noqa: E402
+    bf16_unsupported_reason,
+    device_capability,
+)
 
 KernelMode = Literal["auto", "fabric", "standard"]
 SUPPORTED_MODES: tuple[KernelMode, ...] = ("auto", "fabric", "standard")
@@ -44,7 +48,8 @@ SUPPORTED_MODES: tuple[KernelMode, ...] = ("auto", "fabric", "standard")
 PATH_FABRIC = "fabric"
 PATH_EAGER = "eager"
 
-#: Dtypes the fused kernel accepts for Q, K, and V.
+#: Dtypes the fused kernel accepts for Q, K, and V. BF16 additionally needs compute
+#: capability 8.0 or newer; see :func:`unsupported_reason`.
 SUPPORTED_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
 
 #: The kernel indexes the key dimension with a single power-of-two tile.
@@ -123,6 +128,11 @@ def unsupported_reason(
         return f"unsupported dtype {q.dtype}"
     if not (q.dtype == k.dtype == v.dtype):
         return "q, k, and v have mixed dtypes"
+    if q.dtype is torch.bfloat16:
+        # Cached per device; a host-side driver query, never a device synchronization.
+        refusal = bf16_unsupported_reason(q.dtype, device_capability(q.device))
+        if refusal:
+            return refusal
     if state.dtype is not torch.float32:
         return "recurrent state is not FP32"
     if q.ndim != 3 or q.shape[-1] > MAX_KEY_DIM:
@@ -149,7 +159,7 @@ def dispatch_gated_delta_decode(
     *,
     mode: KernelMode = "auto",
     out: torch.Tensor | None = None,
-    block_v: int = 32,
+    block_v: int | None = None,
     state_indices: torch.Tensor | None = None,
     stats: DispatchStats | None = None,
 ) -> tuple[torch.Tensor, DispatchDecision]:
@@ -158,7 +168,8 @@ def dispatch_gated_delta_decode(
     Returns the output and the decision that produced it. ``state`` is updated in
     place by both paths, so a fallback mid-generation keeps the recurrence valid.
     ``state_indices`` selects slots from a paged cache, which is how a serving
-    host stores recurrent state.
+    host stores recurrent state. ``block_v=None`` takes the launch shape from
+    :mod:`kernels.launch_config` for the device and batch.
     """
     if mode not in SUPPORTED_MODES:
         raise ValueError(f"unknown kernel mode {mode!r}; expected one of {SUPPORTED_MODES}")
@@ -207,7 +218,7 @@ class GatedDeltaDecoder:
     telemetry stay attributable to that deployment.
     """
 
-    def __init__(self, mode: KernelMode = "auto", *, block_v: int = 32) -> None:
+    def __init__(self, mode: KernelMode = "auto", *, block_v: int | None = None) -> None:
         if mode not in SUPPORTED_MODES:
             raise ValueError(f"unknown kernel mode {mode!r}; expected one of {SUPPORTED_MODES}")
         self.mode = mode
@@ -246,4 +257,10 @@ class GatedDeltaDecoder:
 
     def telemetry(self) -> dict[str, Any]:
         with self._lock:
-            return {"kernel_mode": self.mode, "block_v": self.block_v, **self.stats.snapshot()}
+            return {
+                "kernel_mode": self.mode,
+                # None means the per-architecture launch table chooses per call.
+                "block_v": self.block_v,
+                **self.stats.snapshot(),
+            }
+

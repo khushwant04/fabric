@@ -1,7 +1,7 @@
 "use client"
 
 import { useActionState, useState } from "react"
-import { CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, Trash2Icon, UserPlusIcon } from "lucide-react"
+import { BotIcon, CheckIcon, CopyIcon, KeyRoundIcon, PlusIcon, Trash2Icon, UserPlusIcon } from "lucide-react"
 
 import {
   addMember,
@@ -9,6 +9,7 @@ import {
   createServicePrincipal,
   type ActionState,
 } from "@/app/(console)/actions"
+import { FormDrawer } from "@/components/console/form-drawer"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -29,8 +30,7 @@ import { confirmDeleteDeployment } from "@/lib/fabric/deployment-actions"
 import { confirmsModelDeletion } from "@/lib/fabric/resource-state"
 import type { ServicePrincipal } from "@/lib/fabric/types"
 
-const initialState: ActionState = {}
-
+// Destructive confirmations stay centered dialogs; create forms open in drawers.
 export function DeleteDeploymentDialog({ deploymentId, name, modelAlias, gpuCount, gpuClass, disabled = false }: {
   deploymentId: string
   name: string
@@ -55,86 +55,82 @@ export function DeleteDeploymentDialog({ deploymentId, name, modelAlias, gpuCoun
   </Dialog>
 }
 
-function SubmitButton({ pending, children }: { pending: boolean; children: React.ReactNode }) {
-  return (
-    <Button type="submit" disabled={pending}>
-      {pending ? <Spinner /> : null}
-      {children}
-    </Button>
-  )
-}
-
-function ResultMessage({ state }: { state: ActionState }) {
-  if (state.error) return <FieldError>{state.error}</FieldError>
-  if (state.ok && !state.secret && !state.enrollmentToken) {
-    return (
-      <Alert>
-        <CheckIcon />
-        <AlertTitle>Saved</AlertTitle>
-        <AlertDescription>The control plane accepted this change.</AlertDescription>
-      </Alert>
-    )
-  }
-  return null
+function SavedMessage({ title, children }: { title: string; children: React.ReactNode }) {
+  return <Alert>
+    <CheckIcon />
+    <AlertTitle>{title}</AlertTitle>
+    <AlertDescription>{children}</AlertDescription>
+  </Alert>
 }
 
 function CopySecret({ value }: { value: string }) {
   const [copied, setCopied] = useState(false)
+  const [error, setError] = useState("")
   return (
-    <div className="flex gap-2">
-      <Input readOnly value={value} className="font-mono text-xs" />
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        onClick={async () => {
-          await navigator.clipboard.writeText(value)
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 1500)
-        }}
-        aria-label="Copy secret"
-      >
-        {copied ? <CheckIcon /> : <CopyIcon />}
-      </Button>
-    </div>
+    <Field>
+      <FieldLabel htmlFor="api-key-secret">Secret</FieldLabel>
+      <div className="flex gap-2">
+        <Input id="api-key-secret" readOnly value={value} className="font-mono text-xs" onFocus={(event) => event.currentTarget.select()} />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(value)
+              setCopied(true)
+              setError("")
+              window.setTimeout(() => setCopied(false), 1500)
+            } catch {
+              setError("Copy is unavailable. Select the secret and copy it manually.")
+            }
+          }}
+          aria-label="Copy secret"
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}{copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+      <span role="status" className="sr-only">{copied ? "Secret copied to the clipboard" : ""}</span>
+      {error ? <FieldError>{error}</FieldError> : null}
+    </Field>
   )
 }
 
-export function AddMemberDialog({ disabled = false }: { disabled?: boolean }) {
-  const [state, action, pending] = useActionState(addMember, initialState)
-  return (
-    <Dialog>
-      <DialogTrigger render={<Button disabled={disabled}><UserPlusIcon /> Add member</Button>} />
-      <DialogContent>
-        <DialogHeader><DialogTitle>Add account member</DialogTitle><DialogDescription>Add or reactivate a person using their Auth0 subject.</DialogDescription></DialogHeader>
-        <form action={action} className="space-y-5">
-          <FieldGroup>
-            <Field><FieldLabel htmlFor="subject">Auth0 subject</FieldLabel><Input id="subject" name="subject" placeholder="auth0|user-id" required /></Field>
-            <Field><FieldLabel htmlFor="email">Email (optional)</FieldLabel><Input id="email" name="email" type="email" placeholder="operator@example.com" /></Field>
-            <Field><FieldLabel>Role</FieldLabel><Select name="role" defaultValue="viewer"><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{["viewer", "developer", "admin", "owner"].map((role) => <SelectItem value={role} key={role} className="capitalize">{role}</SelectItem>)}</SelectContent></Select></Field>
-            <ResultMessage state={state} />
-          </FieldGroup>
-          <DialogFooter><SubmitButton pending={pending}>Add member</SubmitButton></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
+const roles = ["viewer", "developer", "admin", "owner"]
+
+export function AddMemberDrawer({ disabled = false }: { disabled?: boolean }) {
+  return <FormDrawer<ActionState>
+    trigger={{ label: "Add member", icon: UserPlusIcon, disabled }}
+    title="Add account member"
+    description="Add or reactivate a person using their Auth0 subject."
+    icon={UserPlusIcon}
+    action={addMember}
+    submitLabel="Add member"
+    pendingLabel="Adding…"
+    renderSuccess={() => <SavedMessage title="Member saved">The control plane accepted this change.</SavedMessage>}
+  >
+    {({ markDirty }) => <FieldGroup>
+      <Field><FieldLabel htmlFor="subject">Auth0 subject</FieldLabel><Input id="subject" name="subject" placeholder="auth0|user-id" required autoComplete="off" /></Field>
+      <Field><FieldLabel htmlFor="email">Email (optional)</FieldLabel><Input id="email" name="email" type="email" placeholder="operator@example.com" /></Field>
+      <Field><FieldLabel htmlFor="member-role">Role</FieldLabel><Select name="role" defaultValue="viewer" items={roles.map((role) => ({ value: role, label: role[0].toUpperCase() + role.slice(1) }))} onValueChange={markDirty}><SelectTrigger id="member-role" className="w-full"><SelectValue /></SelectTrigger><SelectContent>{roles.map((role) => <SelectItem value={role} key={role} className="capitalize">{role}</SelectItem>)}</SelectContent></Select><FieldDescription>Roles determine the scopes issued when the member starts a console session.</FieldDescription></Field>
+    </FieldGroup>}
+  </FormDrawer>
 }
 
-export function CreatePrincipalDialog({ disabled = false }: { disabled?: boolean }) {
-  const [state, action, pending] = useActionState(createServicePrincipal, initialState)
-  return (
-    <Dialog>
-      <DialogTrigger render={<Button disabled={disabled}><PlusIcon /> Create principal</Button>} />
-      <DialogContent>
-        <DialogHeader><DialogTitle>Create service principal</DialogTitle><DialogDescription>Create an automation identity that can own API keys.</DialogDescription></DialogHeader>
-        <form action={action} className="space-y-5">
-          <FieldGroup><Field><FieldLabel htmlFor="principalName">Name</FieldLabel><Input id="principalName" name="name" placeholder="production-gateway" required /></Field><ResultMessage state={state} /></FieldGroup>
-          <DialogFooter><SubmitButton pending={pending}>Create principal</SubmitButton></DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
+export function CreatePrincipalDrawer({ disabled = false }: { disabled?: boolean }) {
+  return <FormDrawer<ActionState>
+    trigger={{ label: "Create principal", icon: PlusIcon, disabled }}
+    title="Create service principal"
+    description="Create an automation identity that can own API keys."
+    icon={BotIcon}
+    action={createServicePrincipal}
+    submitLabel="Create principal"
+    pendingLabel="Creating…"
+    renderSuccess={() => <SavedMessage title="Service principal created">The control plane accepted this change. API keys can now be issued to this principal.</SavedMessage>}
+  >
+    {() => <FieldGroup>
+      <Field><FieldLabel htmlFor="principalName">Name</FieldLabel><Input id="principalName" name="name" placeholder="production-gateway" required autoComplete="off" /><FieldDescription>A recognizable name for the gateway, job or CI system that will use it.</FieldDescription></Field>
+    </FieldGroup>}
+  </FormDrawer>
 }
 
 const delegatedScopes = [
@@ -142,30 +138,30 @@ const delegatedScopes = [
   "deployments:write", "stamps:read", "inference:invoke",
 ]
 
-export function CreateApiKeyDialog({ principals, disabled = false }: { principals: ServicePrincipal[]; disabled?: boolean }) {
-  const [state, action, pending] = useActionState(createApiKey, initialState)
-  return (
-    <Dialog>
-      <DialogTrigger render={<Button disabled={disabled}><PlusIcon /> Create API key</Button>} />
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader><DialogTitle>Create API key</DialogTitle><DialogDescription>Issue a scoped credential for a person or service principal.</DialogDescription></DialogHeader>
-        {state.secret ? (
-          <FieldGroup><Alert><KeyRoundIcon /><AlertTitle>Copy your key now</AlertTitle><AlertDescription>Fabric stores only a verifier. This secret cannot be recovered later.</AlertDescription></Alert><CopySecret value={state.secret} /></FieldGroup>
-        ) : (
-          <form action={action} className="space-y-5">
-            <FieldGroup>
-              <Field><FieldLabel htmlFor="keyName">Name</FieldLabel><Input id="keyName" name="name" placeholder="CI deployment key" required /></Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field><FieldLabel>Owner</FieldLabel><Select name="servicePrincipalId" defaultValue="human"><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="human">Current user</SelectItem>{principals.filter((item) => item.status === "active").map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></Field>
-                <Field><FieldLabel htmlFor="expiresInDays">Expires in days</FieldLabel><Input id="expiresInDays" name="expiresInDays" type="number" min={1} max={365} placeholder="No expiry" /></Field>
-              </div>
-              <Field><FieldLabel>Scopes</FieldLabel><div className="grid gap-2 rounded-md border p-3 sm:grid-cols-2">{delegatedScopes.map((scope) => <label className="flex items-center gap-2 text-xs" key={scope}><Checkbox name="scopes" value={scope} defaultChecked={scope === "deployments:read"} />{scope}</label>)}</div></Field>
-              <ResultMessage state={state} />
-            </FieldGroup>
-            <DialogFooter><SubmitButton pending={pending}>Create key</SubmitButton></DialogFooter>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
+// The secret lives only in this drawer session's action state: it is shown once, and the
+// session (with its state) is discarded when the drawer closes.
+export function CreateApiKeyDrawer({ principals, disabled = false }: { principals: ServicePrincipal[]; disabled?: boolean }) {
+  return <FormDrawer<ActionState>
+    trigger={{ label: "Create API key", icon: PlusIcon, disabled }}
+    title="Create API key"
+    description="Issue a scoped credential for a person or service principal."
+    icon={KeyRoundIcon}
+    action={createApiKey}
+    submitLabel="Create key"
+    pendingLabel="Creating…"
+    submitIcon={KeyRoundIcon}
+    renderSuccess={(state) => state.secret ? <FieldGroup>
+      <Alert><KeyRoundIcon /><AlertTitle>Copy your key now</AlertTitle><AlertDescription>Fabric stores only a verifier. This secret cannot be recovered later, and closing this drawer clears it.</AlertDescription></Alert>
+      <CopySecret value={state.secret} />
+    </FieldGroup> : <SavedMessage title="Key created">The control plane accepted this change.</SavedMessage>}
+  >
+    {({ markDirty }) => <FieldGroup>
+      <Field><FieldLabel htmlFor="keyName">Name</FieldLabel><Input id="keyName" name="name" placeholder="CI deployment key" required autoComplete="off" /></Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field><FieldLabel htmlFor="keyOwner">Owner</FieldLabel><Select name="servicePrincipalId" defaultValue="human" items={[{ value: "human", label: "Current user" }, ...principals.filter((item) => item.status === "active").map((item) => ({ value: item.id, label: item.name }))]} onValueChange={markDirty}><SelectTrigger id="keyOwner" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="human">Current user</SelectItem>{principals.filter((item) => item.status === "active").map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></Field>
+        <Field><FieldLabel htmlFor="expiresInDays">Expires in days</FieldLabel><Input id="expiresInDays" name="expiresInDays" type="number" min={1} max={365} placeholder="No expiry" /></Field>
+      </div>
+      <Field><FieldLabel id="keyScopes">Scopes</FieldLabel><div role="group" aria-labelledby="keyScopes" className="grid gap-2 rounded-xl border border-border/70 p-3 sm:grid-cols-2">{delegatedScopes.map((scope) => <label className="flex items-center gap-2 font-mono text-xs" key={scope}><Checkbox name="scopes" value={scope} defaultChecked={scope === "deployments:read"} onCheckedChange={markDirty} />{scope}</label>)}</div><FieldDescription>Grant only the scopes this credential needs.</FieldDescription></Field>
+    </FieldGroup>}
+  </FormDrawer>
 }

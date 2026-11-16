@@ -1270,3 +1270,67 @@ func TestEveryPublishedStrategyIsCarried(t *testing.T) {
 		}
 	}
 }
+
+func TestCascadeTierIsReadFromCapabilities(t *testing.T) {
+	// The tier orders model=cascade. Zero is a real tier, so absent has to stay
+	// distinguishable from it all the way to deployments.json.
+	cases := []struct {
+		name  string
+		value any
+		want  *int
+	}{
+		{"absent", nil, nil},
+		{"zero", float64(0), intPointer(0)},
+		{"json number", float64(2), intPointer(2)},
+		{"negative", float64(-3), intPointer(-3)},
+		{"go int", 5, intPointer(5)},
+		{"fraction", 1.5, nil},
+		{"out of range", float64(1001), nil},
+		{"string", "small", nil},
+		{"bool", true, nil},
+	}
+	for _, tc := range cases {
+		capabilities := map[string]any{}
+		if tc.value != nil {
+			capabilities["cascade_tier"] = tc.value
+		}
+		got := cascadeTierFromSpec(map[string]any{"capabilities": capabilities})
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Fatalf("%s: cascadeTierFromSpec = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if cascadeTierFromSpec(map[string]any{}) != nil {
+		t.Fatal("a spec without capabilities produced a tier")
+	}
+}
+
+func TestCascadeTierIsWrittenToTheDeploymentsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deployments.json")
+	if err := state.WriteDeployments(path, []state.Deployment{
+		{DeploymentID: "dep-a", AccountID: "acct-a", ModelAlias: "small", CascadeTier: intPointer(0)},
+		{DeploymentID: "dep-b", AccountID: "acct-a", ModelAlias: "large"},
+	}); err != nil {
+		t.Fatalf("write deployments: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read deployments: %v", err)
+	}
+	var document struct {
+		Deployments []map[string]any `json:"deployments"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("decode deployments: %v", err)
+	}
+	tiers := map[string]any{}
+	for _, entry := range document.Deployments {
+		if tier, present := entry["cascade_tier"]; present {
+			tiers[entry["model_alias"].(string)] = tier
+		}
+	}
+	if len(tiers) != 1 || tiers["small"] != float64(0) {
+		t.Fatalf("cascade tiers written = %v, want only small=0", tiers)
+	}
+}
+
+func intPointer(value int) *int { return &value }

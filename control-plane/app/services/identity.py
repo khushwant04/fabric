@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import scopes as scope_defs
 from app.core.auth0 import Auth0Identity
+from app.core.cache import invalidate_account_versions
 from app.core.config import get_settings
 from app.core.credentials import PREFIX_API_KEY, parse_credential, verify_credential
 from app.core.errors import BadRequest, Forbidden, Unauthorized
@@ -55,11 +56,34 @@ async def ensure_user(session: AsyncSession, identity: Auth0Identity) -> User:
         return user
 
     # Refresh cached profile fields without touching authorization state.
+    changed = False
     if identity.email and user.email != identity.email:
         user.email = identity.email
+        changed = True
     if identity.name and user.display_name != identity.name:
         user.display_name = identity.name
+        changed = True
+    if changed:
+        await _invalidate_member_lists(session, user.id)
     return user
+
+
+async def _invalidate_member_lists(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Expire cached member lists that show this user's profile.
+
+    Member lists include each member's name and email and are cached per account
+    generation, so a profile refreshed at sign-in would otherwise stay stale there until
+    an unrelated change. Elevated for the same reason as ``active_memberships``: the
+    accounts are discovered from the user, before any account is declared.
+    """
+    async with elevated(session):
+        account_ids = (
+            await session.execute(
+                select(AccountMembership.account_id).where(AccountMembership.user_id == user_id)
+            )
+        ).scalars().all()
+        if account_ids:
+            await invalidate_account_versions(session, account_ids)
 
 
 async def active_memberships(
@@ -301,6 +325,12 @@ async def exchange_api_key(
         allowed = key_scopes & scope_defs.INFERENCE_SCOPES
     else:
         allowed = key_scopes & scope_defs.CONTROL_SCOPES
+        system_scopes = key_scopes & scope_defs.SYSTEM_KEY_SCOPES
+        if system_scopes and await _is_system_service_key(session, record):
+            # Only a service principal of the Fabric system account may carry these into a
+            # token. Anywhere else they are dropped rather than honoured: the scope string
+            # alone, copied onto a customer key row, must not open a cross-account read.
+            allowed = allowed | system_scopes
     if not allowed:
         raise Forbidden(
             "audience_not_permitted",
@@ -330,3 +360,13 @@ async def exchange_api_key(
         account_id=record.account_id,
         scope=" ".join(granted),
     )
+
+
+async def _is_system_service_key(session: AsyncSession, record: ApiKey) -> bool:
+    """Whether a key belongs to a service principal of the Fabric system account."""
+    if record.principal_type != PRINCIPAL_SERVICE:
+        return False
+    is_system = (
+        await session.execute(select(Account.is_system).where(Account.id == record.account_id))
+    ).scalar_one_or_none()
+    return bool(is_system)

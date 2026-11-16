@@ -23,10 +23,17 @@ ALGORITHMS = ("RS256",)
 #: request reaches the model host so they cannot be mistaken for verified state.
 STRIPPED_REQUEST_HEADERS = (
     "authorization",
+    # The Anthropic SDK's credential header, accepted on /v1/messages.
+    "x-api-key",
     "x-fabric-account-id",
     "x-fabric-deployment-id",
     "x-fabric-stamp-id",
     "x-fabric-principal",
+    # Agent-run and tool-guard controls are for this gateway, not the model host.
+    "x-fabric-run-id",
+    "x-fabric-run-budget-tokens",
+    "x-fabric-run-budget-steps",
+    "x-fabric-tool-guard",
 )
 
 

@@ -14,14 +14,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { selectAccount } from "@/app/onboarding/actions"
+import { accountLabel } from "@/lib/fabric/people"
 import type { ConsoleContext } from "@/lib/fabric/types"
 
 export function AccountSwitcher({ context }: { context: ConsoleContext }) {
   const membership = context.me.memberships.find(
     (item) => item.account_id === context.account.id
   )
+  // Named from /v1/me, so switching needs no extra request per account. Each item submits
+  // the same server action as the workspace chooser, which checks the membership again.
+  const others = context.me.memberships.filter(
+    (item) => item.account_id !== context.account.id && item.status === "active"
+  )
 
   return (
+      <>
+        <form id="account-switcher-form" action={selectAccount} hidden />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -56,6 +65,27 @@ export function AccountSwitcher({ context }: { context: ConsoleContext }) {
                 ) : null}
               </DropdownMenuItem>
             </DropdownMenuGroup>
+            {others.length ? <>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  Switch to
+                </DropdownMenuLabel>
+                {others.map((item) => (
+                  <DropdownMenuItem
+                    key={item.account_id}
+                    className="w-full gap-2"
+                    render={<button type="submit" form="account-switcher-form" name="accountId" value={item.account_id} />}
+                  >
+                    <div className="flex size-6 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold">
+                      {accountLabel(item).slice(0, 1).toUpperCase()}
+                    </div>
+                    <span className="min-w-0 flex-1 truncate text-left text-sm">{accountLabel(item)}</span>
+                    <Badge variant="outline" className="capitalize">{item.role}</Badge>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </> : null}
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuItem
@@ -65,7 +95,7 @@ export function AccountSwitcher({ context }: { context: ConsoleContext }) {
                 <div className="flex size-6 shrink-0 items-center justify-center rounded-md border">
                   <ChevronsUpDownIcon className="size-3.5" />
                 </div>
-                Switch account
+                All accounts
               </DropdownMenuItem>
               <DropdownMenuItem
                 render={<Link href="/onboarding?switch=true" />}
@@ -79,5 +109,6 @@ export function AccountSwitcher({ context }: { context: ConsoleContext }) {
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+      </>
   )
 }

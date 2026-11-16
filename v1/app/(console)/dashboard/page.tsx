@@ -1,6 +1,7 @@
 import { DashboardOverview } from "@/components/dashboard/overview"
 import { getAccountUsage, getDeploymentStatuses, listDeployments, listPlacements, listStamps } from "@/lib/fabric/data"
-import { deploymentState, gpuCapacity, stampState } from "@/lib/fabric/resource-state"
+import { consoleUsesEdge, edgeGatewayUrl } from "@/lib/fabric/playground-data"
+import { deploymentStampOptions, deploymentState, gpuCapacity, stampState } from "@/lib/fabric/resource-state"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
 
 function timestamp(value: string | null) {
@@ -49,14 +50,18 @@ export default async function DashboardPage() {
   const usedGpu = activeStamps.reduce((sum, { stamp }) => sum + (gpuCapacity(stamp.capabilities.requested_gpus) ?? 0), 0)
   const recent = [...observed].sort((left, right) => timestamp(right.deployment.updated_at) - timestamp(left.deployment.updated_at))
   const canCreate = hasScope(context, "deployments:write")
+  const edgeUrl = edgeGatewayUrl()
 
   return <DashboardOverview
     checkedAt={checkedAt}
     error={error}
     canCreate={canCreate}
+    stampOptions={deploymentStampOptions(stamps)}
+    infrastructureUnavailable={stampResult.status === "rejected"}
     deployments={deploymentData === null ? null : { total: deployments.length, ready, attention, phases, recent: recent.slice(0, 5) }}
     stamps={stampData === null ? null : { total: stamps.length, active: activeStamps.length, rows: stampRows.slice(0, 3) }}
     capacity={capacityKnown ? { used: usedGpu, total: totalGpu } : null}
     usage={usage}
+    edge={edgeUrl ? { url: edgeUrl, usedByConsole: consoleUsesEdge() } : null}
   />
 }

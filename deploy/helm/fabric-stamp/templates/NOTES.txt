@@ -27,6 +27,11 @@ The enrollment token is single use. Once the agent reports enrolment, delete it:
 WARNING: persistence is disabled. A restart loses the stamp's credentials, and the
 enrollment token cannot be reused, so the stamp will need a new token to rejoin.
 {{- end }}
+{{- if and .Values.dataPlane.fileSearch.enabled (not .Values.dataPlane.fileSearch.persistence.enabled) }}
+WARNING: dataPlane.fileSearch.persistence.enabled is false. Uploaded files and vector stores
+live in an emptyDir and are lost when the pod is deleted or rescheduled. Enable persistence
+before customers rely on file search.
+{{- end }}
 {{- if not .Values.usageSpool.enabled }}
 WARNING: usageSpool.enabled is false. Unacknowledged usage survives a container restart only
 while this pod exists; pod deletion or rescheduling loses the local spool.

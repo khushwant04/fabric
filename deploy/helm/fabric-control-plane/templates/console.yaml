@@ -7,7 +7,19 @@
 {{- if and (not $publicControlPlaneUrl) .Values.ingress.enabled .Values.ingress.tls.enabled .Values.ingress.host -}}
 {{- $publicControlPlaneUrl = printf "https://%s" .Values.ingress.host -}}
 {{- end -}}
-{{- $hostnamePattern := "[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*" -}}
+{{- /* The edge gateway's public URL is the console's gateway when nothing else is set. */ -}}
+{{- $inferenceUrl := $console.inferenceUrl | default "" -}}
+{{- $edgeValues := .Values.edge | default dict -}}
+{{- /* FABRIC_EDGE_INFERENCE_URL tells the console which gateway is the edge, so it sends
+       every deployment (and auto/cascade) there and shows the edge on Overview and Stamps. */ -}}
+{{- $edgeUrl := $console.edgeInferenceUrl | default "" -}}
+{{- if and (not $edgeUrl) $edgeValues.enabled $edgeValues.ingress.enabled $edgeValues.ingress.tls.enabled $edgeValues.ingress.host -}}
+{{- $edgeUrl = printf "https://%s" $edgeValues.ingress.host -}}
+{{- end -}}
+{{- if not $inferenceUrl -}}
+{{- $inferenceUrl = $edgeUrl -}}
+{{- end -}}
+{{- $hostnamePattern :="[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*" -}}
 {{- if not (regexMatch (printf "^https://%s(:[0-9]{1,5})?$" $hostnamePattern) $baseUrl) }}
 {{- fail "console.baseUrl must be an HTTPS origin without a path or trailing slash" -}}
 {{- end }}
@@ -44,7 +56,7 @@ spec:
         app.kubernetes.io/component: console
         app.kubernetes.io/part-of: fabric
       annotations:
-        checksum/config: {{ printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" $baseUrl $console.controlPlaneUrl $console.inferenceUrl $accountId (toJson $console.inferenceAllowedOrigins) (toJson $console.inference.allowedDomains) $authSecret (toJson $console.auth.keys) $publicControlPlaneUrl .Values.jwt.issuer | sha256sum }}
+        checksum/config: {{ printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" $baseUrl $console.controlPlaneUrl $inferenceUrl $edgeUrl $accountId (toJson $console.inferenceAllowedOrigins) (toJson $console.inference.allowedDomains) $authSecret (toJson $console.auth.keys) $publicControlPlaneUrl .Values.jwt.issuer | sha256sum }}
     spec:
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
@@ -87,9 +99,13 @@ spec:
             - name: FABRIC_SINGLE_TENANT_ACCOUNT_ID
               value: {{ $accountId | quote }}
             {{- end }}
-            {{- if $console.inferenceUrl }}
+            {{- if $inferenceUrl }}
             - name: FABRIC_INFERENCE_URL
-              value: {{ $console.inferenceUrl | quote }}
+              value: {{ $inferenceUrl | quote }}
+            {{- end }}
+            {{- if $edgeUrl }}
+            - name: FABRIC_EDGE_INFERENCE_URL
+              value: {{ $edgeUrl | quote }}
             {{- end }}
             {{- if $console.inferenceAllowedOrigins }}
             - name: FABRIC_INFERENCE_ALLOWED_ORIGINS

@@ -49,6 +49,13 @@ plane, so serving continues when the control plane does not.
 
 The agent polls outbound only. The control plane never dials into a customer cluster.
 
+An optional **edge gateway** gives one public inference URL in front of every stamp. It
+verifies the token, picks a stamp that holds the requested model for the caller's
+account, and streams the request to that stamp's gateway. It reads its routing table
+from the control plane in the background and keeps serving from a cached copy when the
+control plane is down, so inference still never passes through the control plane
+([ADR 0021](docs/context/adrs/0021-edge-gateway.md), [Edge gateway](docs/edge-gateway.md)).
+
 ---
 
 ## What it does
@@ -57,6 +64,15 @@ The agent polls outbound only. The control plane never dials into a customer clu
 |---|---|
 | **OpenAI-compatible serving** | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, streaming. Verified against the official `openai` Python SDK |
 | **Responses format** | `POST /v1/responses` with native JSON/SSE, stateless input history, account routing, and input/output usage accounting. Requires an updated data-plane image and a supporting model host; see [Responses setup](docs/openai-responses.md) |
+| **Anthropic Messages API** | `POST /v1/messages`, including streaming, tools and images, translated to chat completions at the gateway so routing, limits and metering are unchanged. Works with the official `anthropic` Python SDK; see [Messages setup](docs/anthropic-messages.md) |
+| **OpenAI Agents SDK** | The unmodified `openai-agents` SDK runs on Fabric deployments: function tools, handoffs, guardrails, streaming, structured output, `cascade`/`auto`, and Fabric run budgets, traces and tool-call repair through `ModelSettings(extra_headers=...)`. Covered by an automated compatibility test; `make demo-openai-agents` runs a multi-agent trip planner without a GPU; see [Agents SDK guide](docs/openai-agents-sdk.md) |
+| **Agent runs** | Group an agent loop's calls with `X-Fabric-Run-Id`, cap it with a token/step budget (refused with `429 run_budget_exhausted` before the model is called), read its per-step trace at `GET /v1/runs/{id}` (no prompt text kept), and let the gateway re-ask the model when a tool call does not match its schema. `make demo-agent` runs it without a GPU; see [Agent runs](docs/agent-runs.md) |
+| **Edge gateway** | One inference URL in front of every stamp (AKS, k3s on GCP, any VM). Verifies the token locally, routes by model within the caller's account, prefers healthy, ready and nearby stamps, keeps agent runs on one stamp, fails over on connection errors, and keeps serving from its cached routing table when the control plane is down. `make demo-edge` runs it in front of two local stamps; see [Edge gateway](docs/edge-gateway.md) |
+| **Server-side tool loop** | `POST /v1/agent/runs` runs a whole tool-using agent in one request: the gateway calls the model, executes built-in (`calculator`, `current_time`) and allowlisted HTTP tools in parallel, hands client tools back with `requires_action`, and streams each step as SSE. Every model call is authenticated, limited and metered. `make demo-agent-loop`; see [Agent tool loop](docs/agent-tool-loop.md) |
+| **File search** | OpenAI-compatible `/v1/files` and `/v1/vector_stores` (the stock `openai` SDK works) on the stamp, account-isolated, with BM25 or hybrid (metered embeddings) ranking, and a hosted `file_search` tool in `/v1/agent/runs` that returns passages with citations. Stamp-local SQLite storage, edge affinity per account. `make demo-file-search-mcp`; see [File search](docs/file-search.md) |
+| **MCP connectors** | `{"type": "mcp", ...}` tools in `/v1/agent/runs`: the gateway connects to a remote MCP server (Streamable HTTP), exposes its allowed tools to the model and executes them, with a separate host allowlist, SSRF guards, per-server credentials that never leave for anywhere else, and optional per-call user approval. See [MCP connectors](docs/mcp-connectors.md) |
+| **Hosted agent tools** | `code_interpreter`, `web_fetch` and `web_search`, executed by the stamp inside the tool loop. Code runs in a separate sandbox service (process isolation, rlimits, no-egress NetworkPolicy, optional gVisor; works air-gapped) or in E2B microVMs; web access goes through an SSRF guard with DNS pinning, via direct fetch, SearXNG or self-hosted Firecrawl. Off by default per stamp. `make demo-hosted-tools`; see [Hosted tools](docs/hosted-tools.md) |
+| **Model cascade** | `model: "cascade"` answers with the account's smallest deployment and escalates to a larger one only on cheap, explainable checks (truncation, empty answer, bad tool call, schema mismatch), reporting the path in `X-Fabric-Cascade-*` headers. `make demo-cascade`; see [Model cascade](docs/model-cascade.md) |
 | **Context-aware model routing** | Use `model: "auto"` to select an account-owned, healthy deployment by endpoint, modality, context bound, code/reasoning fit, and configured priority—without a request-time control-plane call |
 | **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
 | **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
@@ -86,7 +102,9 @@ inference data plane, with a stub model host standing in for vLLM. It enrolls a 
 single-use token, places a deployment, serves an authorized OpenAI-style request, refuses a
 forged token, and meters the usage back to the account exactly once. Set
 `FABRIC_E2E_UPSTREAM` to a running OpenAI-compatible host to use a real model. `make check`
-runs every test and lint suite; see [CONTRIBUTING.md](CONTRIBUTING.md).
+runs every test and lint suite; see [CONTRIBUTING.md](CONTRIBUTING.md). `make demo-agent`
+runs the same loop and then a multi-step agent under a budget, with its trace and the tool-call
+guard ([Agent runs](docs/agent-runs.md)).
 
 ### Call a deployed Fabric
 
@@ -334,6 +352,8 @@ SQLite: only the PostgreSQL run proves isolation is enforced.
 ---
 
 ## Documentation
+
+Architecture diagrams (Mermaid, plain text and draw.io): [docs/architecture](docs/architecture/README.md).
 
 Start with the [project review](docs/project-review.md) or the
 [context index](docs/context/README.md).

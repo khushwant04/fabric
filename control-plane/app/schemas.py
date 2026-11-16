@@ -105,6 +105,30 @@ class MembershipResponse(BaseModel):
     status: str
 
 
+class MemberResponse(MembershipResponse):
+    """A membership with the person it belongs to, for listing an account's members.
+
+    ``email`` and ``display_name`` are the profile the member's identity provider last
+    reported at sign-in. Either may be absent: a member added by subject who has not yet
+    signed in has neither.
+    """
+
+    email: str | None = None
+    display_name: str | None = None
+
+
+class MeMembershipResponse(MembershipResponse):
+    """One of the caller's own memberships, with the account it grants access to.
+
+    The account's name and slug are included so a client can label the accounts a person
+    may switch between without reading each account separately, which would need a token
+    bound to that account first.
+    """
+
+    account_name: str | None = None
+    account_slug: str | None = None
+
+
 class MemberCreateRequest(BaseModel):
     auth0_subject: str = Field(min_length=1, max_length=255)
     email: str | None = Field(default=None, max_length=320)
@@ -136,7 +160,7 @@ class SelfResponse(BaseModel):
 
 class MeResponse(BaseModel):
     user: UserResponse
-    memberships: list[MembershipResponse]
+    memberships: list[MeMembershipResponse]
 
 
 # --- service principals ---------------------------------------------------
@@ -325,6 +349,12 @@ class ModelCapabilities(BaseModel):
     #: Tie-break deployments with otherwise equal task fit. This is deliberately a
     #: small bounded operator preference rather than a claimed universal quality score.
     priority: int = Field(default=0, ge=-100, le=100)
+    #: Place in the account's ``model="cascade"`` ladder, lowest tier first. Unset keeps
+    #: the deployment out of an explicit ladder; when no deployment of the account sets a
+    #: tier the ladder falls back to ``priority`` ascending (docs/model-cascade.md). The
+    #: agent renders it at the top level of the data plane's entry, where the cascade
+    #: reads it, so the bounds match what the data plane accepts.
+    cascade_tier: int | None = Field(default=None, ge=-1000, le=1000)
 
 
 class ResourceSpec(BaseModel):
@@ -775,3 +805,60 @@ class StatusReportResponse(BaseModel):
     deployment_id: uuid.UUID
     stamp_id: uuid.UUID
     accepted_at: dt.datetime
+
+
+# --- edge routing table (ADR 0021) -----------------------------------------
+
+
+class EdgeGpuSummary(BaseModel):
+    product: str
+    count: int
+    memory_bytes: int = 0
+
+
+class EdgePlacement(BaseModel):
+    """Where one deployment is served, and whether that place looks usable.
+
+    Stamp facts are repeated on each placement so the edge can route from one object. No
+    credential, endpoint secret or capacity detail beyond a GPU summary is included.
+    """
+
+    stamp_id: uuid.UUID
+    stamp_name: str
+    region: str | None
+    orchestrator: str | None
+    #: The stamp gateway's public HTTPS base URL, as the stamp reported it.
+    inference_url: str
+    #: The stamp reported this deployment ready at its current generation.
+    ready: bool
+    phase: str
+    ready_replicas: int
+    status_reported_at: dt.datetime | None
+    last_heartbeat_at: dt.datetime
+    #: Seconds since that heartbeat when this table was generated. Informational: it is
+    #: excluded from the ETag, so a 304 does not refresh it.
+    heartbeat_age_seconds: float
+    gpus: list[EdgeGpuSummary]
+
+
+class EdgeDeployment(BaseModel):
+    account_id: uuid.UUID
+    deployment_id: uuid.UUID
+    name: str
+    model_alias: str
+    #: The ``model=auto`` metadata from the deployment spec, for the edge's information;
+    #: selection among an account's deployments still happens on the stamp.
+    capabilities: dict[str, Any]
+    placements: list[EdgePlacement]
+
+
+class EdgeRoutingTable(BaseModel):
+    #: Monotonically non-decreasing high-water mark (epoch milliseconds) over the change
+    #: times of the rows the table was built from. The edge refuses a table older than the
+    #: one it holds, which is what keeps a lagging replica from rolling it back.
+    revision: int
+    #: Content hash of everything routing depends on. Sent as the ETag header too.
+    etag: str
+    generated_at: dt.datetime
+    stamp_liveness_seconds: int
+    deployments: list[EdgeDeployment]

@@ -37,43 +37,43 @@ _CALLER_MODULES = ("vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn",)
 
 _OP_NAME = "fused_recurrent_gated_delta_rule_packed_decode"
 
-#: The default is vLLM's own tiling, so a substitution that nobody has tuned is a
-#: like-for-like swap of the arithmetic and not an accidental change of shape.
+#: The tile is chosen per GPU and batch by ``kernels.launch_config``: explicit arguments,
+#: then ``FABRIC_KERNEL_BLOCK_V`` / ``FABRIC_KERNEL_NUM_WARPS`` / ``FABRIC_KERNEL_NUM_STAGES``,
+#: then the file named by ``FABRIC_KERNEL_TUNING_FILE``, then the per-compute-capability
+#: table, then vLLM's own tiling (32 wide, one warp) for a GPU the table does not know.
 #:
-#: A 16-wide tile measured faster in isolation and slower in service. The difference is
-#: where the kernel runs: vLLM captures decode into CUDA graphs, and inside a graph there
-#: is no launch to overlap, so a shape that won by hiding launch overhead has nothing left
-#: to win with and pays for reading q and k once per tile. Tiles are therefore chosen by
-#: measuring the way the host runs them, and are overridable per host so that measurement
-#: does not need a new image.
-_DEFAULT_TILE = {"block_v": 32, "num_warps": 1}
+#: Tiles have to be measured the way the host runs them. A 16-wide tile measured faster in
+#: isolation and slower in service on the development GPU: vLLM captures decode into CUDA
+#: graphs, and inside a graph there is no launch to overlap, so a shape that won by hiding
+#: launch overhead has nothing left to win with. The T4 entries in the table were measured
+#: in graph replay; entries marked unmeasured are reasoned, and a sweep result dropped in
+#: as a tuning file replaces them without a new image. Setting the three variables above
+#: to 32, 1 and 3 restores the exact like-for-like tile on every GPU.
+
+#: Calls handed back to vLLM's own op because the Fabric kernel must not serve them.
+delegations: dict[str, int] = {}
 
 
-def _tile_from_environment() -> dict[str, int]:
-    tile = dict(_DEFAULT_TILE)
-    for key, variable in (
-        ("block_v", "FABRIC_KERNEL_BLOCK_V"), ("num_warps", "FABRIC_KERNEL_NUM_WARPS")
-    ):
-        raw = os.environ.get(variable, "").strip()
-        if not raw:
-            continue
-        try:
-            value = int(raw)
-        except ValueError:
-            continue
-        if value > 0:
-            tile[key] = value
-    return tile
+def _delegate_reason(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
+    """Why this call must go to vLLM's op instead, or ``None``. Host-side only."""
+    from kernels.launch_config import bf16_unsupported_reason, device_capability
 
-
-_TILE = _tile_from_environment()
+    mixed_qkv = args[0] if args else kwargs.get("mixed_qkv")
+    if mixed_qkv is None or not getattr(mixed_qkv, "is_cuda", False):
+        return None
+    return bf16_unsupported_reason(mixed_qkv.dtype, device_capability(mixed_qkv.device))
 
 
 def _fabric_packed_decode(*args: Any, **kwargs: Any):
     from kernels.gated_delta_packed_decode import fused_packed_decode
 
-    kwargs.setdefault("block_v", _TILE["block_v"])
-    kwargs.setdefault("num_warps", _TILE["num_warps"])
+    reason = _delegate_reason(args, kwargs)
+    original = getattr(_fabric_packed_decode, "_fabric_original", None)
+    if reason is not None and original is not None:
+        if not delegations:
+            print(f"[fabric] delegating to vLLM's op: {reason}", file=sys.stderr, flush=True)
+        delegations[reason] = delegations.get(reason, 0) + 1
+        return original(*args, **kwargs)
     return fused_packed_decode(*args, **kwargs)
 
 
@@ -144,6 +144,13 @@ def install() -> dict[str, Any]:
     Both are needed: the caller is usually imported later, but a process that has already
     loaded it would otherwise keep vLLM's op.
     """
+    from kernels import launch_config
+
+    # Read and validate the tuning file now, in the process that will decode: a bad file
+    # raises here, which sitecustomize reports loudly and which leaves vLLM's op in place,
+    # rather than failing the first request.
+    tile = launch_config.reload()
+
     patched_now = []
     for name in (*_OPS_MODULES, *_CALLER_MODULES):
         module = sys.modules.get(name)
@@ -157,5 +164,5 @@ def install() -> dict[str, Any]:
     return {
         "patched_immediately": patched_now,
         "deferred": [*_OPS_MODULES, *_CALLER_MODULES],
-        "tile": dict(_TILE),
+        "tile": tile,
     }

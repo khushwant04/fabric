@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     stamp_credential_rotation_grace_seconds: int = Field(default=3600, ge=60, le=604800)
     inference_token_ttl_seconds: int = 900
 
+    #: How recent a stamp's heartbeat must be for the edge routing table to include it
+    #: (ADR 0021). Matches placement's liveness window by default: a stamp placement would
+    #: no longer choose is not one the edge should send new traffic to.
+    edge_stamp_liveness_seconds: int = Field(default=300, ge=30, le=86400)
+
     credential_pepper: str = LOCAL_CREDENTIAL_PEPPER
     system_account_slug: str = "fabric-system"
     # Set only for a dedicated installation. Authentication and membership checks

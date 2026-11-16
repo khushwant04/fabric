@@ -29,6 +29,9 @@ import httpx
 from fastapi import APIRouter, FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from fabric_data_plane import agent_loop, anthropic_messages, cascade
+from fabric_data_plane.agent_runs import AgentRunStore, build_runs_router, open_run_step
+from fabric_data_plane.agent_tools import ToolRunner
 from fabric_data_plane.auth import (
     InferencePrincipal,
     extract_bearer_token,
@@ -50,6 +53,8 @@ from fabric_data_plane.errors import (
     UpstreamUnavailable,
     api_error_handler,
 )
+from fabric_data_plane.hosted_tools import file_search as hosted_file_search
+from fabric_data_plane.hosted_tools import services as hosted_services
 from fabric_data_plane.limits import (
     ConcurrencyLimiter,
     RateLimit,
@@ -78,6 +83,7 @@ from fabric_data_plane.shared_limits import (
     authorized as limit_authorized,
 )
 from fabric_data_plane.streaming import UsageMeter, response_usage, streaming_upstream_payload
+from fabric_data_plane.tool_guard import guard_tool_calls
 from fabric_data_plane.usage import (
     UsageBuffer,
     UsageLeaseMismatch,
@@ -158,6 +164,11 @@ class DataPlane:
             path=settings.usage_spool_path,
         )
         self.metrics = Metrics()
+        self.agent_runs = AgentRunStore(
+            ttl_seconds=settings.agent_run_idle_ttl_seconds,
+            max_runs=settings.agent_run_max_runs,
+            max_steps_traced=settings.agent_run_max_steps_traced,
+        )
         # One pool per deployment, memoised so per-backend health survives across the
         # requests that deployment serves rather than resetting each call. Keyed by
         # deployment id because the registry may hand back an equal-but-new Deployment on
@@ -588,14 +599,16 @@ def _json_depth_exceeds(value: Any, limit: int) -> bool:
     return False
 
 
-async def _read_json(request: Request, *, maximum_bytes: int | None = None) -> dict[str, Any]:
+async def _read_json(
+    request: Request, *, maximum_bytes: int | None = None, label: str = "Responses"
+) -> dict[str, Any]:
     bounded_body: bytes | None = None
     if maximum_bytes is not None:
         body = bytearray()
         async for chunk in request.stream():
             if len(body) + len(chunk) > maximum_bytes:
                 raise PayloadTooLarge(
-                    "request_too_large", "Responses request exceeds the JSON body limit"
+                    "request_too_large", f"{label} request exceeds the JSON body limit"
                 )
             body.extend(chunk)
         bounded_body = bytes(body)
@@ -792,15 +805,28 @@ async def _proxy(
     plane: DataPlane,
     request: Request,
     upstream_path: str,
+    *,
+    principal: InferencePrincipal | None = None,
+    payload: dict[str, Any] | None = None,
+    strip_headers: tuple[str, ...] = (),
+    on_deployment: Callable[[Deployment], None] | None = None,
 ) -> JSONResponse | StreamingResponse:
-    """Authenticate, authorize, then forward to the deployment's model host."""
+    """Authenticate, authorize, then forward to the deployment's model host.
+
+    A translating route (``/v1/messages``) authenticates and builds the upstream body itself,
+    then passes ``principal`` and ``payload`` so every later step is this one code path.
+    ``strip_headers`` names extra client headers not to forward, and ``on_deployment`` is told
+    which deployment the router chose before the request is admitted.
+    """
     started = time.perf_counter()
-    principal = plane.authenticate(request.headers.get("authorization"))
+    if principal is None:
+        principal = plane.authenticate(request.headers.get("authorization"))
     is_responses = upstream_path == RESPONSES_PATH
-    payload = await _read_json(
-        request,
-        maximum_bytes=plane.settings.responses_max_body_bytes if is_responses else None,
-    )
+    if payload is None:
+        payload = await _read_json(
+            request,
+            maximum_bytes=plane.settings.responses_max_body_bytes if is_responses else None,
+        )
     if is_responses:
         payload = _stateless_responses_payload(payload)
     model = _requested_model(payload)
@@ -819,6 +845,8 @@ async def _proxy(
     )
     if is_responses:
         routing_headers = {**routing_headers, "cache-control": "no-store"}
+    if on_deployment is not None:
+        on_deployment(deployment)
 
     # A failed durable spool is known before another expensive model invocation. The request that
     # first discovers an I/O fault may already have completed upstream, but every later request
@@ -865,6 +893,14 @@ async def _proxy(
             retry_after=1,
         )
 
+    # --- agent runs (agent_runs.py): refuse a spent run budget before any model call ---
+    run_step = await open_run_step(
+        plane, request, principal=principal, payload=payload, deployment=deployment,
+        admission=admission,
+    )
+    routing_headers = {**routing_headers, **run_step.headers()}
+    # --- end agent runs ---
+
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
     client_wants_usage_frame = False
@@ -875,6 +911,10 @@ async def _proxy(
             upstream_payload
         )
     headers = forwardable_headers(dict(request.headers))
+    if strip_headers:
+        headers = {
+            name: value for name, value in headers.items() if name.lower() not in strip_headers
+        }
 
     # A deployment is served by a pool of backends (ADR 0010). The pool skips a backend
     # that is ejected or unhealthy, so a healthy replica is chosen even when one is down.
@@ -971,12 +1011,27 @@ async def _proxy(
                     "error": {"code": "upstream_invalid_response", "message": "Non-JSON reply"}
                 }
 
+            # --- tool guard (tool_guard.py): may re-ask the host; retries are charged ---
+            if upstream_path == CHAT_COMPLETIONS_PATH:
+                retry_backend = backend
+                response, body = await guard_tool_calls(
+                    plane, request=request, payload=payload, upstream_payload=upstream_payload,
+                    response=response, body=body, step=run_step, principal=principal,
+                    deployment=deployment,
+                    send=lambda retry: plane.client.post(
+                        f"{retry_backend.url}{upstream_path}", json=retry, headers=headers,
+                        timeout=plane.settings.upstream_timeout_seconds,
+                    ),
+                )
+                charged_tokens = run_step.extra_tokens
+            # --- end tool guard ---
+
             usage = body.get("usage") if isinstance(body, dict) else None
             totals = response_usage(usage) if is_responses else None
             if response.is_success and isinstance(body, dict):
                 if not is_responses or totals is not None:
                     metered = totals.as_payload() if totals is not None else body
-                    charged_tokens = metered_tokens(metered)
+                    charged_tokens += metered_tokens(metered)
                     plane.record_usage(principal, deployment, metered, streamed=False)
                 else:
                     logger.warning(
@@ -1000,10 +1055,15 @@ async def _proxy(
                 ),
             )
             request_recorded = True
+            # --- agent runs: record the step; headers carry totals after it ---
+            routing_headers = {
+                **routing_headers, **run_step.finish_json(response.status_code, body)
+            }
             return JSONResponse(
                 status_code=response.status_code, content=body, headers=routing_headers
             )
         finally:
+            run_step.abandon()  # agent runs: no-op unless the step ended without a reply
             if not request_recorded:
                 plane.metrics.request_finished(
                     deployment=deployment_label,
@@ -1014,6 +1074,7 @@ async def _proxy(
             await plane.limits.release(admission, tokens=charged_tokens)
 
     if not pool.has_available():
+        run_step.abandon("upstream_unavailable")  # agent runs
         await plane.limits.release(admission)
         plane.metrics.request_finished(
             deployment=deployment_label,
@@ -1098,6 +1159,8 @@ async def _proxy(
                 input_tokens=usage.input_tokens if usage else 0,
                 output_tokens=usage.output_tokens if usage else 0,
             )
+            # agent runs: charge the same tokens the token rate limit is debited
+            run_step.finish_stream(usage, outcome=request_outcome, charged_tokens=stream_tokens)
             cleanup_accounted = True
 
         # Synchronous and deliberately before the limiter await. Withdrawal must not remain held
@@ -1317,6 +1380,71 @@ async def _proxy(
 
     # Usage is recorded in cleanup_stream, once the stream has actually reported it.
     return _CleanupStreamingResponse(stream(), cleanup=cleanup_stream, headers=routing_headers)
+
+
+async def _proxy_messages(plane: DataPlane, request: Request) -> Response:
+    """Serve the Anthropic Messages API by translating to and from chat completions.
+
+    Every gateway decision (ownership, routing, limits, retries, health, metering) is made by
+    ``_proxy`` on the translated request, exactly as for ``/v1/chat/completions``. Only the
+    edges differ: credentials may arrive as ``x-api-key``, and errors use Anthropic's shape.
+    """
+    context: anthropic_messages.TranslationContext | None = None
+
+    def chosen(deployment: Deployment) -> None:
+        if context is not None:
+            context.model = deployment.model_alias
+
+    try:
+        principal = plane.authenticate(
+            anthropic_messages.messages_authorization(
+                request.headers.get("authorization"), request.headers.get("x-api-key")
+            )
+        )
+        payload = await _read_json(
+            request, maximum_bytes=plane.settings.responses_max_body_bytes, label="Messages"
+        )
+        try:
+            chat_payload, context = anthropic_messages.to_chat_request(payload)
+        except anthropic_messages.MessagesRequestError as exc:
+            raise BadRequest("invalid_request_error", str(exc)) from exc
+        response = await _proxy(
+            plane,
+            request,
+            CHAT_COMPLETIONS_PATH,
+            principal=principal,
+            payload=chat_payload,
+            strip_headers=anthropic_messages.ANTHROPIC_REQUEST_HEADERS,
+            on_deployment=chosen,
+        )
+    except ApiError as exc:
+        return anthropic_messages.error_response(
+            exc.status_code, exc.message, retry_after=getattr(exc, "retry_after", None)
+        )
+
+    if isinstance(response, StreamingResponse):
+        response.body_iterator = anthropic_messages.translate_stream(
+            response.body_iterator, context
+        )
+        return response
+
+    passthrough = {
+        name: value
+        for name, value in response.headers.items()
+        if name.lower() not in ("content-length", "content-type")
+    }
+    try:
+        body = json.loads(bytes(response.body))
+    except (ValueError, UnicodeDecodeError):
+        body = None
+    if 200 <= response.status_code < 300 and isinstance(body, dict):
+        return JSONResponse(
+            content=anthropic_messages.to_anthropic_message(body, context), headers=passthrough
+        )
+    status_code = response.status_code if response.status_code >= 400 else 502
+    return anthropic_messages.error_response(
+        status_code, anthropic_messages.upstream_error_message(body), headers=passthrough
+    )
 
 
 def _stream_failure_event(responses: bool) -> bytes:
@@ -1592,6 +1720,7 @@ async def _proxy_transcription(
 
 def build_inference_router(plane: DataPlane) -> APIRouter:
     router = APIRouter(tags=["inference"])
+    router.include_router(build_runs_router(plane))  # agent runs: /v1/runs
 
     @router.get("/v1/models", summary="List models this account may invoke")
     async def list_models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -1618,11 +1747,37 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
         deliberately reachable only from inside the pod.
         """
         plane.reconcile_pools()
-        return Response(content=plane.metrics.render(), media_type="text/plain; version=0.0.4")
+        hosted_metrics = hosted_services.services_for(plane).metrics.render()
+        rendered = plane.metrics.render() + hosted_metrics
+        return Response(content=rendered, media_type="text/plain; version=0.0.4")
 
     @router.post(CHAT_COMPLETIONS_PATH, summary="Chat completion")
     async def chat_completions(request: Request):
-        return await _proxy(plane, request, CHAT_COMPLETIONS_PATH)
+        # Same order as _proxy (authenticate, then read the body); only ``model: "cascade"``
+        # leaves the ordinary path (docs/model-cascade.md).
+        principal = plane.authenticate(request.headers.get("authorization"))
+        payload = await _read_json(request)
+        if cascade.is_cascade_request(plane.registry, principal.account_id, payload):
+            return await cascade.handle_chat(plane, request, principal, payload, proxy=_proxy)
+        return await _proxy(
+            plane, request, CHAT_COMPLETIONS_PATH, principal=principal, payload=payload
+        )
+
+    # Tests and the demo stack inject a runner with a mock transport and resolver.
+    tool_runner = getattr(plane, "agent_tool_runner", None) or ToolRunner(plane.settings)
+
+    # Hosted tools (hosted_tools/): /v1/files and /v1/vector_stores; embeddings use _proxy.
+    hosted = hosted_services.services_for(plane)
+    hosted.proxy = _proxy
+    router.include_router(
+        hosted_file_search.build_router(plane, hosted, read_json=_read_json)
+    )
+
+    @router.post(agent_loop.AGENT_RUNS_PATH, summary="Run a server-side tool-using agent")
+    async def agent_runs(request: Request):
+        return await agent_loop.handle_run(
+            plane, request, proxy=_proxy, read_json=_read_json, tools=tool_runner
+        )
 
     @router.post(COMPLETIONS_PATH, summary="Text completion")
     async def completions(request: Request):
@@ -1631,6 +1786,18 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
     @router.post(RESPONSES_PATH, summary="Create a stateless OpenAI Response")
     async def responses(request: Request):
         return await _proxy(plane, request, RESPONSES_PATH)
+
+    @router.post(anthropic_messages.MESSAGES_PATH, summary="Create an Anthropic Message")
+    async def messages(request: Request):
+        return await _proxy_messages(plane, request)
+
+    @router.post(
+        anthropic_messages.COUNT_TOKENS_PATH, summary="Not implemented", include_in_schema=False
+    )
+    async def count_tokens() -> JSONResponse:
+        return anthropic_messages.error_response(
+            404, "Token counting is not implemented by this gateway"
+        )
 
     @router.post(TRANSCRIPTIONS_PATH, summary="Transcribe audio to text")
     async def transcriptions(request: Request):

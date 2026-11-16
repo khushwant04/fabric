@@ -31,8 +31,10 @@ below reports only candidates that passed their individual gate.
 | Same | 16 | 244.98 | 239.34 | 1.024x |
 
 The sweep selected block V16 / one warp except for 4B batch16, which selected
-V32 / one warp. These selections are experimental and have not been activated
-in serving. Graph replay removes Python launch overhead for the comparison;
+V32 / one warp. These selections now seed the T4 entries of the per-architecture
+launch table, which a host uses only when `FABRIC_KERNEL` is set; see
+[kernel launch tuning for T4 and A10](kernel-tuning-t4-a10.md). The substitution
+itself has not been enabled in production. Graph replay removes Python launch overhead for the comparison;
 the live hosts currently run eager execution. The measured ratios cannot be
 used as end-to-end token throughput gains.
 

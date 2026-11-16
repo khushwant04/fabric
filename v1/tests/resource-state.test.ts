@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
-import { confirmsModelDeletion, deploymentState, gpuCapacity, STAMP_LIVENESS_MS, stampState, statusReason } from "../lib/fabric/resource-state"
+import { confirmsModelDeletion, deploymentStampOptions, deploymentState, gpuCapacity, STAMP_LIVENESS_MS, stampState, statusReason } from "../lib/fabric/resource-state"
 import type { Deployment, DeploymentStatus, Placement, Stamp } from "../lib/fabric/types"
 
 const deployment: Deployment = { id: "d1", account_id: "a1", name: "test", model_alias: "model-a", generation: 3, status: "ready", created_at: "", updated_at: "", desired_spec: { replicas: 2, resources: { gpu_count: 1, gpu_class: "t4" }, runtime: { release: "test", kernel_mode: "auto", strategy: "least_in_flight" } } }
@@ -94,4 +94,21 @@ test("capacity is never manufactured from malformed data; deletion consent is ex
   assert.equal(gpuCapacity(2), 2)
   assert.equal(confirmsModelDeletion("model-a", "model-a"), true)
   for (const value of ["Model-a", "model-a ", "", null]) assert.equal(confirmsModelDeletion(value, "model-a"), false)
+})
+
+test("create-deployment infrastructure options list only active stamps, with honest capacity", () => {
+  const now = Date.parse("2026-10-06T12:00:00Z")
+  const fresh = new Date(now - 1000).toISOString()
+  const base: Stamp = { id: "s1", account_id: "a1", name: "gpu-a", status: "active", mode: "byoi", orchestrator: "k3s", region: null, capabilities: { allocatable_gpus: 2 }, last_heartbeat_at: fresh, revoked_at: null, created_at: "" }
+  const options = deploymentStampOptions([
+    base,
+    { ...base, id: "s2", name: "gpu-b", orchestrator: null, capabilities: { allocatable_gpus: "4" } },
+    { ...base, id: "s3", name: "stale", last_heartbeat_at: new Date(now - STAMP_LIVENESS_MS - 1).toISOString() },
+    { ...base, id: "s4", name: "revoked", revoked_at: fresh },
+  ], now)
+  assert.deepEqual(options, [
+    { id: "s1", label: "gpu-a · k3s · 2 GPUs" },
+    { id: "s2", label: "gpu-b · Kubernetes · Unknown GPUs" },
+  ])
+  assert.deepEqual(deploymentStampOptions([], now), [])
 })

@@ -85,6 +85,9 @@ class Deployment:
     #: Effective served context bound when known. None means the router must not make
     #: a compatibility claim and leaves enforcement to the selected model host.
     max_model_len: int | None = None
+    #: Position in the ``model: "cascade"`` ladder, smallest first. None keeps the
+    #: deployment out of an explicitly tiered cascade (docs/model-cascade.md).
+    cascade_tier: int | None = None
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGIES:
@@ -237,6 +240,14 @@ class DeploymentRegistry:
             and raw_max_model_len > 0
             else None
         )
+        raw_cascade_tier = entry.get("cascade_tier")
+        cascade_tier = (
+            raw_cascade_tier
+            if isinstance(raw_cascade_tier, int)
+            and not isinstance(raw_cascade_tier, bool)
+            and -1000 <= raw_cascade_tier <= 1000
+            else None
+        )
         return Deployment(
             deployment_id=uuid.UUID(str(entry["deployment_id"])),
             account_id=uuid.UUID(str(entry["account_id"])),
@@ -248,6 +259,7 @@ class DeploymentRegistry:
             route_revision=str(entry.get("route_revision") or ""),
             capabilities=capabilities,
             max_model_len=max_model_len,
+            cascade_tier=cascade_tier,
         )
 
     @classmethod

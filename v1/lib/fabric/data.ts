@@ -12,7 +12,7 @@ import type {
   Deployment,
   DeploymentStatus,
   DeploymentUsage,
-  Membership,
+  Member,
   OidcProvider,
   Placement,
   ServicePrincipal,
@@ -104,7 +104,7 @@ export async function listStamps() {
 
 export async function listMembers() {
   const context = await getConsoleContext()
-  return accountRequest<Membership[]>(
+  return accountRequest<Member[]>(
     `/v1/accounts/${context.account.id}/members`
   )
 }

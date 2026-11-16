@@ -601,6 +601,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		entry.Replicas = replicasFromSpec(assignment.Spec)
 		entry.Strategy = strategyFromSpec(assignment.Spec)
 		entry.Capabilities = modelCapabilitiesFromSpec(assignment.Spec)
+		entry.CascadeTier = cascadeTierFromSpec(assignment.Spec)
 		entry.GPUCount = gpuCountFromSpec(assignment.Spec)
 		entry.MaxModelLen = maxModelLenFromSpec(assignment.Spec)
 		entry.MaxNumSeqs = maxNumSeqsFromSpec(assignment.Spec)
@@ -955,6 +956,35 @@ func modelCapabilitiesFromSpec(spec map[string]any) state.ModelCapabilities {
 		}
 	}
 	return result
+}
+
+// cascadeTierFromSpec extracts the deployment's place in its account's model=cascade
+// ladder from capabilities.cascade_tier. It sits beside priority in the control plane's
+// specification because both are routing metadata, and is rendered at the top level of
+// the data plane's entry, where the cascade reads it. Absent, non-integral, or outside
+// -1000..1000 is nil, which leaves the deployment out of an explicit ladder rather than
+// stopping reconciliation over a value a newer control plane may accept.
+func cascadeTierFromSpec(spec map[string]any) *int {
+	capabilities, ok := spec["capabilities"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	var tier int
+	switch value := capabilities["cascade_tier"].(type) {
+	case float64:
+		if value != float64(int(value)) {
+			return nil
+		}
+		tier = int(value)
+	case int:
+		tier = value
+	default:
+		return nil
+	}
+	if tier < -1000 || tier > 1000 {
+		return nil
+	}
+	return &tier
 }
 
 // gpuCountFromSpec extracts how many devices one replica of this deployment needs.

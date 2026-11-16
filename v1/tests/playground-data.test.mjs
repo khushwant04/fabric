@@ -94,3 +94,55 @@ test("roles without deployment access do not fetch model inventory", async () =>
   assert.equal(item.reads(), 0)
   assert.match(result.notice, /role does not allow/)
 })
+
+function fleet({ env = {}, scopes = ["deployments:read", "stamps:read"] } = {}) {
+  // Two stamps: a and b on stamp A, c on stamp B.
+  const make = (id, alias, stampId, endpoint) => ({
+    deployment: { ...deployment, id, name: `${alias} deployment`, model_alias: alias },
+    placement: { ...placement, id: `placement-${id}`, deployment_id: id, stamp_id: stampId },
+    status: { ...status, deployment_id: id, stamp_id: stampId, endpoint },
+  })
+  const items = [
+    make("dep-a", "small", "stamp-a", "https://stamp-a.gw.example.com/v1"),
+    make("dep-b", "medium", "stamp-a", "https://stamp-a.gw.example.com/v1"),
+    make("dep-c", "large", "stamp-b", "https://stamp-b.gw.example.com/v1"),
+  ]
+  const byId = new Map(items.map((item) => [item.deployment.id, item]))
+  const dataModule = compile("../lib/fabric/playground-data.ts", {
+    "server-only": {},
+    "@/lib/fabric/playground": playground,
+    "@/lib/fabric/session": {
+      getConsoleContext: async () => ({ account: { id: deployment.account_id } }),
+      hasScope: (_context, scope) => scopes.includes(scope),
+    },
+    "@/lib/fabric/data": {
+      listDeployments: async () => items.map((item) => item.deployment),
+      listPlacements: async (id) => [byId.get(id).placement],
+      getDeploymentStatuses: async (id) => [byId.get(id).status],
+      listStamps: async () => [{ id: "stamp-a", name: "aks-gpu", capabilities: {} }, { id: "stamp-b", name: "gcp-rtx6000", capabilities: {} }],
+    },
+  }, { process: { env: { NODE_ENV: "production", ...env } } })
+  return dataModule
+}
+
+test("deployments on several stamps are each offered, and auto goes to the stamp serving most of them", async () => {
+  const { getPlaygroundOptions } = fleet({ env: { FABRIC_INFERENCE_URL: "https://stamp-a.gw.example.com", FABRIC_INFERENCE_ALLOWED_DOMAINS: "gw.example.com" } })
+  const result = await getPlaygroundOptions()
+  assert.deepEqual(Array.from(result.options, (option) => option.id), ["virtual-auto", "dep-a", "dep-b", "dep-c"])
+  assert.equal(result.options[0].deploymentId, "dep-a")
+  assert.equal(result.options[0].label, "Auto · model selection on aks-gpu")
+})
+
+test("with the edge gateway every deployment shares one gateway, and the edge is reported for the cards", async () => {
+  const env = { FABRIC_EDGE_INFERENCE_URL: "https://edge.example.com", FABRIC_INFERENCE_URL: "https://edge.example.com" }
+  const data = fleet({ env })
+  const result = await data.getPlaygroundOptions()
+  assert.deepEqual(Array.from(result.options, (option) => option.id), ["virtual-auto", "dep-a", "dep-b", "dep-c"])
+  assert.equal(result.options[0].label, "Auto · gateway model selection")
+  assert.equal(data.edgeGatewayUrl(), "https://edge.example.com/v1")
+  assert.equal(data.consoleUsesEdge(), true)
+  const separate = fleet({ env: { FABRIC_EDGE_INFERENCE_URL: "https://edge.example.com", FABRIC_INFERENCE_URL: "https://stamp-a.gw.example.com" } })
+  assert.equal(separate.consoleUsesEdge(), false)
+  assert.equal(fleet().edgeGatewayUrl(), null)
+  assert.equal(fleet({ env: { FABRIC_EDGE_INFERENCE_URL: "http://edge.example.com" } }).edgeGatewayUrl(), null)
+})

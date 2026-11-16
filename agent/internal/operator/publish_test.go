@@ -338,3 +338,44 @@ func TestUndeclaredRuntimeSettingsFallBackToTheStamp(t *testing.T) {
 		t.Fatal("an unset execution mode did not inherit the stamp's graph setting")
 	}
 }
+
+func TestCascadeTierFlowsFromAgentStateThroughCRToDataPlaneDocument(t *testing.T) {
+	publisher := NewPublisher(nil, namespace, stampID)
+	tier := 0
+	declared := publisher.resource("fabric-dep-a", state.Deployment{
+		DeploymentID: "dep-a",
+		AccountID:    "acct-a",
+		ModelAlias:   "small-model",
+		UpstreamURL:  "http://legacy.test",
+		CascadeTier:  &tier,
+	})
+	untiered := publisher.resource("fabric-dep-b", state.Deployment{
+		DeploymentID: "dep-b",
+		AccountID:    "acct-a",
+		ModelAlias:   "large-model",
+		UpstreamURL:  "http://legacy.test",
+	})
+	if declared.Spec.CascadeTier == nil || *declared.Spec.CascadeTier != 0 {
+		t.Fatalf("publisher dropped cascade tier zero: %+v", declared.Spec)
+	}
+
+	document, err := renderConfig([]ModelDeployment{declared, untiered}, nil)
+	if err != nil {
+		t.Fatalf("render config: %v", err)
+	}
+	var payload struct {
+		Deployments []map[string]any `json:"deployments"`
+	}
+	if err := json.Unmarshal([]byte(document), &payload); err != nil {
+		t.Fatalf("decode rendered document: %v", err)
+	}
+	tiers := map[string]any{}
+	for _, entry := range payload.Deployments {
+		if value, present := entry["cascade_tier"]; present {
+			tiers[entry["model_alias"].(string)] = value
+		}
+	}
+	if len(tiers) != 1 || tiers["small-model"] != float64(0) {
+		t.Fatalf("rendered cascade tiers = %v, want only small-model=0", tiers)
+	}
+}

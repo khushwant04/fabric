@@ -28,6 +28,18 @@ AUDIT_READ = "audit:read"
 # which is what stops an account from entitling itself.
 CAPACITY_WRITE = "system:capacity:write"
 
+# Reading the cross-account routing table that the edge gateway forwards by (ADR 0021).
+# Like CAPACITY_WRITE it sits outside CONTROL_SCOPES, so no account-scoped API key can
+# request it, and it is only ever placed on a key by ``python -m app.cli
+# create-edge-credential``. Token exchange additionally drops it from any key that is not
+# owned by a service principal of the Fabric system account, and the endpoint checks the
+# account again, so a scope string copied onto a customer row grants nothing.
+EDGE_ROUTING_READ = "edge:routing:read"
+
+#: Scopes a system-account machine key may carry into a control token. Never delegable
+#: through the API-key endpoints.
+SYSTEM_KEY_SCOPES = frozenset({EDGE_ROUTING_READ})
+
 CONTROL_SCOPES = frozenset(
     {
         ACCOUNTS_READ,

@@ -3,6 +3,22 @@
 #
 #   make setup      install every component's environment
 #   make demo       run the full platform loop locally, no GPU or cluster needed
+#   make demo-agent the same platform, then a multi-step agent run with a budget, a trace
+#                   and the tool-call guard (docs/agent-runs.md); a stub host unless
+#                   FABRIC_E2E_UPSTREAM points at a real one
+#   make demo-agent-loop  one request runs a whole agent on the gateway (POST /v1/agent/runs)
+#   make demo-cascade     model "cascade": small tier first, escalate on cheap checks
+#   make demo-file-search-mcp  hosted tools: file search over uploaded docs with citations, and
+#                   an MCP connector (with an approval-gated tool) on a local demo MCP server
+#   make demo-hosted-tools  hosted tools on the gateway: web_search, web_fetch and a
+#                   sandboxed code_interpreter (local sandbox process), no GPU needed
+#   make demo-openai-agents  the OpenAI Agents SDK on Fabric: handoff, tools, run budget,
+#                   tool guard and trace (docs/openai-agents-sdk.md)
+#   make demo-edge  the edge gateway (ADR 0021) in front of two local stamps: routing by
+#                   model, failover, and serving through a control-plane outage
+#   make demo-console  the console (v1/) against a real local control plane with a seeded
+#                   demo account; mock identity provider and model host (docs/console-demo.md)
+#   make demo-console-screenshots  the same, then capture docs/screenshots/console/ and exit
 #   make check      every test and lint suite CI runs (except PostgreSQL)
 #   make openapi    regenerate control-plane/openapi.json after an API change
 #   make bench-routing  compare routing strategies through the real gateway (see
@@ -14,7 +30,12 @@
 PYTHON_VERSION ?= 3.12
 RUFF := uv run --no-project --with ruff==0.8.4 ruff
 DATA_PLANE_TEST := uv run --python $(PYTHON_VERSION) --with-editable . \
-	--with pytest==8.3.4 --with pytest-asyncio==0.24.0 pytest -q
+	--with pytest==8.3.4 --with pytest-asyncio==0.24.0 \
+	--with openai-agents==0.24.0 --with openai==3.16.2 \
+	--with mcp==2.3.0 --with pypdf==7.1.0 pytest -q
+# The sandbox suite includes the pinned scientific stack so the plotting path is tested.
+SANDBOX_TEST := uv run --python $(PYTHON_VERSION) --no-project --with-editable '.[science,dev]' \
+	pytest -q
 TORCH_CPU := UV_INDEX=https://download.pytorch.org/whl/cpu UV_INDEX_STRATEGY=unsafe-best-match
 
 # The settings the control plane needs to import, matching its test configuration.
@@ -24,11 +45,13 @@ OPENAPI_ENV := FABRIC_APP_ENV=test FABRIC_DATABASE_URL=sqlite+aiosqlite:///:memo
 	FABRIC_JWT_ISSUER=https://control.fabric.test \
 	FABRIC_CREDENTIAL_PEPPER=test-pepper-value FABRIC_SYSTEM_ACCOUNT_SLUG=fabric-system
 
-.PHONY: help setup setup-python demo check check-control-plane check-data-plane check-agent \
+.PHONY: help setup setup-python demo demo-console demo-console-screenshots demo-agent \
+	demo-agent-loop demo-cascade demo-openai-agents demo-hosted-tools demo-file-search-mcp \
+	demo-edge check check-control-plane check-data-plane check-sandbox check-agent \
 	check-runtime check-console test-postgres openapi bench-routing
 
 help:
-	@sed -n '1,15p' Makefile
+	@sed -n '1,28p' Makefile
 
 setup: setup-python
 	cd v1 && npm ci
@@ -44,13 +67,65 @@ setup-python:
 demo: setup-python
 	bash agent/scripts/e2e.sh
 
-check: check-control-plane check-data-plane check-agent check-runtime check-console
+demo-agent: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=1 PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+# Control plane, two stamps (Go agents + HTTPS gateways with stub model hosts, different
+# names and regions) and the edge; see docs/edge-gateway.md.
+demo-edge: setup-python
+	bash agent/scripts/edge-demo.sh
+
+# The console against a real control plane, three enrolled stamps, real data planes and
+# collector, and usage from generated traffic. Only the identity provider and the model host
+# are mocked; see docs/console-demo.md. Runs until Ctrl-C.
+demo-console: setup-python
+	cd v1 && { test -d node_modules || npm ci; }
+	bash scripts/demo-console/run.sh
+
+demo-console-screenshots: setup-python
+	cd v1 && { test -d node_modules || npm ci; }
+	DEMO_SCREENSHOTS=1 bash scripts/demo-console/run.sh
+
+# Server-side tool loop (docs/agent-tool-loop.md) and model cascade (docs/model-cascade.md),
+# on the same local platform and stub host machinery as demo-agent.
+demo-agent-loop: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=loop PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+demo-cascade: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=cascade PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+# Hosted tools (docs/file-search.md, docs/mcp-connectors.md) on the same local platform.
+demo-file-search-mcp: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=files PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+# The OpenAI Agents SDK (examples/python/scripts/openai_agents_demo.py) against the same local
+# platform, with the stub host agent/scripts/openai_agents_demo_host.py unless
+# FABRIC_E2E_UPSTREAM points at a real one.
+demo-openai-agents: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=openai-agents PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+# Hosted tools (docs/hosted-tools.md): the sandbox runs as a local process with the pinned
+# scientific stack. Set FABRIC_DP_E2B_API_KEY and/or FABRIC_DEMO_FIRECRAWL_URL to add the
+# optional connected-backend step.
+demo-hosted-tools: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=hosted PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+check: check-control-plane check-data-plane check-sandbox check-agent check-runtime check-console
 
 check-control-plane:
 	cd control-plane && uv run --python $(PYTHON_VERSION) --extra dev pytest -q && $(RUFF) check .
 
 check-data-plane:
 	cd data-plane && $(DATA_PLANE_TEST) && $(RUFF) check .
+
+check-sandbox:
+	cd sandbox && $(SANDBOX_TEST) && $(RUFF) check .
 
 check-agent:
 	cd agent && test -z "$$(gofmt -l .)" && go vet ./... && go test ./...

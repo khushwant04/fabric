@@ -88,6 +88,10 @@ type Deployment struct {
 	// Capabilities drives model=auto selection in the data plane. Legacy deployments
 	// default to text chat/completion when the agent reads an older desired spec.
 	Capabilities ModelCapabilities `json:"capabilities"`
+	// CascadeTier orders this deployment in the account's model=cascade ladder, lowest
+	// first. Nil leaves it out of an explicit ladder; a pointer because zero is a tier.
+	// The data plane reads it from the top level of the entry, beside capabilities.
+	CascadeTier *int `json:"cascade_tier,omitempty"`
 	// GPUCount is how many devices one replica needs. Carried for the operator, which
 	// turns it into the container's nvidia.com/gpu limit; the data plane ignores it.
 	//

@@ -133,6 +133,7 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			Replicas:      deployment.Replicas,
 			Strategy:      deployment.Strategy,
 			Capabilities:  &capabilities,
+			CascadeTier:   deployment.CascadeTier,
 			GPUCount:      deployment.GPUCount,
 			MaxModelLen:   deployment.MaxModelLen,
 			MaxNumSeqs:    deployment.MaxNumSeqs,

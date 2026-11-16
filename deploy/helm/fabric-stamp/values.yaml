@@ -260,9 +260,114 @@ dataPlane:
     # JSON inputs may contain inline images. Reject oversized requests before
     # decoding or admitting model work; response bodies and SSE are never cached.
     maxBodyBytes: 16777216
+  # Hosted file search (docs/file-search.md): /v1/files, /v1/vector_stores and the
+  # file_search agent tool. Stores are stamp-local (SQLite plus blobs) under one path.
+  fileSearch:
+    enabled: true
+    maxFileBytes: 10485760
+    maxFilesPerAccount: 100
+    maxBytesPerAccount: 209715200
+    maxStoresPerAccount: 20
+    maxChunksPerStore: 10000
+    # Embeddings deployment alias for hybrid ranking; empty ranks with BM25 only. Used for
+    # an account only when it owns a deployment with this alias.
+    embeddingModel: ""
+    # Off by default: the store lives in an emptyDir and is lost when the pod is replaced
+    # (NOTES.txt warns). Enable for anything customers rely on.
+    persistence:
+      enabled: false
+      existingClaim: ""
+      size: 5Gi
+      storageClass: ""
+      accessMode: ReadWriteOnce
+  # MCP connectors (docs/mcp-connectors.md): hostnames an agent run's mcp tool may reach.
+  # Empty disables MCP connectors. Loopback, link-local and metadata addresses are refused
+  # even when listed. Plain http is for development only.
+  mcp:
+    allowedHosts: []
+    allowInsecureHttp: false
+    timeoutSeconds: 20
+    maxResponseBytes: 524288
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 1, memory: 1Gi}
+
+# Hosted agent tools (docs/hosted-tools.md): executed by the gateway inside POST
+# /v1/agent/runs. Everything is off by default; a request declaring a disabled tool is
+# refused with 400 hosted_tool_disabled.
+hostedTools:
+  codeInterpreter:
+    enabled: false
+    # sandbox  Fabric's sandbox service, deployed below (works air-gapped).
+    # e2b      E2B microVM sandboxes. Code and data leave the cluster unless E2B is
+    #          self-hosted (set e2b.domain). Recommended for untrusted multi-tenant code.
+    backend: sandbox
+    timeoutSeconds: 30
+    e2b:
+      # Secret holding the API key. Required for the e2b backend; never a plain value.
+      existingSecret: ""
+      existingSecretKey: api-key
+      template: ""
+      # A self-hosted E2B domain; empty uses E2B cloud.
+      domain: ""
+      # Outbound internet from E2B sandboxes. Off keeps model-written code from
+      # exfiltrating data.
+      allowInternet: false
+      maxSandboxes: 8
+  webFetch:
+    enabled: false
+    # Comma-separated hosts, *.suffix entries, or * for any public host. Private ranges
+    # need an explicit entry; loopback, link-local and metadata are always refused.
+    allowedHosts: ""
+  webSearch:
+    enabled: false
+  web:
+    # direct     the gateway fetches pages; search via searchUrl as an HTTP API template
+    # searxng    direct fetch; search via a SearXNG instance at searchUrl (on-prem friendly)
+    # firecrawl  fetch and search through a self-hosted Firecrawl (not deployed by this chart)
+    backend: direct
+    searchUrl: ""
+    searchApiKey:
+      existingSecret: ""
+      existingSecretKey: api-key
+      header: Authorization
+    firecrawl:
+      url: ""
+      existingSecret: ""
+      existingSecretKey: api-key
+
+# The self-hosted code-interpreter sandbox, deployed when
+# hostedTools.codeInterpreter.enabled=true with backend=sandbox.
+sandbox:
+  image:
+    repository: fabric/sandbox
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  replicas: 1
+  # Shared secret between the gateway and the sandbox. Generated and retained unless an
+  # existing Secret is named.
+  token:
+    existingSecret: ""
+    existingSecretKey: token
+    value: ""
+  # A sandboxed container runtime, e.g. gvisor (runsc) or kata. Strongly recommended for
+  # untrusted multi-tenant code: without it the boundary is the host kernel.
+  runtimeClassName: ""
+  limits:
+    maxConcurrent: 4
+    cpuSeconds: 30
+    memoryBytes: 2147483648
+    maxTimeoutSeconds: 120
+    sessionTtlSeconds: 1800
+    sessionMaxBytes: 268435456
+  storage:
+    sizeLimit: 2Gi
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 3Gi}
+  nodeSelector: {}
+  tolerations: []
 
 # Public exposure of the inference listener through an existing Istio ingress gateway.
 # Only the inference listener is reachable: the administrative listener the collector

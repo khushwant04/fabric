@@ -97,13 +97,20 @@ async def create_account(
 
 async def list_members(
     session: AsyncSession, account_id: uuid.UUID
-) -> list[AccountMembership]:
+) -> list[tuple[AccountMembership, User]]:
+    """Return the account's memberships with the user each belongs to.
+
+    ``users`` carries no account and is not under row-level security, so the join is
+    what bounds the result: a user appears only through a membership row of this
+    account, and that table's policy refuses another account's rows.
+    """
     rows = await session.execute(
-        select(AccountMembership)
+        select(AccountMembership, User)
+        .join(User, User.id == AccountMembership.user_id)
         .where(AccountMembership.account_id == account_id)
         .order_by(AccountMembership.created_at)
     )
-    return list(rows.scalars().all())
+    return [(membership, user) for membership, user in rows.all()]
 
 
 async def _require_remaining_owner(

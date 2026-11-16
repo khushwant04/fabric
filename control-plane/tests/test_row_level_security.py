@@ -329,3 +329,43 @@ async def test_the_generation_watermark_spans_accounts_on_a_shared_stamp(
     assert [entry["deployment_id"] for entry in acknowledged.json()["deployments"]] == [
         second["id"]
     ]
+
+
+async def test_the_edge_routing_table_spans_accounts_only_through_its_elevation(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The edge reads every account's placements, and nothing else gains that (ADR 0021).
+
+    The routing table is built inside ``elevated``; the same unfiltered read outside it,
+    with no declared account, sees nothing, and the elevation ends with the read.
+    """
+    from app.models import DeploymentPlacement
+    from app.services.edge import build_routing_table
+    from tests.helpers import default_capabilities, place
+
+    deployments = []
+    for subject in ("rls-edge-a", "rls-edge-b"):
+        account_id, token = await onboard(client, subject, f"{subject}-account")
+        capabilities = {
+            **default_capabilities(gpus=8),
+            "inference_url": f"https://{subject}.stamps.example.com",
+        }
+        enrolled = await enroll_stamp(client, account_id, token, capabilities=capabilities)
+        deployment = await create_deployment(client, account_id, token)
+        placed = await place(
+            client, account_id, token, deployment["id"], stamp_id=enrolled["stamp"]["id"]
+        )
+        assert placed.status_code == 201, placed.text
+        deployments.append(deployment["id"])
+
+    reset_context()
+    await db_session.rollback()
+    count = select(func.count(DeploymentPlacement.id))
+    assert (await db_session.execute(count)).scalar_one() == 0
+
+    await db_session.rollback()
+    table = await build_routing_table(db_session)
+    assert sorted(str(entry.deployment_id) for entry in table.deployments) == sorted(deployments)
+
+    # The elevation ended with the read: the rest of the transaction sees nothing again.
+    assert (await db_session.execute(count)).scalar_one() == 0

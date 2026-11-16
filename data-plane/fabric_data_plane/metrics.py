@@ -17,6 +17,7 @@ import threading
 import time
 from collections import defaultdict
 
+from fabric_data_plane.hosted_tools.metrics import HostedToolMetrics
 from fabric_data_plane.streaming import UNMETERED_REASONS
 
 #: Upper bounds in seconds. Chosen for a language model rather than a web service: the
@@ -64,6 +65,13 @@ class Metrics:
         self._verification_matches_local = 1
         self._verification_rejected_updates = 0
         self._verification_corrected_drift = 0
+        # Agent runs and the tool-call guard (agent_runs.py, tool_guard.py).
+        self._agent_steps: dict[tuple[str, str], int] = defaultdict(int)
+        self._agent_budget_refusals: dict[tuple[str, str], int] = defaultdict(int)
+        self._tool_guard: dict[tuple[str, str], int] = defaultdict(int)
+        self._tool_guard_retries: dict[str, int] = defaultdict(int)
+        # Hosted tools (hosted_tools/): executions, outcomes, bytes.
+        self.hosted_tools = HostedToolMetrics()
         self._started = time.time()
 
     def verification_state(
@@ -216,6 +224,23 @@ class Metrics:
             if unmetered_reason is not None:
                 self._unmetered_streams[(deployment, account, unmetered_reason)] += 1
 
+    def agent_step(self, *, deployment: str, outcome: str) -> None:
+        """Record one completed step of an agent run."""
+        with self._lock:
+            self._agent_steps[(deployment, outcome)] += 1
+
+    def agent_budget_refused(self, *, deployment: str, budget: str) -> None:
+        """Record a request refused because its run's token or step budget was spent."""
+        with self._lock:
+            self._agent_budget_refusals[(deployment, budget)] += 1
+
+    def tool_guard(self, *, deployment: str, outcome: str, retries: int) -> None:
+        """Record one tool-guard check (valid, repaired or failed) and its billed retries."""
+        with self._lock:
+            self._tool_guard[(deployment, outcome)] += 1
+            if retries:
+                self._tool_guard_retries[deployment] += retries
+
     def refused(self, *, deployment: str, account: str, reason: str) -> None:
         """Record a request rejected before it reached a model host."""
         with self._lock:
@@ -239,6 +264,10 @@ class Metrics:
             verification_matches_local = self._verification_matches_local
             verification_rejected_updates = self._verification_rejected_updates
             verification_corrected_drift = self._verification_corrected_drift
+            agent_steps = dict(self._agent_steps)
+            agent_refusals = dict(self._agent_budget_refusals)
+            tool_guard = dict(self._tool_guard)
+            tool_guard_retries = dict(self._tool_guard_retries)
             uptime = time.time() - self._started
 
         lines: list[str] = []
@@ -362,6 +391,44 @@ class Metrics:
         lines.append(
             f"fabric_dp_verification_corrected_drift_total {verification_corrected_drift}"
         )
+
+        lines.append("# HELP fabric_dp_agent_run_steps_total Agent-run steps completed.")
+        lines.append("# TYPE fabric_dp_agent_run_steps_total counter")
+        for (deployment, outcome), value in sorted(agent_steps.items()):
+            lines.append(
+                f'fabric_dp_agent_run_steps_total{{deployment_id="{deployment}",'
+                f'outcome="{outcome}"}} {value}'
+            )
+        lines.append(
+            "# HELP fabric_dp_agent_run_budget_refusals_total "
+            "Requests refused because their run budget was spent."
+        )
+        lines.append("# TYPE fabric_dp_agent_run_budget_refusals_total counter")
+        for (deployment, budget), value in sorted(agent_refusals.items()):
+            lines.append(
+                f'fabric_dp_agent_run_budget_refusals_total{{deployment_id="{deployment}",'
+                f'budget="{budget}"}} {value}'
+            )
+        lines.append(
+            "# HELP fabric_dp_tool_guard_total Tool-call guard checks, by outcome."
+        )
+        lines.append("# TYPE fabric_dp_tool_guard_total counter")
+        for (deployment, outcome), value in sorted(tool_guard.items()):
+            lines.append(
+                f'fabric_dp_tool_guard_total{{deployment_id="{deployment}",'
+                f'outcome="{outcome}"}} {value}'
+            )
+        lines.append(
+            "# HELP fabric_dp_tool_guard_retries_total "
+            "Billed model calls made to repair tool calls."
+        )
+        lines.append("# TYPE fabric_dp_tool_guard_retries_total counter")
+        for deployment, value in sorted(tool_guard_retries.items()):
+            lines.append(
+                f'fabric_dp_tool_guard_retries_total{{deployment_id="{deployment}"}} {value}'
+            )
+
+        lines.extend(self.hosted_tools.lines())
 
         lines.append("# HELP fabric_dp_uptime_seconds Seconds since this process started.")
         lines.append("# TYPE fabric_dp_uptime_seconds gauge")

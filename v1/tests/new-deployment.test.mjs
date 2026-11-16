@@ -11,7 +11,8 @@ function compile(relative, dependencies = {}) {
   return exports
 }
 
-const { parseNewDeployment, parsePlacementStamp } = compile("../lib/fabric/new-deployment.ts")
+const deploymentOptions = compile("../lib/fabric/deployment-options.ts")
+const { parseNewDeployment, parsePlacementStamp } = compile("../lib/fabric/new-deployment.ts", { "./deployment-options": deploymentOptions })
 const stampId = "4c0a0d13-70e5-4a98-9a61-0a278fdc831c"
 // Deployment actions never read the enrollment issuer; only stamp enrollment does.
 const stampEnrollmentConfig = { controlPlaneTokenIssuer() { throw new Error("deployment actions must not read the enrollment issuer") } }
@@ -71,7 +72,9 @@ test("the real creation action sends the model repository and chosen stamp witho
   assert.equal(calls.length, 2)
   const payload = JSON.parse(calls[0].init.body)
   assert.equal(payload.spec.runtime.release, "Qwen/Qwen3.5-4B")
-  assert.equal(payload.spec.runtime.kernel_mode, "standard")
+  assert.equal(payload.spec.runtime.kernel_mode, "auto")
+  assert.equal(payload.spec.runtime.strategy, "least_in_flight")
+  assert.equal(Object.hasOwn(payload.spec, "capabilities"), false)
   assert.equal(payload.spec.runtime.max_model_len, 4096)
   assert.equal(payload.model_alias, "qwen3.5-4b")
   assert.deepEqual(JSON.parse(calls[1].init.body), { stamp_id: stampId })
@@ -157,4 +160,63 @@ test("a lost placement response still opens the saved deployment for review and 
   await actions.createDeployment({}, form())
   assert.equal(creations, 1)
   assert.deepEqual(redirects, ["/deployments/saved-deployment?placement=failed"])
+})
+
+// Values built inside the vm context carry its prototypes, so compare their JSON shape.
+const plain = (value) => JSON.parse(JSON.stringify(value))
+
+function routingForm(values = {}, capabilities = ["chat", "completion"]) {
+  const result = form({ routing: "1", autoEnabled: "on", ...values })
+  for (const capability of capabilities) result.append("capabilities", capability)
+  return result
+}
+
+test("kernel mode and balancing strategy accept exactly the control plane's vocabulary", () => {
+  for (const kernelMode of ["auto", "fabric", "standard"]) assert.equal(parseNewDeployment(form({ kernelMode })).kernelMode, kernelMode)
+  for (const strategy of ["least_in_flight", "round_robin", "session_affinity", "weighted", "prefix_aware"]) assert.equal(parseNewDeployment(form({ strategy })).strategy, strategy)
+  assert.deepEqual(plain(deploymentOptions.balancingStrategies.map((option) => option.value).sort()), ["least_in_flight", "prefix_aware", "round_robin", "session_affinity", "weighted"])
+  const defaults = parseNewDeployment(form())
+  assert.equal(defaults.kernelMode, "auto")
+  assert.equal(defaults.strategy, "least_in_flight")
+  for (const values of [{ kernelMode: "triton" }, { strategy: "random" }, { strategy: "least in flight" }]) assert.throws(() => parseNewDeployment(form(values)))
+})
+
+test("routing capabilities, priority, and cascade tier are explicit only when the routing section is posted", () => {
+  assert.equal(parseNewDeployment(form()).capabilities, null)
+  const routed = parseNewDeployment(routingForm({ priority: "-20", cascadeTier: "0" }, ["chat", "code", "reasoning"]))
+  assert.deepEqual(plain(routed.capabilities), { chat: true, completion: false, code: true, reasoning: true, vision: false, transcription: false, translation: false, auto_enabled: true, priority: -20, cascade_tier: 0 })
+  const untiered = parseNewDeployment(routingForm({ priority: "", cascadeTier: "" }))
+  assert.equal(untiered.capabilities.priority, 0)
+  assert.equal(untiered.capabilities.cascade_tier, null)
+  // Opting out of model=auto keeps the flags but lets every one be cleared.
+  const optedOut = parseNewDeployment(routingForm({ autoEnabled: "" }, []))
+  assert.equal(optedOut.capabilities.auto_enabled, false)
+  assert.equal(optedOut.capabilities.chat, false)
+  for (const [values, capabilities] of [[{ priority: "101" }, undefined], [{ priority: "1.5" }, undefined], [{ cascadeTier: "1001" }, undefined], [{ cascadeTier: "-1001" }, undefined], [{}, ["chat", "admin"]], [{}, []]]) {
+    assert.throws(() => parseNewDeployment(routingForm(values, capabilities)))
+  }
+})
+
+test("the creation action sends the chosen kernel, strategy, and routing capabilities", async () => {
+  const bodies = []
+  const actions = compile("../app/(console)/actions.ts", {
+    "node:crypto": { randomUUID: () => "idempotency-test" },
+    "next/cache": { revalidatePath() {} },
+    "next/navigation": { redirect() {} },
+    "@/lib/fabric/new-deployment": { parseNewDeployment, parsePlacementStamp },
+    "@/lib/fabric/stamp-enrollment-config": stampEnrollmentConfig,
+    "@/lib/fabric/client": { FabricApiError: class extends Error {}, async controlPlaneRequest(path, init) { if (!path.endsWith("/placements")) bodies.push(JSON.parse(init.body)); return { id: "deployment-one" } } },
+    "@/lib/fabric/session": { getConsoleContext: async () => ({ account: { id: "tenant-one" } }), getFabricAccessToken: async () => "tenant-one-token", requireScope() {} },
+  })
+  await actions.createDeployment({}, routingForm({ kernelMode: "fabric", strategy: "prefix_aware", priority: "10", cascadeTier: "2" }, ["chat", "vision"]))
+  assert.equal(bodies[0].spec.runtime.kernel_mode, "fabric")
+  assert.equal(bodies[0].spec.runtime.strategy, "prefix_aware")
+  assert.deepEqual(bodies[0].spec.capabilities, { chat: true, completion: false, code: false, reasoning: false, vision: true, transcription: false, translation: false, auto_enabled: true, priority: 10, cascade_tier: 2 })
+})
+
+test("routing summary applies the control plane's defaults to older specifications", () => {
+  assert.deepEqual(plain(deploymentOptions.routingSummary(undefined)), { autoEnabled: true, flags: ["Chat", "Completion"], priority: 0, cascadeTier: null })
+  assert.deepEqual(plain(deploymentOptions.routingSummary({ chat: true, completion: false, code: true, auto_enabled: false, priority: 5, cascade_tier: 0 })), { autoEnabled: false, flags: ["Chat", "Code"], priority: 5, cascadeTier: 0 })
+  assert.equal(deploymentOptions.strategyLabel("prefix_aware"), "Prefix aware")
+  assert.equal(deploymentOptions.kernelModeLabel("fabric"), "Fabric")
 })

@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [control-plane, data-plane]
+        component: [control-plane, data-plane, sandbox]
     defaults:
       run:
         working-directory: ${{ matrix.component }}
@@ -46,6 +46,9 @@ jobs:
       - name: Test data plane
         if: matrix.component == 'data-plane'
         run: uv run --with-editable . --with 'pytest==8.3.4' --with 'pytest-asyncio==0.24.0' pytest -q
+      - name: Test sandbox
+        if: matrix.component == 'sandbox'
+        run: uv run --no-project --with-editable '.[science,dev]' pytest -q
       - name: Smoke-run the routing benchmark
         if: matrix.component == 'data-plane'
         run: |
@@ -144,6 +147,10 @@ jobs:
           go-version-file: agent/go.mod
       - name: Run the platform loop
         run: make demo
+      - name: Run the edge gateway in front of two stamps
+        run: make demo-edge
+      - name: Run hosted tools (local sandbox, web_fetch, web_search)
+        run: make demo-hosted-tools
 
   agent:
     runs-on: depot-ubuntu-latest
@@ -225,9 +232,12 @@ jobs:
         run: |
           bash deploy/scripts/test-shared-limits-chart.sh
           bash deploy/scripts/test-usage-spool-chart.sh
+          bash deploy/scripts/test-file-search-chart.sh
       - name: Assert console and native stamp exposure packaging
         run: |
           python deploy/scripts/test_console_chart.py
+          python deploy/scripts/test_edge_chart.py
+          python deploy/scripts/test_hosted_tools_chart.py
           python deploy/scripts/test_cache_chart.py
           bash deploy/scripts/test-stamp-exposure-chart.sh
       - name: Verify upgrades from legacy release values
@@ -249,7 +259,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [control-plane, agent, data-plane, console]
+        component: [control-plane, agent, data-plane, console, sandbox]
     steps:
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v4

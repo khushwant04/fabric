@@ -2,6 +2,7 @@ import { ArrowLeftIcon, ArrowRightIcon, DownloadIcon, FilterIcon, ScrollTextIcon
 import Link from "next/link"
 
 import { PageContainer, PageHeader } from "@/components/console/page-header"
+import { TruncatedText } from "@/components/console/truncated-text"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -38,13 +39,13 @@ export default async function AuditPage({ searchParams }: PageProps<"/audit">) {
       {filtered ? <Button nativeButton={false} variant="ghost" render={<Link href="/audit" />}>Clear</Button> : null}
     </form></CardContent></Card>
     <Card><CardHeader><CardTitle>Events</CardTitle><CardDescription>Newest first. Exports are recorded in this log too.</CardDescription></CardHeader>
-      {page.events.length ? <CardContent className="px-0"><Table><TableHeader><TableRow><TableHead className="pl-6">Time</TableHead><TableHead>Action</TableHead><TableHead>Actor</TableHead><TableHead>Resource</TableHead><TableHead className="pr-6">Details</TableHead></TableRow></TableHeader><TableBody>
+      {page.events.length ? <CardContent className="px-0"><Table className="min-w-[900px]"><TableHeader><TableRow><TableHead className="pl-6">Time</TableHead><TableHead>Action</TableHead><TableHead>Actor</TableHead><TableHead>Resource</TableHead><TableHead className="pr-6">Details</TableHead></TableRow></TableHeader><TableBody>
         {page.events.map((event) => <TableRow key={event.id}>
           <TableCell className="pl-6 whitespace-nowrap text-muted-foreground">{formatDate(event.created_at)}</TableCell>
-          <TableCell><Link className="font-medium hover:underline" href={auditHref("/audit", { action: event.action })}>{auditActionLabel(event.action)}</Link></TableCell>
+          <TableCell><Link className="block max-w-56 font-medium hover:underline" href={auditHref("/audit", { action: event.action })}><TruncatedText text={auditActionLabel(event.action)} /></Link></TableCell>
           <TableCell><Badge variant="outline">{event.actor_type}</Badge> <span className="font-mono text-xs text-muted-foreground">{event.actor_id ? shortId(event.actor_id) : "system"}</span></TableCell>
           <TableCell>{event.resource_id ? <Link className="font-mono text-xs hover:underline" href={auditHref("/audit", { resource: event.resource_id })}>{event.resource_type} {shortId(event.resource_id)}</Link> : <span className="text-muted-foreground">—</span>}</TableCell>
-          <TableCell className="max-w-md truncate pr-6 text-xs text-muted-foreground" title={summarizeAuditMetadata(event.metadata)}>{summarizeAuditMetadata(event.metadata) || "—"}</TableCell>
+          <TableCell className="pr-6 text-xs text-muted-foreground">{summarizeAuditMetadata(event.metadata) ? <TruncatedText text={summarizeAuditMetadata(event.metadata)} className="max-w-[14rem] 2xl:max-w-[24rem]" /> : "—"}</TableCell>
         </TableRow>)}
       </TableBody></Table></CardContent> : <Empty className="min-h-72 border-0"><EmptyHeader><EmptyMedia variant="icon"><ScrollTextIcon /></EmptyMedia><EmptyTitle>No matching events</EmptyTitle><EmptyDescription>{filtered ? "Nothing in this account's trail matches the filter." : "Changes to this account will appear here."}</EmptyDescription></EmptyHeader></Empty>}
       {search.cursor || page.next_cursor ? <CardContent className="flex justify-between gap-2">
