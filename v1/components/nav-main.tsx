@@ -4,6 +4,7 @@ import type { ReactNode } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 
+import { GlidingHighlight, useGlidingHighlight } from "@/components/ui/gliding-highlight"
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -35,9 +36,16 @@ export function NavMain({
   const pathname = usePathname()
   const router = useRouter()
   const { isMobile, setOpenMobile } = useSidebar()
+  // One highlight for the whole nav, so hover glides continuously between items and
+  // across section labels instead of fading out and back in at each section edge.
+  const { containerRef, highlightRef } = useGlidingHighlight<HTMLElement>({
+    itemSelector: "[data-sidebar=menu-button]",
+    hoverMode: "nearest",
+  })
 
   return (
-    <nav className="flex flex-col gap-3" aria-label="Fabric navigation">
+    <nav ref={containerRef} className="relative isolate flex flex-col gap-3" aria-label="Fabric navigation">
+      <GlidingHighlight ref={highlightRef} className="rounded-lg bg-sidebar-accent/70" />
       {sections.map((section, sectionIndex) => {
         const items = section.items.filter(
           (item) => !item.scope || scopes.includes(item.scope)
@@ -52,7 +60,7 @@ export function NavMain({
               </SidebarGroupLabel>
             ) : null}
             <SidebarGroupContent>
-              <SidebarMenu className="gap-0.5">
+              <SidebarMenu highlight={false} className="gap-0.5">
                 {items.map((item) => {
                   const isActive =
                     pathname === item.url ||
@@ -65,7 +73,7 @@ export function NavMain({
                         render={<Link href={item.url} prefetch={false} />}
                         isActive={isActive}
                         tooltip={item.title}
-                        className="h-9 gap-3 rounded-lg px-3 text-[15px] font-normal text-sidebar-foreground/85 transition-colors duration-100 ease-out hover:bg-sidebar-accent/70 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0!"
+                        className="h-9 gap-3 rounded-lg px-3 text-[15px] font-normal text-sidebar-foreground/85 transition-colors duration-100 ease-out hover:bg-transparent hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0!"
                         onClick={() => { if (isMobile) setOpenMobile(false) }}
                         // Warm only the destination the user is about to open.
                         onMouseEnter={() => { if (!isActive) router.prefetch(item.url) }}
