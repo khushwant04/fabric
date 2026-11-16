@@ -9,7 +9,7 @@ import (
 
 func tpuHost() ModelHost {
 	host := testHost()
-	host.Image = "vllm/vllm-tpu:v0.32.0"
+	host.Image = "vllm/vllm-tpu:v0.26.0"
 	host.Accelerator = AcceleratorTPU
 	host.Privileged = true
 	host.DevicePaths = []string{"/dev/vfio"}
@@ -83,7 +83,7 @@ func TestATPUHostRequestsChipsAndRunsPrivilegedWithTheDevices(t *testing.T) {
 	pod := renderHost(t, tpuHost(), 4)
 	container := pod.Template.Spec.Containers[0]
 
-	if container.Image != "vllm/vllm-tpu:v0.32.0" || strings.Join(container.Command, " ") != "vllm serve" {
+	if container.Image != "vllm/vllm-tpu:v0.26.0" || strings.Join(container.Command, " ") != "vllm serve" {
 		t.Fatalf("image/command = %q %q", container.Image, container.Command)
 	}
 	if container.Resources.Limits["google.com/tpu"] != "4" || container.Resources.Requests["google.com/tpu"] != "4" {

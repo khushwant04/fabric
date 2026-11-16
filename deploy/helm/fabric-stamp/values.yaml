@@ -536,9 +536,10 @@ accelerator:
   type: nvidia
   tpu:
     # The official vLLM TPU image. Pinned: a TPU image tracks vLLM and libtpu together, and
-    # a moving tag would change both under a running stamp. Check the TPU installation page
-    # of the vLLM docs before raising it.
-    image: vllm/vllm-tpu:v0.32.0
+    # a moving tag would change both under a running stamp. Kept on the same vLLM release
+    # as the GPU model host, so both accept the same server flags. Check the TPU
+    # installation page of the vLLM docs before raising it.
+    image: vllm/vllm-tpu:v0.26.0
     # The TPU image has no serving entrypoint, so the command is given explicitly; the
     # operator appends the same flags it passes on GPUs.
     command: ["vllm", "serve"]
