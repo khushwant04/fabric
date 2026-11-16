@@ -10,6 +10,9 @@
 #   make demo-cascade     model "cascade": small tier first, escalate on cheap checks
 #   make demo-edge  the edge gateway (ADR 0021) in front of two local stamps: routing by
 #                   model, failover, and serving through a control-plane outage
+#   make demo-console  the console (v1/) against a real local control plane with a seeded
+#                   demo account; mock identity provider and model host (docs/console-demo.md)
+#   make demo-console-screenshots  the same, then capture docs/screenshots/console/ and exit
 #   make check      every test and lint suite CI runs (except PostgreSQL)
 #   make openapi    regenerate control-plane/openapi.json after an API change
 #   make bench-routing  compare routing strategies through the real gateway (see
@@ -31,11 +34,11 @@ OPENAPI_ENV := FABRIC_APP_ENV=test FABRIC_DATABASE_URL=sqlite+aiosqlite:///:memo
 	FABRIC_JWT_ISSUER=https://control.fabric.test \
 	FABRIC_CREDENTIAL_PEPPER=test-pepper-value FABRIC_SYSTEM_ACCOUNT_SLUG=fabric-system
 
-.PHONY: help setup setup-python demo demo-agent demo-agent-loop demo-cascade demo-edge check check-control-plane check-data-plane check-agent \
+.PHONY: help setup setup-python demo demo-console demo-console-screenshots demo-agent demo-agent-loop demo-cascade demo-edge check check-control-plane check-data-plane check-agent \
 	check-runtime check-console test-postgres openapi bench-routing
 
 help:
-	@sed -n '1,20p' Makefile
+	@sed -n '1,23p' Makefile
 
 setup: setup-python
 	cd v1 && npm ci
@@ -59,6 +62,17 @@ demo-agent: setup-python
 # names and regions) and the edge; see docs/edge-gateway.md.
 demo-edge: setup-python
 	bash agent/scripts/edge-demo.sh
+
+# The console against a real control plane, three enrolled stamps, real data planes and
+# collector, and usage from generated traffic. Only the identity provider and the model host
+# are mocked; see docs/console-demo.md. Runs until Ctrl-C.
+demo-console: setup-python
+	cd v1 && { test -d node_modules || npm ci; }
+	bash scripts/demo-console/run.sh
+
+demo-console-screenshots: setup-python
+	cd v1 && { test -d node_modules || npm ci; }
+	DEMO_SCREENSHOTS=1 bash scripts/demo-console/run.sh
 
 # Server-side tool loop (docs/agent-tool-loop.md) and model cascade (docs/model-cascade.md),
 # on the same local platform and stub host machinery as demo-agent.
