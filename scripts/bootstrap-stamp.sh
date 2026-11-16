@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One command to turn an Ubuntu GPU VM into a Fabric inference stamp.
+# One command to turn an Ubuntu GPU VM, or a single-host Cloud TPU VM, into a Fabric inference
+# stamp.
 #
 #   curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh \
 #     | sudo bash -s -- --name gpu-01 --control-plane https://api.example.com --token '<token>' \
@@ -11,6 +12,10 @@
 # has enrolled. Progress is printed as numbered steps; the detailed output of each step goes to
 # a log file. Re-running it is safe: it upgrades the stamp in place and keeps the agent's
 # identity, so no new token is needed.
+#
+# On a Cloud TPU VM (detected from the GCP metadata server) it installs no NVIDIA software:
+# it advertises the TPU chips to Kubernetes and sets the chart's TPU values instead, so models
+# are served by the vLLM TPU image (docs/tpu.md).
 #
 # Nothing is pre-pulled: the customer picks a model in the console and watches the model
 # runtime image and the weights download live in the deployment's Logs tab.
@@ -33,10 +38,11 @@ ISSUER=fabric-letsencrypt
 KUBECONFIG_PATH=/etc/rancher/k3s/k3s.yaml
 WORK_ROOT=/opt/fabric
 LOG_FILE=/var/log/fabric-stamp-bootstrap.log
+TPU_METADATA_URL=http://metadata.google.internal/computeMetadata/v1/instance/attributes/accelerator-type
 
 NAME="" CONTROL_PLANE="" ISSUER_URL="" TOKEN="${FABRIC_ENROLLMENT_TOKEN:-}" HOST="" EMAIL=""
 REGION="" RELEASE="$DEFAULT_RELEASE" REGISTRY="$DEFAULT_REGISTRY" GPU=auto DTYPE="" PREPULL=""
-CONSOLE_URL="${FABRIC_CONSOLE_URL:-}" DRY_RUN=0 VERBOSE=1
+CONSOLE_URL="${FABRIC_CONSOLE_URL:-}" DRY_RUN=0 VERBOSE=1 TPU_TYPE="" TPU_DEVICES=""
 
 usage() {
     cat <<'EOF'
@@ -56,7 +62,9 @@ Optional:
   --region REGION         reported to the control plane for placement, e.g. asia-southeast1
   --console URL           console origin, so the summary links straight to this stamp's page
   --dtype bfloat16|float16  model dtype; default: bfloat16 on compute capability 8.0+, else float16
-  --no-gpu                install without NVIDIA support (control and testing only)
+  --no-gpu                install without NVIDIA or TPU support (control and testing only)
+  --tpu TYPE              Cloud TPU accelerator type, e.g. v6e-4; only needed when the GCP
+                          metadata server cannot be read (it is detected automatically)
   --issuer URL            JWT issuer, when it differs from --control-plane
   --release SHA           Fabric commit whose chart and images to install (default: pinned)
   --registry REGISTRY     image registry (default: public.ecr.aws/hexelstudio/fabric)
@@ -67,7 +75,8 @@ Steps: 1 Checking GPU, 2 Installing k3s, 3 GPU runtime, 4 TLS, 5 Enrolling, 6 Do
 Detailed output goes to /var/log/fabric-stamp-bootstrap.log.
 
 Requirements: Ubuntu 22.04/24.04 on x86_64 with systemd; for GPUs, a working NVIDIA driver
-(nvidia-smi). Outbound HTTPS to the control plane, GitHub, the registry and Hugging Face.
+(nvidia-smi); for Cloud TPU, a single-host TPU VM (v4, v5e, v5p, v6e) on a TPU Ubuntu image.
+Outbound HTTPS to the control plane, GitHub, the registry and Hugging Face.
 EOF
 }
 
@@ -139,6 +148,7 @@ while [ "$#" -gt 0 ]; do
         --release) need_value "$@"; RELEASE=$2; shift 2 ;;
         --registry) need_value "$@"; REGISTRY=${2%/}; shift 2 ;;
         --no-gpu) GPU=off; shift ;;
+        --tpu) need_value "$@"; TPU_TYPE=$2; GPU=tpu; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --quiet) VERBOSE=0; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -167,6 +177,7 @@ fi
 [ -z "$PREPULL" ] || [[ "$PREPULL" =~ ^[A-Za-z0-9._/-]+(,[A-Za-z0-9._/-]+)*$ ]] \
     || die '--prepull must be comma-separated repositories such as Qwen/Qwen3.5-4B'
 [ -z "$TOKEN" ] || [[ "$TOKEN" != *[[:space:]]* ]] || die 'the enrollment token must not contain whitespace'
+[ -z "$TPU_TYPE" ] || [[ "$TPU_TYPE" =~ ^[a-z0-9]+-[0-9]+$ ]] || die '--tpu must be an accelerator type such as v6e-4'
 
 printf '%sFabric stamp %s%s → %s\n' "$BOLD" "$NAME" "$RESET" "$CONTROL_PLANE"
 
@@ -207,9 +218,43 @@ fi
 
 GPU_REPORT=""
 if [ "$GPU" = auto ]; then
-    if command -v nvidia-smi >/dev/null 2>&1; then GPU=on; else GPU=off; fi
+    if command -v nvidia-smi >/dev/null 2>&1; then GPU=on
+    else
+        # A Cloud TPU VM has no NVIDIA driver; its metadata names the TPU slice, e.g. v6e-4.
+        TPU_TYPE=$(curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$TPU_METADATA_URL" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)
+        if [[ "$TPU_TYPE" =~ ^[a-z0-9]+-[0-9]+$ ]]; then GPU=tpu; else TPU_TYPE=""; GPU=off; fi
+    fi
 fi
-if [ "$GPU" = on ]; then
+if [ "$GPU" = tpu ]; then
+    # v4 and v5p accelerator types count TensorCores, two per chip; v5e and v6e count chips.
+    case "${TPU_TYPE%-*}" in
+        v4) TPU_PRODUCT="TPU v4" TPU_HBM_GIB=32 TPU_CORES_PER_CHIP=2 ;;
+        v5p) TPU_PRODUCT="TPU v5p" TPU_HBM_GIB=95 TPU_CORES_PER_CHIP=2 ;;
+        v5e|v5litepod) TPU_PRODUCT="TPU v5e" TPU_HBM_GIB=16 TPU_CORES_PER_CHIP=1 ;;
+        v6e) TPU_PRODUCT="TPU v6e" TPU_HBM_GIB=32 TPU_CORES_PER_CHIP=1 ;;
+        *) die "Cloud TPU $TPU_TYPE is not supported; use v6e, v5e (v5litepod), v5p or v4" ;;
+    esac
+    TPU_EXPECTED=$(( ${TPU_TYPE##*-} / TPU_CORES_PER_CHIP ))
+    [ "$TPU_EXPECTED" -ge 1 ] || TPU_EXPECTED=1
+    # v4 and v5e chips appear as /dev/accelN; v5p and v6e chips as VFIO groups /dev/vfio/N.
+    ACCEL_NODES=$(ls -1d /dev/accel[0-9]* 2>/dev/null || true)
+    VFIO_NODES=$(ls -1 /dev/vfio 2>/dev/null | grep -E '^[0-9]+$' || true)
+    if [ -n "$ACCEL_NODES" ]; then
+        TPU_CHIPS=$(printf '%s\n' "$ACCEL_NODES" | awk 'NF {n++} END {print n + 0}')
+        TPU_DEVICES=$(printf '%s\n' "$ACCEL_NODES" | paste -sd, -)
+    elif [ -n "$VFIO_NODES" ]; then
+        TPU_CHIPS=$(printf '%s\n' "$VFIO_NODES" | awk 'NF {n++} END {print n + 0}')
+        TPU_DEVICES=/dev/vfio
+    else
+        die "this is a Cloud TPU VM ($TPU_TYPE) but no TPU device nodes are visible (/dev/accel* or /dev/vfio/N). Use a TPU VM image (tpu-ubuntu2204-base or the v2-alpha-tpu* images), or pass --no-gpu"
+    fi
+    [ "$TPU_EXPECTED" -le "$TPU_CHIPS" ] \
+        || die "$TPU_TYPE has $TPU_EXPECTED chips across several hosts and this host sees $TPU_CHIPS: multi-host TPU slices are not supported. Create a single-host type such as v6e-4 or v5litepod-4"
+    [ -z "$DTYPE" ] || [ "$DTYPE" = bfloat16 ] || die "--dtype $DTYPE is not supported on Cloud TPU, which serves bfloat16"
+    DTYPE=bfloat16
+    ok "$TPU_CHIPS × $TPU_PRODUCT ($TPU_TYPE, $TPU_HBM_GIB GiB HBM per chip, $(( TPU_CHIPS * TPU_HBM_GIB )) GiB total)"
+    ok "model dtype: ${DTYPE} (Cloud TPU serves bf16 checkpoints; FP8 models need an NVIDIA GPU)"
+elif [ "$GPU" = on ]; then
     GPU_REPORT=$(timeout 20s nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv,noheader,nounits 2>/dev/null) \
         || die 'nvidia-smi failed; repair the NVIDIA driver first, or pass --no-gpu'
     [ -n "$GPU_REPORT" ] || die 'nvidia-smi reports no GPUs'
@@ -255,6 +300,11 @@ if [ "$GPU" = on ]; then
     # "Failed to infer device type". The bootstrap labels GPU nodes accelerator=nvidia.
     HELM_ARGS+=(--set-string gpu.runtimeClassName=nvidia --set-string gpu.nodeSelector.accelerator=nvidia
         --set gpuMetrics.dcgmExporter.enabled=true)
+elif [ "$GPU" = tpu ]; then
+    # No RuntimeClass, device plugin or DCGM exporter: the chart runs the vLLM TPU image,
+    # privileged, with these device nodes. The bootstrap labels the TPU node accelerator=tpu.
+    HELM_ARGS+=(--set-string accelerator.type=tpu --set-string gpu.nodeSelector.accelerator=tpu
+        --set "accelerator.tpu.devices={$TPU_DEVICES}")
 fi
 if [ -n "$PREPULL" ]; then
     HELM_ARGS+=(--set operator.managedModelHost.prepull.enabled=true
@@ -304,11 +354,15 @@ if [ ! -f "$RELEASE_DIR/deploy/helm/fabric-stamp/Chart.yaml" ]; then
 else
     ok "Fabric release ${RELEASE:0:12} already downloaded"
 fi
+if [ "$GPU" = tpu ] && ! grep -q -- '--tpu' "$RELEASE_DIR/scripts/bootstrap-k3s.sh"; then
+    die "release ${RELEASE:0:12} predates Cloud TPU support. Pass --release with a newer commit of $REPOSITORY (docs/tpu.md)"
+fi
 
 K3S_ARGS=()
 # Name the node only on a fresh install: an existing server keeps its node name.
 systemctl cat k3s.service >/dev/null 2>&1 || K3S_ARGS+=(--node-name "$NAME")
 [ "$GPU" = on ] && K3S_ARGS+=(--nvidia)
+[ "$GPU" = tpu ] && K3S_ARGS+=(--tpu "$TPU_TYPE")
 if ! quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"; then
     # A brand-new server needs a few seconds after it reports Ready before its node and the
     # nvidia RuntimeClass exist; older pinned releases check only once. Wait, then retry.
@@ -321,6 +375,7 @@ if ! quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"; then
     # The server now exists and keeps its node name, so the retry passes no --node-name.
     K3S_ARGS=()
     [ "$GPU" = on ] && K3S_ARGS+=(--nvidia)
+    [ "$GPU" = tpu ] && K3S_ARGS+=(--tpu "$TPU_TYPE")
     quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"
 fi
 KUBECTL=(k3s kubectl --kubeconfig "$KUBECONFIG_PATH")
@@ -328,10 +383,27 @@ HELM=(helm --kubeconfig "$KUBECONFIG_PATH" --kube-context default)
 ok "k3s $("${KUBECTL[@]}" version -o json 2>/dev/null | sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | tail -1) is running"
 
 # --------------------------------------------------------------------------- 3. GPU runtime
-step "GPU runtime"
+if [ "$GPU" = tpu ]; then step "TPU runtime"; else step "GPU runtime"; fi
 GPUS=0
 GPU_RUNTIME_OK=0
-if [ "$GPU" = on ]; then
+if [ "$GPU" = tpu ]; then
+    # bootstrap-k3s.sh advertised the chips; there is no NVIDIA runtime or device plugin.
+    for _ in $(seq 1 12); do
+        GPUS=$("${KUBECTL[@]}" get nodes -o jsonpath='{range .items[*]}{.status.allocatable.google\.com/tpu}{"\n"}{end}' | awk '{s += $1} END {print s + 0}')
+        [ "$GPUS" -gt 0 ] && break
+        sleep 5
+    done
+    if [ "$GPUS" -gt 0 ]; then
+        GPU_RUNTIME_OK=1
+        ok "$GPUS google.com/tpu allocatable to Kubernetes (TPU chips, re-advertised whenever k3s starts)"
+        note "models run the vLLM TPU image, privileged, with ${TPU_DEVICES//,/ }"
+    else
+        fail "no allocatable google.com/tpu: the TPU chips are not advertised to Kubernetes"
+        note "Check: sudo systemctl status fabric-tpu-advertise; ls /dev/accel* /dev/vfio"
+        note "then re-run this command. Continuing so the stamp enrolls;"
+        note "the console's stamp page shows the same warning until this is fixed."
+    fi
+elif [ "$GPU" = on ]; then
     if "${KUBECTL[@]}" get runtimeclass nvidia >/dev/null 2>&1; then
         ok "nvidia RuntimeClass present"
     else
@@ -495,13 +567,32 @@ fi
 # --------------------------------------------------------------------------- 6. summary
 step "Done"
 trap - ERR
-if [ "$GPU" != on ]; then ok "stamp $NAME is enrolled without GPUs"
+if [ "$GPU" = tpu ]; then
+    if [ "$GPU_RUNTIME_OK" -eq 1 ]; then ok "stamp $NAME is enrolled and ready for deployments ($GPUS × $TPU_PRODUCT)"
+    else fail "stamp $NAME is enrolled, but no TPU chip is allocatable yet (see step 3)"; fi
+elif [ "$GPU" != on ]; then ok "stamp $NAME is enrolled without GPUs"
 elif [ "$GPU_RUNTIME_OK" -eq 1 ]; then ok "stamp $NAME is enrolled and ready for deployments ($GPUS GPU(s))"
 else fail "stamp $NAME is enrolled, but no GPU is allocatable yet (see step 3)"; fi
 if [ -n "$CONSOLE_URL" ]; then
     STAMP_PAGE="$CONSOLE_URL/stamps/$STAMP_ID"
 else
     STAMP_PAGE="console → Inference stamps → $NAME (/stamps/$STAMP_ID)"
+fi
+if [ "$GPU" = tpu ]; then
+    cat <<EOF
+
+  Stamp page:  $STAMP_PAGE
+               Its Activity log shows: Enrolled → TPU measured → TPU runtime → Ready for deployments.
+  Endpoint:    ${HOST:+https://$HOST}${HOST:-none (add --host for edge routing)}
+  Next:        Deployments → Create, pick a model marked for Cloud TPU (bf16; FP8 models need a GPU),
+               and choose infrastructure "$NAME". The first deployment downloads the vLLM TPU image
+               once (several GB) and the weights, then compiles the model with XLA for several
+               minutes before it answers; later starts reuse the compilation cache.
+  Status:      sudo k3s kubectl -n $NAMESPACE get pods
+  Details:     $LOG_FILE
+  Re-run this command at any time to upgrade or repair the stamp; no new token is needed.
+EOF
+    return 0
 fi
 cat <<EOF
 
