@@ -30,6 +30,7 @@ from fastapi import APIRouter, FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from fabric_data_plane import anthropic_messages
+from fabric_data_plane.agent_runs import AgentRunStore, build_runs_router, open_run_step
 from fabric_data_plane.auth import (
     InferencePrincipal,
     extract_bearer_token,
@@ -79,6 +80,7 @@ from fabric_data_plane.shared_limits import (
     authorized as limit_authorized,
 )
 from fabric_data_plane.streaming import UsageMeter, response_usage, streaming_upstream_payload
+from fabric_data_plane.tool_guard import guard_tool_calls
 from fabric_data_plane.usage import (
     UsageBuffer,
     UsageLeaseMismatch,
@@ -159,6 +161,11 @@ class DataPlane:
             path=settings.usage_spool_path,
         )
         self.metrics = Metrics()
+        self.agent_runs = AgentRunStore(
+            ttl_seconds=settings.agent_run_idle_ttl_seconds,
+            max_runs=settings.agent_run_max_runs,
+            max_steps_traced=settings.agent_run_max_steps_traced,
+        )
         # One pool per deployment, memoised so per-backend health survives across the
         # requests that deployment serves rather than resetting each call. Keyed by
         # deployment id because the registry may hand back an equal-but-new Deployment on
@@ -883,6 +890,14 @@ async def _proxy(
             retry_after=1,
         )
 
+    # --- agent runs (agent_runs.py): refuse a spent run budget before any model call ---
+    run_step = await open_run_step(
+        plane, request, principal=principal, payload=payload, deployment=deployment,
+        admission=admission,
+    )
+    routing_headers = {**routing_headers, **run_step.headers()}
+    # --- end agent runs ---
+
     streaming = bool(payload.get("stream"))
     upstream_payload = {**payload, "model": deployment.upstream_model_name}
     client_wants_usage_frame = False
@@ -993,12 +1008,27 @@ async def _proxy(
                     "error": {"code": "upstream_invalid_response", "message": "Non-JSON reply"}
                 }
 
+            # --- tool guard (tool_guard.py): may re-ask the host; retries are charged ---
+            if upstream_path == CHAT_COMPLETIONS_PATH:
+                retry_backend = backend
+                response, body = await guard_tool_calls(
+                    plane, request=request, payload=payload, upstream_payload=upstream_payload,
+                    response=response, body=body, step=run_step, principal=principal,
+                    deployment=deployment,
+                    send=lambda retry: plane.client.post(
+                        f"{retry_backend.url}{upstream_path}", json=retry, headers=headers,
+                        timeout=plane.settings.upstream_timeout_seconds,
+                    ),
+                )
+                charged_tokens = run_step.extra_tokens
+            # --- end tool guard ---
+
             usage = body.get("usage") if isinstance(body, dict) else None
             totals = response_usage(usage) if is_responses else None
             if response.is_success and isinstance(body, dict):
                 if not is_responses or totals is not None:
                     metered = totals.as_payload() if totals is not None else body
-                    charged_tokens = metered_tokens(metered)
+                    charged_tokens += metered_tokens(metered)
                     plane.record_usage(principal, deployment, metered, streamed=False)
                 else:
                     logger.warning(
@@ -1022,10 +1052,15 @@ async def _proxy(
                 ),
             )
             request_recorded = True
+            # --- agent runs: record the step; headers carry totals after it ---
+            routing_headers = {
+                **routing_headers, **run_step.finish_json(response.status_code, body)
+            }
             return JSONResponse(
                 status_code=response.status_code, content=body, headers=routing_headers
             )
         finally:
+            run_step.abandon()  # agent runs: no-op unless the step ended without a reply
             if not request_recorded:
                 plane.metrics.request_finished(
                     deployment=deployment_label,
@@ -1036,6 +1071,7 @@ async def _proxy(
             await plane.limits.release(admission, tokens=charged_tokens)
 
     if not pool.has_available():
+        run_step.abandon("upstream_unavailable")  # agent runs
         await plane.limits.release(admission)
         plane.metrics.request_finished(
             deployment=deployment_label,
@@ -1120,6 +1156,8 @@ async def _proxy(
                 input_tokens=usage.input_tokens if usage else 0,
                 output_tokens=usage.output_tokens if usage else 0,
             )
+            # agent runs: charge the same tokens the token rate limit is debited
+            run_step.finish_stream(usage, outcome=request_outcome, charged_tokens=stream_tokens)
             cleanup_accounted = True
 
         # Synchronous and deliberately before the limiter await. Withdrawal must not remain held
@@ -1679,6 +1717,7 @@ async def _proxy_transcription(
 
 def build_inference_router(plane: DataPlane) -> APIRouter:
     router = APIRouter(tags=["inference"])
+    router.include_router(build_runs_router(plane))  # agent runs: /v1/runs
 
     @router.get("/v1/models", summary="List models this account may invoke")
     async def list_models(authorization: str | None = Header(default=None)) -> dict[str, Any]:

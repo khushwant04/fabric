@@ -18,6 +18,10 @@
 #
 # Usage:
 #   agent/scripts/e2e.sh
+#   FABRIC_E2E_AGENT_DEMO=1 agent/scripts/e2e.sh   # `make demo-agent`: after step 7, run
+#       examples/python/scripts/agent_demo.py against this data plane and stop there. With no
+#       real upstream, the stub host is agent/scripts/agent_demo_host.py, which issues tool
+#       calls (one deliberately malformed) instead of a fixed reply.
 #
 # Requires the control-plane, data-plane, and agent environments to be installed.
 
@@ -31,6 +35,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 #   FABRIC_E2E_UPSTREAM=http://127.0.0.1:8000 FABRIC_E2E_RELEASE=launch-model \
 #       agent/scripts/e2e.sh
 UPSTREAM="${FABRIC_E2E_UPSTREAM:-http://model-host.e2e.test}"
+AGENT_DEMO="${FABRIC_E2E_AGENT_DEMO:-}"
 # The name the upstream itself knows the model by, which is not the customer's alias.
 RELEASE="${FABRIC_E2E_RELEASE:-e2e-release-1}"
 WORK="$(mktemp -d)"
@@ -311,6 +316,15 @@ def upstream(request: httpx.Request) -> httpx.Response:
     })
 
 
+# `make demo-agent` swaps in a stub that plays a tool-calling agent.
+stub_host = os.environ.get("FABRIC_E2E_STUB_HOST") or ""
+if stub_host:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("agent_demo_host", stub_host)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    upstream = module.handler
+
 # A real client when a model host is running, so the request actually reaches it and
 # the token counts recorded are the model's own rather than a fixture's.
 real_upstream = os.environ.get("FABRIC_E2E_REAL_UPSTREAM") or ""
@@ -350,6 +364,7 @@ FABRIC_E2E_JWKS="$WORK/jwks.json" \
 FABRIC_E2E_DP_PORT="$DP_PORT" \
 FABRIC_E2E_DP_ADMIN_PORT="$DP_ADMIN_PORT" \
 FABRIC_E2E_REAL_UPSTREAM="${FABRIC_E2E_UPSTREAM:-}" \
+FABRIC_E2E_STUB_HOST="$([ -n "$AGENT_DEMO" ] && echo "$REPO_ROOT/agent/scripts/agent_demo_host.py")" \
 "$DATA_PY" "$WORK/data_plane.py" >"$WORK/data-plane.log" 2>&1 &
 DATA_PLANE_PID=$!
 cd "$REPO_ROOT"
@@ -385,6 +400,28 @@ FORGED_STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$DP_URL/v1/chat/
     -d '{"model":"e2e-model","messages":[]}')
 [ "$FORGED_STATUS" = "401" ] || die "an unsigned token was not refused (got $FORGED_STATUS)"
 info "unsigned token refused with 401"
+
+if [ -n "$AGENT_DEMO" ]; then
+    # ----------------------------------------------------------------------
+    log "Agent demo: a multi-step agent run through this data plane"
+    # ----------------------------------------------------------------------
+    if [ -n "${FABRIC_E2E_UPSTREAM:-}" ]; then
+        info "model host: $FABRIC_E2E_UPSTREAM (real inference)"
+    else
+        info "model host: deterministic tool-calling stub (agent/scripts/agent_demo_host.py)"
+    fi
+    FABRIC_CONTROL_URL="$CONTROL_URL" \
+    FABRIC_INFERENCE_URL="$DP_URL" \
+    FABRIC_API_KEY="$API_KEY" \
+    FABRIC_MODEL="e2e-model" \
+    uv run --quiet --project "$REPO_ROOT/examples/python" --python "${PYTHON_VERSION:-3.12}" \
+        python "$REPO_ROOT/examples/python/scripts/agent_demo.py" ${FABRIC_AGENT_DEMO_ARGS:-}
+    METRICS=$(curl -fsS "$DP_URL/metrics")
+    info "gateway metrics:"
+    echo "$METRICS" | grep -E '^fabric_dp_(agent_run|tool_guard)' | sed 's/^/     /'
+    log "Agent demo complete"
+    exit 0
+fi
 
 # --------------------------------------------------------------------------
 log "8. Collector: drain the data plane and forward usage"

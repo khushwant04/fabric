@@ -167,6 +167,18 @@ class Settings(BaseSettings):
     #: fleet without letting one request stampede a large one.
     backend_max_attempts: int = Field(default=3, ge=1)
 
+    #: Agent runs (``X-Fabric-Run-Id``, see agent_runs.py). Held in memory by this process:
+    #: stamp-local and lost on restart. A run idle this long is forgotten; past the cap the
+    #: least recently used run is evicted; a run's trace keeps at most this many steps.
+    agent_run_idle_ttl_seconds: float = Field(default=3600.0, gt=0)
+    agent_run_max_runs: int = Field(default=10_000, ge=1)
+    agent_run_max_steps_traced: int = Field(default=500, ge=1)
+
+    #: Tool-call guard (tool_guard.py): how many times a non-streaming chat completion whose
+    #: tool calls are invalid is re-asked. Each retry is a billed model call. Zero disables
+    #: the retries but still reports ``X-Fabric-Tool-Guard: failed``.
+    tool_guard_max_retries: int = Field(default=1, ge=0, le=5)
+
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod
     def _strip(cls, value: str) -> str:
