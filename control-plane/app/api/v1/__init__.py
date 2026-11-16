@@ -12,6 +12,7 @@ from app.api.v1 import (
     edge,
     identity_providers,
     service_principals,
+    serving_metrics,
     stamps,
     system,
     telemetry,
@@ -29,6 +30,7 @@ api_router.include_router(deployments.router)
 api_router.include_router(stamps.router)
 api_router.include_router(edge.router)
 api_router.include_router(telemetry.router)
+api_router.include_router(serving_metrics.router)
 api_router.include_router(audit.router)
 
 __all__ = ["api_router"]

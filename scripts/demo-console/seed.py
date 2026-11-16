@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import math
 import os
 import random
 import signal
@@ -761,6 +762,142 @@ class Demo:
                                                            time.gmtime(now - 86400 * 3))}]})
         self.call("DELETE", self.acct(f"/stamps/{stamp['id']}"))
         log(f"stamp {stamp['name']}: enrolled and removed (hidden behind Show removed)")
+    # --- serving metrics -------------------------------------------------------------
+
+    # Bucket bounds as the real sources publish them: the gateway's latency histogram and
+    # vLLM's time-to-first-token and inter-token-latency histograms.
+    LATENCY_BOUNDS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
+    TTFT_BOUNDS = (0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5,
+                   5.0, 7.5, 10.0)
+    ITL_BOUNDS = (0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5)
+    # name -> (peak requests/min, median latency s, median TTFT s, median ITL s,
+    #          output tokens per request, KV-cache % at peak)
+    TRAFFIC = {
+        "support-assistant": (90.0, 1.4, 0.085, 0.022, 180, 46.0),
+        "chat-fast": (140.0, 0.55, 0.035, 0.012, 70, 28.0),
+        "assistant-large": (36.0, 3.2, 0.21, 0.030, 420, 63.0),
+        "batch-summarizer": (24.0, 2.1, 0.12, 0.018, 260, 38.0),
+    }
+
+    @staticmethod
+    def histogram(count: float, median: float, bounds: tuple, sigma: float = 0.55) -> dict:
+        """Per-bucket counts of a log-normal latency distribution, as the agent sends them."""
+
+        def cdf(bound: float) -> float:
+            return 0.5 * (1 + math.erf((math.log(bound) - math.log(median)) / (sigma * math.sqrt(2))))
+
+        buckets, below = {}, 0.0
+        for bound in bounds:
+            share = cdf(bound)
+            value = round(count * (share - below), 3)
+            if value > 0:
+                buckets[f"{bound:g}"] = value
+            below = share
+        if count * (1 - below) > 0.001:
+            buckets["+Inf"] = round(count * (1 - below), 3)
+        return buckets
+
+    def metric_samples(self, stamp: dict, moments: list[float], interval: float) -> list[dict]:
+        """What a stamp's agent would push at each moment: its deployments and its GPUs."""
+        served = [(name, d) for name, d in self.deployments.items()
+                  if d["stamp"] == stamp["name"] and name in self.TRAFFIC]
+        devices = []
+        for product, count in stamp["gpus"]:
+            for _ in range(count):
+                node = len(devices) // stamp["per_node"]
+                devices.append({"product": product, "node": f"{stamp['name']}-gpu-{node}",
+                                "index": str(len(devices) % stamp["per_node"])})
+        owners: list[str | None] = []
+        for name, d in served:
+            owners.extend([name] * d["gpus"])
+        owners = (owners + [None] * len(devices))[:len(devices)]
+
+        samples = []
+        for moment in moments:
+            hour = (moment / 3600.0) % 24
+            # A working-day curve with a little noise; each minute is reproducible.
+            daily = 0.35 + 0.65 * max(0.0, math.sin(math.pi * (hour - 6) / 14)) if 6 <= hour <= 20 else 0.3
+            rng = random.Random(int(moment // 60) * 7919 + len(stamp["name"]))
+            points, load_by_deployment = [], {}
+            for name, d in served:
+                peak, latency, ttft, itl, tokens, kv_peak = self.TRAFFIC[name]
+                load = daily * rng.uniform(0.85, 1.15)
+                load_by_deployment[name] = load
+                requests = peak * load * interval / 60
+                # A short burst of host errors two hours ago, so the error charts have a story.
+                burst = name == "support-assistant" and 7200 <= time.time() - moment <= 7800
+                server = requests * (0.08 if burst else rng.uniform(0, 0.004))
+                client = requests * rng.uniform(0.002, 0.012)
+                ok = max(0.0, requests - server - client)
+                # Latency rises with load, wobbles minute to minute, and doubles in the burst.
+                stretch = ((1 + 0.6 * max(0.0, load - 0.8)) * rng.uniform(0.9, 1.12)
+                           + (0.8 if burst else 0))
+                running = peak * load * latency / 60
+                points.append({
+                    "deployment_id": d["id"],
+                    "requests": {"2xx": round(ok, 3), "4xx": round(client, 3), "5xx": round(server, 3)},
+                    "input_tokens": round(requests * tokens * 2.4, 1),
+                    "output_tokens": round(requests * tokens, 1),
+                    "latency_seconds": self.histogram(requests, latency * stretch, self.LATENCY_BOUNDS),
+                    "ttft_seconds": self.histogram(requests, ttft * stretch, self.TTFT_BOUNDS, 0.6),
+                    "itl_seconds": self.histogram(requests * tokens, itl * (1 + 0.3 * load),
+                                                  self.ITL_BOUNDS, 0.35),
+                    "hosts": d["replicas"],
+                    "running": round(running, 2),
+                    "waiting": round(max(0.0, running - 6 * d["replicas"]) + (3 if burst else 0), 2),
+                    "kv_cache_percent": round(min(97.0, kv_peak * load * rng.uniform(0.9, 1.1)), 2),
+                })
+            gpus = []
+            for device, owner in zip(devices, owners):
+                load = load_by_deployment.get(owner, 0.0) if owner else 0.0
+                total = device["product"]["memory_bytes"]
+                util = min(100.0, 12 + 80 * load * rng.uniform(0.9, 1.08)) if owner else rng.uniform(0, 2)
+                gpu = {
+                    "node": device["node"], "index": device["index"],
+                    "product": device["product"]["product"],
+                    "utilization_percent": round(util, 1),
+                    # vLLM reserves most of the device for weights and KV cache at start-up.
+                    "memory_used_bytes": round(total * (0.9 if owner else 0.01)),
+                    "memory_total_bytes": total,
+                }
+                if owner:
+                    gpu["deployment_id"] = self.deployments[owner]["id"]
+                gpus.append(gpu)
+            for point in points:
+                mine = [g for g in gpus if g.get("deployment_id") == point["deployment_id"]]
+                if mine:
+                    point["gpus"] = len(mine)
+                    point["gpu_utilization_percent"] = round(
+                        sum(g["utilization_percent"] for g in mine) / len(mine), 2)
+                    point["gpu_memory_used_bytes"] = sum(g["memory_used_bytes"] for g in mine)
+                    point["gpu_memory_total_bytes"] = sum(g["memory_total_bytes"] for g in mine)
+            samples.append({
+                "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment)),
+                "interval_seconds": interval,
+                "sources": ["gateway", "model_host", "dcgm"],
+                "deployments": points,
+                "gpus": gpus,
+            })
+        return samples
+
+    def push_metrics(self, stamp: dict, samples: list[dict]) -> None:
+        for start in range(0, len(samples), 20):  # the endpoint's per-report bound
+            self.call("POST", f"/v1/stamps/{stamp['id']}/metrics", token=stamp["agent_credential"],
+                      body={"samples": samples[start:start + 20]})
+
+    def backfill_metrics(self, hours: int = 24) -> None:
+        """A day of per-minute samples, as if the agents had been reporting all along."""
+        now = time.time()
+        moments = [now - 60 * minute for minute in range(hours * 60, 0, -1)]
+        for stamp in self.stamps.values():
+            self.push_metrics(stamp, self.metric_samples(stamp, moments, 60.0))
+        log(f"serving metrics: backfilled {hours}h of per-minute samples for "
+            f"{len(self.stamps)} stamps")
+
+    def report_metrics(self) -> None:
+        """The 30-second sample each agent pushes, sent from keepalive."""
+        for stamp in self.stamps.values():
+            self.push_metrics(stamp, self.metric_samples(stamp, [time.time()], 30.0))
 
     # --- data planes, traffic, usage -----------------------------------------------
 
@@ -955,6 +1092,10 @@ class Demo:
                 self.report_hosts()
             except SystemExit as exc:
                 log(f"host report failed: {exc}")
+            try:
+                self.report_metrics()
+            except SystemExit as exc:
+                log(f"metrics report failed: {exc}")
 
     def stop(self, *_args) -> None:
         for child in self.children:
@@ -994,6 +1135,7 @@ def main() -> None:
         demo.enroll_stamps()
         demo.create_deployments()
         demo.enroll_removed_stamp()
+        demo.backfill_metrics()
         demo.start_data_planes()
         demo.generate_traffic()
         demo.seed_agent_runs()

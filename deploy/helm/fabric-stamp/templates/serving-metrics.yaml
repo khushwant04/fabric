@@ -1,0 +1,192 @@
+{{- /*
+Serving metrics for the console (docs/serving-metrics.md). The agent reads the gateway over
+localhost, each model host's vLLM /metrics by pod IP and DCGM exporters through their
+Service's Endpoints, and pushes per-minute aggregates outbound. Everything here is read-only
+and namespaced: no ClusterRole, no secrets, no exec.
+*/ -}}
+{{- if include "fabric-stamp.reportsMetrics" . }}
+{{- $modelHosts := include "fabric-stamp.managesModelHost" . }}
+{{- $exporter := include "fabric-stamp.dcgmExporterEnabled" . }}
+{{- if or $modelHosts $exporter }}
+---
+# Model-host pods are found by label to scrape them by IP; a Role rather than a ClusterRole
+# because the operator runs hosts in this namespace only. The exporter's Endpoints object is
+# named, so the agent cannot read any other Service's addresses.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-metrics
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  {{- if $modelHosts }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  {{- end }}
+  {{- if $exporter }}
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get"]
+    resourceNames: [{{ include "fabric-stamp.dcgmExporterName" . | quote }}]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-metrics
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "fabric-stamp.fullname" . }}-agent-metrics
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if include "fabric-stamp.dcgmExternalEnabled" . }}
+{{- $external := .Values.gpuMetrics.external }}
+---
+# An existing DCGM exporter in another namespace (on AKS, the cluster's observability
+# namespace). Get on its one Endpoints object, in that namespace, and nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-dcgm
+  namespace: {{ $external.namespace }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get"]
+    resourceNames: [{{ $external.service | quote }}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-dcgm
+  namespace: {{ $external.namespace }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "fabric-stamp.fullname" . }}-agent-dcgm
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if $exporter }}
+{{- $config := .Values.gpuMetrics.dcgmExporter }}
+---
+# A small NVIDIA DCGM exporter on each GPU node, for clusters that have none (a k3s VM).
+# It reads the devices through the NVIDIA runtime without requesting nvidia.com/gpu, so it
+# never takes a GPU away from a model host.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "fabric-stamp.dcgmExporterName" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dcgm-exporter
+spec:
+  selector:
+    matchLabels:
+      {{- include "fabric-stamp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dcgm-exporter
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-stamp.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dcgm-exporter
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.gpu.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with (merge (dict) ($config.nodeSelector | default dict) (.Values.gpu.nodeSelector | default dict)) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gpu.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dcgm-exporter
+          image: "{{ $config.image.repository }}:{{ $config.image.tag }}"
+          imagePullPolicy: {{ $config.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: all
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+            # Names the pod holding each device, so a GPU is charted under the deployment it
+            # serves. Reads the kubelet's pod-resources socket, mounted read-only below.
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: {{ $config.podAttribution | default false | quote }}
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: 9400
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $config.resources | nindent 12 }}
+          {{- if $config.podAttribution }}
+          volumeMounts:
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
+          {{- end }}
+      {{- if $config.podAttribution }}
+      volumes:
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+            type: Directory
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fabric-stamp.dcgmExporterName" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dcgm-exporter
+spec:
+  # Headless: the agent reads every exporter's address from the Endpoints, one per node.
+  clusterIP: None
+  selector:
+    {{- include "fabric-stamp.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dcgm-exporter
+  ports:
+    - name: metrics
+      port: 9400
+      targetPort: metrics
+      protocol: TCP
+{{- end }}
+{{- end }}
