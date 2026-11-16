@@ -166,7 +166,7 @@ class EdgeChartTest(unittest.TestCase):
         self.assertNotEqual(https["port"]["name"], "https")  # release-scoped, never generic
         (route,) = by_kind(items, "VirtualService")
         (rule,) = route["spec"]["http"]
-        self.assertEqual(rule["timeout"], "0s")
+        self.assertEqual(rule["timeout"], "600s")
         self.assertTrue(rule["route"][0]["destination"]["host"].startswith("fabric-fabric-control-plane-edge."))
 
     def test_istio_exposure_requires_a_certificate_and_a_host(self):

@@ -329,8 +329,9 @@ edge:
     gatewaySelector: {}
     tls:
       credentialName: ""
-    # 0s disables Istio's route timeout so long streamed generations are not cut off.
-    timeout: 0s
+    # Istio route timeout for the whole request, streams included; keep it at least
+    # readTimeoutSeconds. Istio's CRD rejects 0s, so the timeout cannot be switched off.
+    timeout: 600s
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: "2", memory: 512Mi}

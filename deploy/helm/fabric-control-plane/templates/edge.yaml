@@ -315,8 +315,7 @@ spec:
             host: {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local
             port:
               number: {{ $edge.service.port }}
-      # Generations stream for minutes; 0s turns Istio's per-route timeout off and leaves
-      # the edge's own read timeout in charge.
+      # Whole-request limit, streams included. Keep it at least edge.readTimeoutSeconds.
       timeout: {{ $edge.istio.timeout }}
 {{- end }}
 {{- end }}
