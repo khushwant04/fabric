@@ -66,7 +66,7 @@ export function MessageMarkdownTable({ children, className, node: _node, id, ...
         </div>
       </MessageRenderCard>
       <Dialog open={expanded} onOpenChange={setExpanded}>
-        <DialogContent finalFocus={expandRef} className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-none p-0 sm:max-w-[min(1200px,calc(100%-2rem))]">
+        <DialogContent finalFocus={expandRef} className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-[16px] p-0 sm:max-w-[min(1200px,calc(100%-2rem))]">
           <div className="shrink-0 border-b border-border/40 px-4 py-4 pr-12"><DialogTitle className="text-sm">Data table</DialogTitle><DialogDescription className="sr-only">Expanded table. Scroll to view all columns and rows.</DialogDescription></div>
           <div data-table-scroll className={cn(styles.scroll, styles.fullscreen)} tabIndex={0} role="region" aria-label="Expanded data table contents"><table className={cn(styles.table, className)} {...props}>{removeIds(children)}</table></div>
         </DialogContent>

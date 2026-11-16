@@ -47,9 +47,9 @@ export function ArchitectureExplorer() {
   const selected = flows[flow]
   const current = selected.steps[step]
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <Tabs value={flow} onValueChange={(value) => { setFlow(value as Flow); setStep(0) }}>
-        <TabsList className="h-auto flex-wrap justify-start gap-1">
+        <TabsList className="h-auto flex-wrap justify-start">
           {Object.entries(flows).map(([key, item]) => <TabsTrigger key={key} value={key}>{item.label}</TabsTrigger>)}
         </TabsList>
       </Tabs>
@@ -60,9 +60,9 @@ export function ArchitectureExplorer() {
             {selected.steps.map((item, index) => {
               const Icon = item.icon
               return <li key={item.name} className="flex min-w-0 flex-1 flex-col items-center gap-3 lg:flex-row">
-                <button type="button" aria-pressed={step === index} onClick={() => setStep(index)} className={`flex min-h-32 w-full min-w-0 flex-1 flex-col items-start gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-ring ${step === index ? "border-primary bg-primary/5" : "border-border bg-muted/30 hover:bg-muted"}`}>
-                  <div className="flex w-full items-center justify-between"><Icon className="size-5" /><span className="text-xs text-muted-foreground">{index + 1}</span></div>
-                  <span className="text-sm font-medium">{item.name}</span><span className="text-xs text-muted-foreground">{item.zone}</span>
+                <button type="button" aria-pressed={step === index} onClick={() => setStep(index)} className={`flex min-h-32 w-full min-w-0 flex-1 flex-col items-start gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-ring ${step === index ? "border-foreground/70 bg-card shadow-[0_0_0_3px_var(--brand-tint)]" : "border-border bg-muted/40 hover:bg-muted"}`}>
+                  <div className="flex w-full items-center justify-between"><span className="flex size-8 items-center justify-center rounded-lg bg-brand-tint text-brand-foreground"><Icon className="size-4" /></span><span className="text-xs text-muted-foreground tabular-nums">{index + 1}</span></div>
+                  <span className="text-sm font-medium">{item.name}</span><span className="text-[13px] text-muted-foreground">{item.zone}</span>
                 </button>
                 {index < selected.steps.length - 1 ? <><ArrowRightIcon className="hidden size-4 shrink-0 text-muted-foreground lg:block" /><ArrowDownIcon className="size-4 text-muted-foreground lg:hidden" /></> : null}
               </li>
@@ -72,7 +72,7 @@ export function ArchitectureExplorer() {
       </Card>
       <Card aria-live="polite"><CardHeader><CardTitle>Step {step + 1}: {current.name}</CardTitle></CardHeader><CardContent className="space-y-4"><p className="max-w-4xl text-sm leading-7 text-muted-foreground">{current.detail}</p><div className="flex gap-2"><Button variant="outline" disabled={step === 0} onClick={() => setStep(step - 1)}>Previous</Button><Button disabled={step === selected.steps.length - 1} onClick={() => setStep(step + 1)}>Next step<ArrowRightIcon /></Button></div></CardContent></Card>
       <div className="grid gap-4 md:grid-cols-3">
-        {[ ["One stamp per GPU pool", "Use disjoint node selectors when multiple stamps share one cluster. Overlapping pools can advertise the same GPU twice."], ["Observed state matters", "A placement records intent. Ready replicas and current observed generations establish whether that intent is serving."], ["Startup and caching", "Fresh nodes need image pulls and weights. Engine profiling happens on startup; first request shapes may still require compilation."] ].map(([title, detail]) => <Card key={title}><CardHeader><CardTitle className="text-sm">{title}</CardTitle></CardHeader><CardContent className="text-sm leading-6 text-muted-foreground">{detail}</CardContent></Card>)}
+        {[ ["One stamp per GPU pool", "Use disjoint node selectors when multiple stamps share one cluster. Overlapping pools can advertise the same GPU twice."], ["Observed state matters", "A placement records intent. Ready replicas and current observed generations establish whether that intent is serving."], ["Startup and caching", "Fresh nodes need image pulls and weights. Engine profiling happens on startup; first request shapes may still require compilation."] ].map(([title, detail]) => <div key={title} className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-6"><h3 className="text-base font-medium">{title}</h3><p className="text-sm leading-6 text-muted-foreground">{detail}</p></div>)}
       </div>
     </div>
   )

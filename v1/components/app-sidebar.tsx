@@ -1,13 +1,14 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import {
   BotIcon,
   BoxesIcon,
   ChartNoAxesCombinedIcon,
   CpuIcon,
   KeyRoundIcon,
-  LayoutDashboardIcon,
+  HouseIcon,
   NetworkIcon,
   FlaskConicalIcon,
   FingerprintIcon,
@@ -18,113 +19,57 @@ import {
   UsersIcon,
 } from "lucide-react"
 
+import { AccountMenu } from "@/components/account-switcher"
+import { FabricMark } from "@/components/fabric-mark"
 import { NavMain, type NavSection } from "@/components/nav-main"
+import { SearchCommand } from "@/components/search-command"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
   SidebarRail,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import type { ConsoleContext } from "@/lib/fabric/types"
 
 const sections: NavSection[] = [
   {
     items: [
-      { title: "Overview", url: "/dashboard", icon: <LayoutDashboardIcon /> },
+      { title: "Home", url: "/dashboard", icon: <HouseIcon /> },
       { title: "Architecture", url: "/architecture", icon: <NetworkIcon /> },
     ],
   },
   {
     label: "Infrastructure",
     items: [
-      {
-        title: "Deployments",
-        url: "/deployments",
-        icon: <BoxesIcon />,
-        scope: "deployments:read",
-      },
-      {
-        title: "Inference stamps",
-        url: "/stamps",
-        icon: <CpuIcon />,
-        scope: "stamps:read",
-      },
-      {
-        title: "Usage",
-        url: "/usage",
-        icon: <ChartNoAxesCombinedIcon />,
-        scope: "deployments:read",
-      },
-      {
-        title: "Playground",
-        url: "/playground",
-        icon: <FlaskConicalIcon />,
-        scope: "deployments:read",
-      },
+      { title: "Deployments", url: "/deployments", icon: <BoxesIcon />, scope: "deployments:read" },
+      { title: "Inference stamps", url: "/stamps", icon: <CpuIcon />, scope: "stamps:read" },
+      { title: "Usage", url: "/usage", icon: <ChartNoAxesCombinedIcon />, scope: "deployments:read" },
+      { title: "Playground", url: "/playground", icon: <FlaskConicalIcon />, scope: "deployments:read" },
     ],
   },
   {
     label: "Agents",
     items: [
-      {
-        title: "Runs",
-        url: "/agents/runs",
-        icon: <ListTreeIcon />,
-        scope: "deployments:read",
-      },
-      {
-        title: "Agent playground",
-        url: "/agents/playground",
-        icon: <BotIcon />,
-        scope: "deployments:read",
-      },
+      { title: "Runs", url: "/agents/runs", icon: <ListTreeIcon />, scope: "deployments:read" },
+      { title: "Agent playground", url: "/agents/playground", icon: <BotIcon />, scope: "deployments:read", badge: "New" },
     ],
   },
   {
     label: "Identity & access",
     items: [
-      {
-        title: "Members",
-        url: "/access/members",
-        icon: <UsersIcon />,
-        scope: "members:read",
-      },
-      {
-        title: "Service principals",
-        url: "/access/service-principals",
-        icon: <UserRoundCogIcon />,
-        scope: "api-keys:read",
-      },
-      {
-        title: "API keys",
-        url: "/access/api-keys",
-        icon: <KeyRoundIcon />,
-        scope: "api-keys:read",
-      },
-      {
-        title: "Identity provider",
-        url: "/access/identity-provider",
-        icon: <FingerprintIcon />,
-        scope: "accounts:read",
-      },
+      { title: "Members", url: "/access/members", icon: <UsersIcon />, scope: "members:read" },
+      { title: "Service principals", url: "/access/service-principals", icon: <UserRoundCogIcon />, scope: "api-keys:read" },
+      { title: "API keys", url: "/access/api-keys", icon: <KeyRoundIcon />, scope: "api-keys:read" },
+      { title: "Identity provider", url: "/access/identity-provider", icon: <FingerprintIcon />, scope: "accounts:read" },
     ],
   },
   {
     label: "Administration",
     items: [
-      {
-        title: "Account settings",
-        url: "/settings",
-        icon: <Settings2Icon />,
-        scope: "accounts:read",
-      },
-      {
-        title: "Audit log",
-        url: "/audit",
-        icon: <ScrollTextIcon />,
-        scope: "audit:read",
-      },
+      { title: "Account settings", url: "/settings", icon: <Settings2Icon />, scope: "accounts:read" },
+      { title: "Audit log", url: "/audit", icon: <ScrollTextIcon />, scope: "audit:read" },
     ],
   },
 ]
@@ -134,12 +79,22 @@ export function AppSidebar({
   ...props
 }: React.ComponentProps<typeof Sidebar> & { context: ConsoleContext }) {
   return (
-    <Sidebar id="fabric-sidebar" collapsible="icon" variant="inset" className="fabric-sidebar" {...props}>
-      <SidebarHeader className="h-2 p-0" />
-      <SidebarContent className="gap-1 px-1 pt-1">
+    <Sidebar id="fabric-sidebar" collapsible="icon" className="border-sidebar-border" {...props}>
+      <SidebarHeader className="gap-3 px-4 pt-4 pb-2 group-data-[collapsible=icon]/sidebar:px-3">
+        <div className="flex h-9 items-center justify-between gap-2">
+          <Link href="/dashboard" aria-label="Fabric home" className="flex min-w-0 items-center gap-2.5 rounded-lg text-[18px] font-semibold tracking-[-0.03em] outline-none focus-visible:ring-2 focus-visible:ring-ring group-data-[collapsible=icon]/sidebar:hidden">
+            <FabricMark />Fabric
+          </Link>
+          <SidebarTrigger className="text-muted-foreground hover:text-foreground group-data-[collapsible=icon]/sidebar:mx-auto" />
+        </div>
+        <SearchCommand />
+      </SidebarHeader>
+      <SidebarContent className="gap-0 px-2 pt-2 pb-4 group-data-[collapsible=icon]/sidebar:px-1">
         <NavMain sections={sections} scopes={context.identity.scopes} />
       </SidebarContent>
-      <SidebarFooter className="px-5 py-5 text-[11px] text-sidebar-foreground/45 group-data-[collapsible=icon]:hidden">Fabric Operator Console</SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border p-3 group-data-[collapsible=icon]/sidebar:p-2">
+        <AccountMenu context={context} />
+      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   )

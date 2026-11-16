@@ -8,7 +8,7 @@ import {
   ChartNoAxesCombinedIcon,
   CpuIcon,
   KeyRoundIcon,
-  LayoutDashboardIcon,
+  HouseIcon,
   NetworkIcon,
   FlaskConicalIcon,
   FingerprintIcon,
@@ -44,7 +44,7 @@ const actions: Entry[] = [
 ]
 
 const pages: Entry[] = [
-  { label: "Overview", href: "/dashboard", icon: LayoutDashboardIcon, group: "Platform" },
+  { label: "Home", href: "/dashboard", icon: HouseIcon, group: "Platform" },
   { label: "Architecture", href: "/architecture", icon: NetworkIcon, group: "Platform" },
   { label: "Deployments", href: "/deployments", icon: BoxesIcon, group: "Infrastructure" },
   { label: "Inference stamps", href: "/stamps", icon: CpuIcon, group: "Infrastructure" },
@@ -63,7 +63,7 @@ const pages: Entry[] = [
 const groups = ["Actions", "Platform", "Infrastructure", "Agents", "Identity & access", "Administration"]
 const entries = [...actions, ...pages]
 
-export function SearchCommand({ compact = false }: { compact?: boolean }) {
+export function SearchCommand() {
   const [open, setOpen] = useState(false)
   const router = useRouter()
 
@@ -85,40 +85,35 @@ export function SearchCommand({ compact = false }: { compact?: boolean }) {
 
   return (
     <>
-      {compact ? (
-        <Button variant="ghost" size="icon-sm" className="xl:hidden" aria-label="Search" onClick={() => setOpen(true)}>
-          <SearchIcon />
-        </Button>
-      ) : (
-        <Button
-          variant="outline"
-          className="h-9 w-full justify-start border-sidebar-border bg-background px-3 text-[13px] font-normal text-muted-foreground shadow-none"
-          onClick={() => setOpen(true)}
-        >
-          <SearchIcon className="size-3.5" />
-          <span>Search...</span>
-          <span className="ml-auto flex items-center gap-1">
-            <Kbd>Ctrl</Kbd><Kbd>K</Kbd>
-          </span>
-        </Button>
-      )}
-      <CommandDialog open={open} onOpenChange={setOpen} title="Search Fabric" description="Go to a console page or start an action" className="top-[18%] w-[calc(100%-2rem)] max-w-2xl! border border-border shadow-2xl">
+      <Button
+        variant="outline"
+        aria-label="Search pages and actions"
+        className="h-9 w-full justify-start gap-2 px-3 text-sm font-normal text-muted-foreground shadow-none group-data-[collapsible=icon]/sidebar:size-9 group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0"
+        onClick={() => setOpen(true)}
+      >
+        <SearchIcon />
+        <span className="group-data-[collapsible=icon]/sidebar:hidden">Search</span>
+        <span className="ml-auto flex items-center gap-1 group-data-[collapsible=icon]/sidebar:hidden">
+          <Kbd>Ctrl</Kbd><Kbd>K</Kbd>
+        </span>
+      </Button>
+      <CommandDialog open={open} onOpenChange={setOpen} title="Search Fabric" description="Go to a console page or start an action" className="top-[16%] w-[calc(100%-2rem)] max-w-2xl! overflow-hidden rounded-2xl border border-border p-0 shadow-[0_24px_64px_rgb(0_0_0/0.14)]">
         <Command className="bg-popover">
-          <div className="flex items-center gap-2 border-b border-border pr-3 [&_[data-slot=command-input-wrapper]]:flex-1 [&_[data-slot=command-input-wrapper]]:border-0 [&_[data-slot=input-group]]:h-12 [&_[data-slot=input-group]]:bg-transparent [&_input]:text-sm">
+          <div className="flex items-center gap-2 border-b border-border pr-3 [&_[data-slot=command-input-wrapper]]:flex-1 [&_[data-slot=command-input-wrapper]]:border-0 [&_[data-slot=input-group]]:h-14 [&_[data-slot=input-group]]:border-0 [&_[data-slot=input-group]]:bg-transparent [&_[data-slot=input-group]]:shadow-none [&_input]:text-[15px]">
             <CommandInput placeholder="Search pages and actions…" />
             <Kbd>Esc</Kbd>
           </div>
-          <CommandList className="max-h-[min(26rem,60vh)] p-1">
+          <CommandList className="max-h-[min(28rem,60vh)] p-2">
             <CommandEmpty>No page or action matches.</CommandEmpty>
             {groups.map((group) => (
               <CommandGroup
                 heading={group}
                 key={group}
-                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-3 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:uppercase"
+                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-3 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:tracking-[0.08em] [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group-heading]]:uppercase"
               >
                 {entries.filter((entry) => entry.group === group).map((entry) => (
-                  <CommandItem key={`${group}-${entry.label}`} value={`${entry.label} ${entry.hint ?? ""} ${group}`} onSelect={() => select(entry.href)} className="h-10 gap-3 px-2">
-                    <span className="flex size-6 shrink-0 items-center justify-center border border-border text-muted-foreground [&_svg]:size-3.5">
+                  <CommandItem key={`${group}-${entry.label}`} value={`${entry.label} ${entry.hint ?? ""} ${group}`} onSelect={() => select(entry.href)} className="h-11 gap-3 rounded-lg px-2">
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground [&_svg]:size-4">
                       <entry.icon />
                     </span>
                     <span className="truncate text-sm">{entry.label}</span>
@@ -129,7 +124,7 @@ export function SearchCommand({ compact = false }: { compact?: boolean }) {
               </CommandGroup>
             ))}
           </CommandList>
-          <div className="flex items-center gap-4 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-4 border-t border-border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground">
             <span className="flex items-center gap-1"><Kbd>↑</Kbd><Kbd>↓</Kbd>Navigate</span>
             <span className="flex items-center gap-1"><Kbd>↵</Kbd>Open</span>
             <span className="ml-auto flex items-center gap-1"><Kbd>Ctrl</Kbd><Kbd>K</Kbd>Toggle</span>

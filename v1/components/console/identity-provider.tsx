@@ -40,14 +40,14 @@ export function IdentityProviderDrawer({ provider, disabled = false, variant }: 
       <Field><FieldLabel htmlFor="issuer">Issuer URL</FieldLabel><Input id="issuer" name="issuer" type="url" inputMode="url" placeholder="https://login.example.com" defaultValue={provider?.issuer} required maxLength={500} autoComplete="off" /><FieldDescription>Matched exactly against the <code className="font-mono text-xs">iss</code> claim. An issuer can belong to one account only.</FieldDescription></Field>
       <Field><FieldLabel htmlFor="audience">Audience</FieldLabel><Input id="audience" name="audience" placeholder="fabric-console" defaultValue={provider?.audience} required maxLength={500} autoComplete="off" /><FieldDescription>The client ID or API identifier your provider puts in the <code className="font-mono text-xs">aud</code> claim for Fabric.</FieldDescription></Field>
       <Field><FieldLabel htmlFor="jwksUri">JWKS URI (optional)</FieldLabel><Input id="jwksUri" name="jwksUri" type="url" inputMode="url" placeholder="Discovered from the issuer" maxLength={500} autoComplete="off" /><FieldDescription>{provider ? <>Leave empty to discover the signing keys from the issuer’s metadata again. Currently <span className="break-all font-mono text-xs">{provider.jwks_uri}</span>.</> : "Leave empty to discover the signing keys from the issuer’s metadata, which is preferable."}</FieldDescription></Field>
-      <FieldSet>
-        <FieldLegend variant="label">Claim mappings</FieldLegend>
+      <div className="rounded-xl border border-border p-4"><FieldSet>
+        <FieldLegend variant="label" className="tracking-wide text-muted-foreground uppercase">Claim mappings</FieldLegend>
         <FieldDescription>Which token claims identify the person.</FieldDescription>
         <div className="grid gap-5 sm:grid-cols-2">
           <Field><FieldLabel htmlFor="subjectClaim">Subject claim</FieldLabel><Input id="subjectClaim" name="subjectClaim" placeholder="sub" defaultValue={provider?.subject_claim ?? "sub"} maxLength={100} pattern="[A-Za-z0-9_:./\-]+" autoComplete="off" className="font-mono" /></Field>
           <Field><FieldLabel htmlFor="emailClaim">Email claim</FieldLabel><Input id="emailClaim" name="emailClaim" placeholder="email" defaultValue={provider?.email_claim ?? "email"} maxLength={100} pattern="[A-Za-z0-9_:./\-]+" autoComplete="off" className="font-mono" /></Field>
         </div>
-      </FieldSet>
+      </FieldSet></div>
       <Field><FieldLabel htmlFor="autoProvisionRole">First sign-in</FieldLabel><Select name="autoProvisionRole" defaultValue={provider?.auto_provision_role ?? "none"} items={autoProvisionRoles.map(({ value, label }) => ({ value, label }))} onValueChange={markDirty}><SelectTrigger id="autoProvisionRole" className="w-full"><SelectValue /></SelectTrigger><SelectContent>{autoProvisionRoles.map((role) => <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>)}</SelectContent></Select><FieldDescription>Grant a verified person with no membership this role on their first sign-in, or add each person under Members.</FieldDescription></Field>
     </FieldGroup>}
   </FormDrawer>
@@ -69,7 +69,7 @@ export function RemoveIdentityProviderDialog({ issuer, disabled = false }: { iss
       <form action={action}>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-          <Button type="submit" variant="destructive" disabled={pending}>{pending ? <Spinner /> : <Trash2Icon />}{pending ? "Removing…" : "Remove provider"}</Button>
+          <Button type="submit" variant="destructive-solid" disabled={pending}>{pending ? <Spinner /> : <Trash2Icon />}{pending ? "Removing…" : "Remove provider"}</Button>
         </AlertDialogFooter>
       </form>
     </AlertDialogContent>

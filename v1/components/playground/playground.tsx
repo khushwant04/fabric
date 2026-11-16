@@ -79,7 +79,7 @@ function ModelPicker({ option, options, index, disabled, onSelect }: {
         {options.map((item) => <ModelSelectorItem key={item.id} value={`${item.id} ${item.label}`} onSelect={() => { onSelect(item.id); setOpen(false) }} className="gap-3 py-2.5">
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40"><GitCompareArrowsIcon className="size-4 text-muted-foreground" /></span>
           <ModelSelectorName><span className="block text-sm font-medium">{item.modelAlias}</span><span className="block truncate text-xs text-muted-foreground">{item.label}</span></ModelSelectorName>
-          {item.id === option?.id ? <CheckIcon className="size-4" /> : <span className="size-1.5 rounded-none bg-emerald-500" />}
+          {item.id === option?.id ? <CheckIcon className="size-4" /> : <span className="size-1.5 rounded-full bg-emerald-500" />}
         </ModelSelectorItem>)}
       </ModelSelectorGroup></ModelSelectorList>
     </ModelSelectorContent>
@@ -88,7 +88,7 @@ function ModelPicker({ option, options, index, disabled, onSelect }: {
 
 function RunStatus({ result, available }: { result: Result; available: boolean }) {
   const label = result.status === "idle" ? available ? "Ready" : "Unavailable" : result.status === "running" ? "Generating" : result.status === "complete" ? "Complete" : result.status === "stopped" ? "Stopped" : "Failed"
-  return <span role="status" className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground"><span className={cn("size-1.5 rounded-none", result.status === "error" ? "bg-destructive" : result.status === "running" ? "animate-pulse bg-emerald-500" : available ? "bg-emerald-500" : "bg-muted-foreground/50")} />{label}</span>
+  return <span role="status" className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground"><span className={cn("size-1.5 rounded-full", result.status === "error" ? "bg-destructive" : result.status === "running" ? "animate-pulse bg-emerald-500" : available ? "bg-emerald-500" : "bg-muted-foreground/50")} />{label}</span>
 }
 
 function ResponsePane({ result, index, active, onRetry, busy }: { result: Result; index: number; active: boolean; onRetry: () => void; busy: boolean }) {
@@ -103,7 +103,7 @@ function ResponsePane({ result, index, active, onRetry, busy }: { result: Result
           <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground"><span className="flex size-6 items-center justify-center rounded-lg border"><SparklesIcon className="size-3" /></span>{result.label}</div>
           <MessageContent className="w-full overflow-visible text-[14px] leading-7">
             {result.reasoning ? <Reasoning key={result.runId} isStreaming={streamingReasoning} className="mb-1"><ReasoningTrigger className="text-xs" getThinkingMessage={(thinking) => thinking ? <Shimmer duration={1}>Thinking…</Shimmer> : "Model reasoning"} /><ReasoningContent className="mt-3 border-l pl-3 text-sm leading-6">{result.reasoning}</ReasoningContent></Reasoning> : null}
-            {result.content ? <MessageResponse isAnimating={result.status === "running"}>{result.content}</MessageResponse> : result.status === "running" ? <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground"><span className="size-2 animate-pulse rounded-none bg-foreground/30" /><Shimmer duration={1.5}>{result.reasoning ? "Preparing an answer…" : "Waiting for the first token…"}</Shimmer></div> : null}
+            {result.content ? <MessageResponse isAnimating={result.status === "running"}>{result.content}</MessageResponse> : result.status === "running" ? <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground"><span className="size-2 animate-pulse rounded-full bg-foreground/30" /><Shimmer duration={1.5}>{result.reasoning ? "Preparing an answer…" : "Waiting for the first token…"}</Shimmer></div> : null}
             {result.error ? <div role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">{result.error}</div> : null}
             {result.status === "stopped" && !result.content && !result.reasoning ? <p className="text-sm text-muted-foreground">Generation stopped before an answer arrived.</p> : null}
             {result.finishReason === "length" ? <p className="text-xs text-muted-foreground">Output limit reached. Increase the limit for a longer answer.</p> : null}
@@ -282,13 +282,13 @@ export function Playground({ options }: { options: PlaygroundOption[] }) {
         <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" className="rounded-lg" onClick={reset} disabled={!hasRun || running} aria-label="New comparison" />}><RotateCcwIcon className="size-4" /></TooltipTrigger><TooltipContent>New comparison</TooltipContent></Tooltip>
       </div>
     </div>
-    <div className="mx-auto flex min-h-0 w-full max-w-[1360px] flex-1 flex-col overflow-hidden rounded-none border bg-card shadow-[0_1px_3px_rgb(0_0_0/0.02)]">
+    <div className="mx-auto flex min-h-0 w-full max-w-[1360px] flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-[0_1px_3px_rgb(0_0_0/0.02)]">
       <div className="relative grid shrink-0 grid-cols-2 border-b">
         {[0, 1].map((index) => <div key={index} className={cn("flex min-w-0 items-center gap-2 px-2 py-2 sm:px-4", index === 0 && "border-r")}>
           <ModelPicker option={chosen[index]} options={options} index={index} disabled={running} onSelect={(id) => chooseModel(index, id)} />
           <span className="hidden sm:block"><RunStatus result={results[index]} available={!!chosen[index]} /></span>
         </div>)}
-        <Tooltip><TooltipTrigger render={<Button variant="outline" size="icon-sm" className="absolute left-1/2 top-1/2 z-10 size-7 -translate-x-1/2 -translate-y-1/2 rounded-none bg-card" disabled={running || !chosen[0] || !chosen[1] || currentSelected[0] === currentSelected[1]} onClick={swapModels} aria-label="Swap models" />}><ArrowLeftRightIcon className="size-3" /></TooltipTrigger><TooltipContent>Swap models and answers</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger render={<Button variant="outline" size="icon-sm" className="absolute left-1/2 top-1/2 z-10 size-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-card" disabled={running || !chosen[0] || !chosen[1] || currentSelected[0] === currentSelected[1]} onClick={swapModels} aria-label="Swap models" />}><ArrowLeftRightIcon className="size-3" /></TooltipTrigger><TooltipContent>Swap models and answers</TooltipContent></Tooltip>
       </div>
       {chosen[0]?.model === "exact" && chosen[1]?.model === "exact" && chosen[0].deploymentId === chosen[1].deploymentId ? <p className="shrink-0 border-b bg-muted/15 px-5 py-2 text-[11px] text-muted-foreground">Both panes use the same deployment and share its capacity.</p> : null}
       {hasRun && !modelsAvailable ? <p role="status" className="shrink-0 border-b bg-muted/15 px-5 py-2 text-[11px] text-muted-foreground">A selected deployment is no longer available. Your previous answers remain below; choose an available model before sending again.</p> : null}
@@ -305,23 +305,23 @@ export function Playground({ options }: { options: PlaygroundOption[] }) {
     </div>
     <div className="mx-auto w-full max-w-[860px] shrink-0">
       {formError ? <div role="alert" className="mb-3 flex items-start justify-between gap-3 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">{formError}<button type="button" aria-label="Dismiss prompt error" onClick={() => setFormError(null)}><XIcon className="size-3.5" /></button></div> : null}
-      <PromptInput onSubmit={submit} maxFiles={0} onError={() => setFormError("Paste a text prompt to compare the models.")} inputGroupClassName="h-auto rounded-none border-border bg-card shadow-[0_3px_14px_rgb(0_0_0/0.035)] has-[[data-slot=input-group-control]:focus-visible]:border-border has-[[data-slot=input-group-control]:focus-visible]:ring-0" aria-label="Comparison prompt">
+      <PromptInput onSubmit={submit} maxFiles={0} onError={() => setFormError("Paste a text prompt to compare the models.")} inputGroupClassName="h-auto rounded-[24px] border-border bg-card shadow-[0_3px_14px_rgb(0_0_0/0.035)] has-[[data-slot=input-group-control]:focus-visible]:border-border has-[[data-slot=input-group-control]:focus-visible]:ring-0" aria-label="Comparison prompt">
         <PromptInputBody><PromptInputTextarea id="playground-prompt" value={prompt} onChange={(event) => setPrompt(event.currentTarget.value)} placeholder={running ? "Your models are responding…" : "Ask both models anything…"} aria-label="Prompt for both models" autoComplete="off" disabled={running || !options.length} maxLength={MAX_PROMPT_CHARS} className="min-h-14 px-5 pb-1 pt-4 text-[14px] leading-6 md:text-[14px]" /></PromptInputBody>
         <PromptInputFooter className="px-3 pb-3 pt-1">
           <div className="flex min-w-0 items-center gap-1">
-            <Popover><PopoverTrigger render={<Button type="button" variant="ghost" size="icon-sm" disabled={running} className="rounded-none text-muted-foreground" aria-label="Generation settings" />}><Settings2Icon className="size-4" /></PopoverTrigger>
+            <Popover><PopoverTrigger render={<Button type="button" variant="ghost" size="icon-sm" disabled={running} className="rounded-full text-muted-foreground" aria-label="Generation settings" />}><Settings2Icon className="size-4" /></PopoverTrigger>
               <PopoverContent align="start" side="top" className="w-72 gap-5 p-5"><div><h3 className="text-sm font-medium">Generation settings</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">The same settings apply to both models.</p></div>
                 <label className="space-y-2 text-xs" htmlFor="output-limit"><span className="flex justify-between">Maximum output tokens<span className="text-muted-foreground">1–2048</span></span><Input id="output-limit" type="number" min={1} max={2048} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>
                 <label className="space-y-2 text-xs" htmlFor="temperature"><span className="flex justify-between">Temperature<span className="text-muted-foreground">0–2</span></span><Input id="temperature" type="number" min={0} max={2} step={0.1} value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
                 <label className="space-y-2 text-xs" htmlFor="routing-task"><span>Automatic routing task</span><NativeSelect id="routing-task" className="w-full" value={task} onChange={(event) => setTask(event.target.value as RoutingTask | "")}><option value="">Infer from prompt</option><option value="general">General</option><option value="code">Code</option><option value="reasoning">Reasoning</option></NativeSelect></label>
               </PopoverContent>
             </Popover>
-            <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" disabled={!options.length} onClick={copyRequest} className="rounded-none text-muted-foreground" aria-label="Copy cURL request" />}>
+            <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" disabled={!options.length} onClick={copyRequest} className="rounded-full text-muted-foreground" aria-label="Copy cURL request" />}>
               {copied ? <CheckIcon className="size-4" /> : <BracesIcon className="size-4" />}
             </TooltipTrigger><TooltipContent>{copied ? "Copied" : "Copy cURL request for model A"}</TooltipContent></Tooltip>
             <span className="ml-1 hidden truncate text-[11px] text-muted-foreground sm:block">{maxTokens} tokens<span className="mx-1.5 text-border">/</span>{temperature} temperature</span>
           </div>
-          <div className="flex items-center gap-3"><span className="hidden text-[11px] text-muted-foreground sm:block">{running ? "Streaming independently" : "Send to A + B"}</span>{running ? <><button type="submit" disabled hidden aria-hidden="true" tabIndex={-1} /><Button type="button" onClick={() => controllers.current.forEach((controller) => controller.abort())} className="size-9 rounded-none p-0" aria-label="Stop both responses"><SquareIcon className="size-3 fill-current" /></Button></> : <Button type="submit" disabled={!modelsAvailable || !prompt.trim()} className="size-9 rounded-none p-0" aria-label="Compare responses"><ArrowUpIcon className="size-4" /></Button>}</div>
+          <div className="flex items-center gap-3"><span className="hidden text-[11px] text-muted-foreground sm:block">{running ? "Streaming independently" : "Send to A + B"}</span>{running ? <><button type="submit" disabled hidden aria-hidden="true" tabIndex={-1} /><Button type="button" onClick={() => controllers.current.forEach((controller) => controller.abort())} className="size-9 rounded-full p-0" aria-label="Stop both responses"><SquareIcon className="size-3 fill-current" /></Button></> : <Button type="submit" disabled={!modelsAvailable || !prompt.trim()} className="size-9 rounded-full p-0" aria-label="Compare responses"><ArrowUpIcon className="size-4" /></Button>}</div>
         </PromptInputFooter>
       </PromptInput>
       <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground"><span className="flex items-center gap-1.5"><ShieldCheckIcon className="size-3" />Prompts and responses stay in this page.</span><span className="hidden sm:inline">Enter to send · Shift + Enter for a new line</span>

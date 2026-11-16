@@ -2,13 +2,11 @@ import * as React from "react"
 import { cn } from "cn"
 
 /**
- * A tray with a raised card in it: the tray carries the section's header
- * (a title, a picker, a badge) and the card holds the content, sitting flush
- * with the tray's sides and bottom so the tray shows as a band across the top
- * and a soft U behind the card's corners. A console component: use it to
- * hold a table under its title and actions, a settings section, API keys,
- * sessions and devices. A table inside a panel stays borderless; the panel is
- * the only frame.
+ * A flat, square section: a hairline frame, a header bar ruled off from the
+ * content, and an optional footer ruled off below it, matching the console's
+ * Section (components/console/section.tsx). Use it to hold a table under its
+ * title and actions, a settings section, API keys, sessions and devices. A
+ * table inside a panel stays borderless; the panel is the only frame.
  *
  * Panel > PanelHeader (PanelTitle, PanelAction) > PanelContent (PanelRow,
  * PanelField) > PanelFooter. A footer after the content sits in the tray
@@ -19,7 +17,7 @@ function Panel({ className, ...props }: React.ComponentProps<"section">) {
     <section
       data-slot="panel"
       className={cn(
-        "flex flex-col rounded-none bg-[color-mix(in_oklab,var(--muted)_65%,var(--background))] shadow-[inset_0_0_0_1px_var(--border)] dark:bg-[color-mix(in_oklab,var(--background)_78%,black)]",
+        "flex min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.025)]",
         className
       )}
       {...props}
@@ -32,7 +30,7 @@ function PanelHeader({ className, ...props }: React.ComponentProps<"header">) {
     <header
       data-slot="panel-header"
       className={cn(
-        "flex min-h-11 items-center gap-2 px-4 py-2 text-sm [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
+        "flex min-h-12 items-center gap-2 border-b border-border px-5 py-2.5 text-sm [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
         className
       )}
       {...props}
@@ -61,13 +59,13 @@ function PanelAction({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-/** The raised card. Flush with the tray's edges; its ring lies on the tray's. */
+/** The content area under the header. */
 function PanelContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="panel-content"
       className={cn(
-        "relative -mx-px flex flex-col rounded-none bg-card shadow-[0_0_0_1px_var(--border),0_1px_2px_rgb(0_0_0/0.04)] last:-mb-px",
+        "relative flex flex-col bg-card",
         className
       )}
       {...props}
@@ -131,7 +129,7 @@ function PanelField({
               () => undefined
             )
           }
-          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors duration-(--motion-fast) outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className="grid size-7 shrink-0 place-items-center text-muted-foreground transition-colors duration-(--motion-fast) outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <svg
             viewBox="0 0 16 16"
@@ -158,13 +156,13 @@ function PanelField({
   )
 }
 
-/** Under the card, inside the tray: a hint, a link, a timestamp. */
+/** Under the content, ruled off: a hint, a link, a timestamp. */
 function PanelFooter({ className, ...props }: React.ComponentProps<"footer">) {
   return (
     <footer
       data-slot="panel-footer"
       className={cn(
-        "flex items-center gap-2 px-4 py-2.5 text-xs text-muted-foreground",
+        "flex items-center gap-2 border-t border-border px-4 py-2.5 text-xs text-muted-foreground",
         className
       )}
       {...props}
