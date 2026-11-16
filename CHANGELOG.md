@@ -30,7 +30,6 @@ yet, so earlier work is summarised by period from the pull-request history.
 - BF16 policy: below compute capability 8.0 the Fabric kernels refuse BF16. Dispatch
   `auto` falls back with a reason, `fabric` raises, and the vLLM substitution hands the
   call back to vLLM's op. T4 hosts must serve FP16 (`--dtype half`).
-
 - Prefix-aware routing (ADR 0019): a `prefix_aware` deployment strategy that sends each
   request to the backend most likely to hold its prompt prefix in cache, within a bounded
   load, without needing a session key. Accepted by the control plane, CRD and agent.
