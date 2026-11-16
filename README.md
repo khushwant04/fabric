@@ -14,6 +14,7 @@
   <img alt="Node 22" src="https://img.shields.io/badge/node-22-339933?logo=nodedotjs&amp;logoColor=white">
   <img alt="Kubernetes" src="https://img.shields.io/badge/kubernetes-Helm-326CE5?logo=kubernetes&amp;logoColor=white">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="https://github.com/khushwant04/fabric/releases/tag/v0.1.0"><img alt="Release" src="https://img.shields.io/github/v/tag/khushwant04/fabric?label=release&amp;filter=v*&amp;sort=semver&amp;color=orange"></a>
 </p>
 
 <p align="center">

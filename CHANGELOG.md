@@ -6,6 +6,14 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ## Unreleased
 
+## 0.1.0 — 2026-11-16
+
+First tagged release. It covers everything below and the dated summaries that follow:
+OpenAI- and Anthropic-compatible serving, agent runs, the server-side tool loop, hosted
+tools, model cascade, the edge gateway, per-GPU kernel launch tuning and the console's
+Agents section. Release images are `public.ecr.aws/hexelstudio/fabric/<component>` at the
+commit this tag points to.
+
 ### Added
 
 - Console deployment form: kernel mode (auto by default), every balancing strategy the
