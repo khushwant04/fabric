@@ -1,9 +1,9 @@
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
 import { AGENT_MAX_REQUEST_BYTES, AgentPlaygroundError, agentRunError, buildAgentRun, validateAgentRunRequest } from "@/lib/fabric/agent-playground"
 import { inferenceConfiguration } from "@/lib/fabric/playground-data"
-import { PlaygroundError, readyPlacements, resolveInferenceUrl } from "@/lib/fabric/playground"
+import { PlaygroundError, readyPlacements, resolveInferenceUrl, stampInferenceUrls } from "@/lib/fabric/playground"
 import { getAuthSession, getConsoleContext, getFabricAccessToken, getFabricInferenceToken, hasScope } from "@/lib/fabric/session"
-import type { Deployment, DeploymentStatus, Placement } from "@/lib/fabric/types"
+import type { Deployment, DeploymentStatus, Placement, Stamp } from "@/lib/fabric/types"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -84,11 +84,16 @@ export async function POST(request: Request) {
       deployment = null
     }
     if (!deployment || deployment.account_id !== context.account.id) throw new AgentPlaygroundError(404, "Deployment is not available to this account.")
-    const [placements, statuses] = await Promise.all([
+    const [placements, statuses, stamps] = await Promise.all([
       controlPlaneRequest<Placement[]>(`${deploymentPath}/placements`, { token: controlToken, signal: abort.signal }),
       controlPlaneRequest<DeploymentStatus[]>(`${deploymentPath}/status`, { token: controlToken, signal: abort.signal }),
+      // A stamp's own inference URL backs up a status without an endpoint. Optional: the
+      // status endpoint is enough, and managed stamps are not listed here.
+      hasScope(context, "stamps:read")
+        ? controlPlaneRequest<Stamp[]>(`/v1/accounts/${encodeURIComponent(context.account.id)}/stamps`, { token: controlToken, signal: abort.signal }).catch(() => undefined)
+        : Promise.resolve(undefined),
     ])
-    const url = agentRunsUrl(resolveInferenceUrl(readyPlacements(deployment, placements, statuses), inferenceConfiguration()))
+    const url = agentRunsUrl(resolveInferenceUrl(readyPlacements(deployment, placements, statuses), inferenceConfiguration(), stampInferenceUrls(stamps)))
     if (input.model !== "exact") {
       // A real deployment aliased auto or cascade takes precedence on the gateway; make the
       // caller pick it explicitly rather than presenting it as the virtual option.

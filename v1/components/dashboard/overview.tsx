@@ -2,9 +2,11 @@ import Link from "next/link"
 import { ActivityIcon, BoxesIcon, FlaskConicalIcon, KeyRoundIcon } from "lucide-react"
 
 import { CreateDeploymentDrawer } from "@/components/console/deployment-form"
+import { EdgeGatewayPanel } from "@/components/console/edge-gateway"
 import { LiveRefresh } from "@/components/console/live-refresh"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { StatusBadge, statusTone } from "@/components/console/status-badge"
+import { TruncatedText } from "@/components/console/truncated-text"
 import { PanelLink, PanelLinkRow } from "@/components/dashboard/surfaces"
 import { BarList } from "@/components/hexel/bar-list"
 import { Meter } from "@/components/hexel/meter"
@@ -33,11 +35,13 @@ export type DashboardOverviewProps = {
   /** Null unless every active stamp reported its GPUs. */
   capacity: { used: number; total: number } | null
   usage: AccountUsage | null
+  /** The edge gateway, when the console is configured with one. */
+  edge?: { url: string; usedByConsole: boolean } | null
 }
 
 // The console's Overview, laid out as the Hexel Studio console sample: headline numbers in
 // one StatGroup, then Panels (a tray carrying the title, a raised card the content).
-export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, infrastructureUnavailable, deployments, stamps, capacity, usage }: DashboardOverviewProps) {
+export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, infrastructureUnavailable, deployments, stamps, capacity, usage, edge = null }: DashboardOverviewProps) {
   const ready = deployments?.ready ?? 0
   const attention = deployments?.attention ?? 0
   const recent = deployments?.recent ?? []
@@ -71,6 +75,8 @@ export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, i
       <StatTile label="Tokens processed" value={usage ? formatNumber(usage.input_tokens + usage.output_tokens) : unavailable} period={usage ? `${formatNumber(usage.input_tokens)} in · ${formatNumber(usage.output_tokens)} out` : "Could not be checked"} />
     </StatGroup>
 
+    {edge ? <EdgeGatewayPanel url={edge.url} usedByConsole={edge.usedByConsole} /> : null}
+
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <Panel>
         <PanelHeader><PanelTitle>Recent deployments</PanelTitle><PanelAction><PanelLink href="/deployments">View all</PanelLink></PanelAction></PanelHeader>
@@ -78,7 +84,7 @@ export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, i
           {recent.length ? <Table>
             <TableHeader><TableRow><TableHead>Deployment</TableHead><TableHead>Status</TableHead><TableHead className="hidden md:table-cell">Capacity</TableHead><TableHead align="right">Updated</TableHead></TableRow></TableHeader>
             <TableBody>{recent.map(({ deployment, state }) => <TableRow key={deployment.id}>
-              <TableCell className="h-14"><Link href={`/deployments/${deployment.id}`} className="font-medium hover:underline">{deployment.name}</Link><span className="block font-mono text-[11.5px] text-muted-foreground">{deployment.model_alias}</span></TableCell>
+              <TableCell className="h-14"><Link href={`/deployments/${deployment.id}`} className="block max-w-56 font-medium hover:underline"><TruncatedText text={deployment.name} /></Link><TruncatedText text={deployment.model_alias} className="max-w-56 font-mono text-[11.5px] text-muted-foreground" /></TableCell>
               <TableCell title={state.detail}><StatusBadge status={state.status} /></TableCell>
               <TableCell className="hidden text-muted-foreground md:table-cell">{deployment.desired_spec.replicas} replica{deployment.desired_spec.replicas === 1 ? "" : "s"} · {deployment.desired_spec.resources.gpu_class.toUpperCase()}</TableCell>
               <TableCell align="right" className="text-muted-foreground">{formatRelative(deployment.updated_at)}</TableCell>

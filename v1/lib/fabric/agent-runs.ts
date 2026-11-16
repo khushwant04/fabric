@@ -2,7 +2,7 @@
 // Everything here is pure so it can be tested without a gateway. The gateway output is
 // untrusted input: every field is checked and anything unexpected becomes null.
 
-import { configuredInferenceUrl, PlaygroundError, resolveInferenceUrl, type InferenceConfiguration } from "./playground"
+import { configuredInferenceUrl, edgeInferenceUrl, PlaygroundError, resolveInferenceUrl, type InferenceConfiguration } from "./playground"
 import type { DeploymentStatus } from "./types"
 
 export const RUN_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/
@@ -218,23 +218,23 @@ export function gatewayBase(completionUrl: string) {
 }
 
 /**
- * The gateways that may hold this account's runs. A configured gateway (a stamp or the edge
- * gateway, which aggregates every stamp) is the only one used. Otherwise each ready
- * deployment's approved stamp endpoint is a candidate; the shared resolver applies the same
- * allowlist the playground uses, so a stamp-reported URL never bypasses it.
+ * The gateways that may hold this account's runs. The edge gateway, when configured, is the
+ * only one used: it aggregates every stamp. Otherwise each ready deployment's gateway is a
+ * candidate (its approved stamp endpoint, through the same resolver and allowlist the
+ * playground uses, so a stamp-reported URL never bypasses it), plus FABRIC_INFERENCE_URL.
  */
-export function runGatewayBases(readyByDeployment: DeploymentStatus[][], config: InferenceConfiguration) {
-  const configured = configuredInferenceUrl(config)
-  if (configured) return [gatewayBase(resolveInferenceUrl([placeholderStatus], config))]
+export function runGatewayBases(readyByDeployment: DeploymentStatus[][], config: InferenceConfiguration, stampUrls?: ReadonlyMap<string, string>) {
+  if (edgeInferenceUrl(config)) return [gatewayBase(resolveInferenceUrl([placeholderStatus], config))]
   const bases = new Set<string>()
   for (const ready of readyByDeployment) {
-    try { bases.add(gatewayBase(resolveInferenceUrl(ready, config))) } catch { /* Not approved or not ready. */ }
+    try { bases.add(gatewayBase(resolveInferenceUrl(ready, config, stampUrls))) } catch { /* Not approved or not ready. */ }
   }
+  if (configuredInferenceUrl(config)) bases.add(gatewayBase(resolveInferenceUrl([placeholderStatus], config)))
   return [...bases]
 }
 
-// resolveInferenceUrl ignores status endpoints when a gateway is configured; it only needs
-// to know some placement is ready, which is not a precondition for reading run traces.
+// A ready placement with no endpoint: resolves to the edge or FABRIC_INFERENCE_URL only.
+// Reading run traces does not need any deployment to be ready.
 const placeholderStatus: DeploymentStatus = {
   deployment_id: "", stamp_id: "", observed_generation: 0, phase: "ready", ready_replicas: 1,
   unavailable_replicas: 0, endpoint: null, conditions: [], reported_at: "",

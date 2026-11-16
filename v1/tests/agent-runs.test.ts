@@ -195,3 +195,11 @@ test("errors inside the stream are explained without echoing unsafe text", () =>
   assert.equal(summariseArguments("not json at all"), "not json at all")
   assert.deepEqual(citationsFromResult("not json"), [])
 })
+
+test("run gateways use only the edge when it is configured, and every stamp gateway otherwise", () => {
+  const ready: DeploymentStatus = { deployment_id: "d", stamp_id: "s", observed_generation: 1, phase: "ready", ready_replicas: 1, unavailable_replicas: 0, endpoint: "https://stamp-a.example/v1", conditions: [], reported_at: "2026-11-16T10:00:00Z" }
+  const stampB = { ...ready, stamp_id: "s-b", endpoint: "https://stamp-b.example/v1" }
+  assert.deepEqual(runGatewayBases([[ready], [stampB]], { production: true, edgeUrl: "https://edge.example", allowedDomains: "example" }), ["https://edge.example/v1"])
+  // FABRIC_INFERENCE_URL names stamp A; stamp B is allowlisted, so its runs are listed too.
+  assert.deepEqual(runGatewayBases([[ready], [stampB]], { production: true, configuredUrl: "https://stamp-a.example", allowedOrigins: "https://stamp-b.example" }).sort(), ["https://stamp-a.example/v1", "https://stamp-b.example/v1"])
+})

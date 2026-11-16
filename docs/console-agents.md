@@ -45,9 +45,11 @@ completion text.
   resolver and allowlist, then the SSE stream passed through. Gateway errors are mapped to
   fixed messages; only the run id and cascade headers reach the browser.
 - `lib/fabric/agent-data.ts` (server only): run list, trace and delete. With
-  `FABRIC_INFERENCE_URL` set (a stamp or the [edge gateway](edge-gateway.md), which
-  collects runs from every stamp) only that gateway is asked. Otherwise each approved stamp
-  endpoint of a ready deployment is asked and the lists are merged.
+  `FABRIC_EDGE_INFERENCE_URL` set (the [edge gateway](edge-gateway.md), which collects runs
+  from every stamp) only the edge is asked. Otherwise each approved stamp endpoint of a ready
+  deployment is asked, plus `FABRIC_INFERENCE_URL` when set, and the lists are merged.
+- Each exact model runs on its own stamp's gateway (or the edge). `auto` and `cascade` run on
+  the edge, or on the stamp gateway serving most of the account's ready deployments.
 - A gateway without agent runs (404 without Fabric's `run_not_found`, or 405) shows "not
   available on this gateway" instead of an empty list.
 - `lib/fabric/agent-runs.ts`, `lib/fabric/agent-stream.ts`: pure parsing of traces and SSE

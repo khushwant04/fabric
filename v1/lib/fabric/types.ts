@@ -1,4 +1,4 @@
-import type { DeploymentCapabilities } from "@/lib/fabric/deployment-options"
+import type { DeploymentCapabilities } from "./deployment-options"
 
 export type Account = {
   id: string

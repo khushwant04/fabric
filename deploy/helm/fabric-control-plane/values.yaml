@@ -204,8 +204,13 @@ console:
   # Address copied into stamp enrollment commands. Defaults to the HTTPS ingress
   # host when TLS is enabled; separate from the console's in-cluster API address.
   publicControlPlaneUrl: ""
-  # Optional fixed gateway. Otherwise approved ready stamp endpoints are used.
+  # Optional fixed gateway. Otherwise approved ready stamp endpoints are used; a stamp
+  # gateway is preferred over this one for deployments on other stamps.
   inferenceUrl: ""
+  # The edge gateway's public URL (ADR 0021). Defaults to https://<edge.ingress.host> when
+  # the edge is enabled with TLS ingress. When set, the console sends every playground
+  # request through the edge and shows it on Overview and Stamps.
+  edgeInferenceUrl: ""
   inferenceAllowedOrigins: []
   inference:
     # DNS suffixes administered by you, for stamp-created inference hostnames.

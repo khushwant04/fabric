@@ -83,7 +83,14 @@ export function readyPlacements(
 }
 
 export type InferenceConfiguration = {
+  /** FABRIC_INFERENCE_URL: one gateway every request may use (the edge, a stamp, or local development). */
   configuredUrl?: string
+  /**
+   * FABRIC_EDGE_INFERENCE_URL: the edge gateway (ADR 0021), which routes each request to a
+   * stamp holding the requested model for the caller's account. When set, every deployment
+   * and the auto and cascade selectors are reached through it.
+   */
+  edgeUrl?: string
   allowedOrigins?: string
   allowedDomains?: string
   production: boolean
@@ -106,6 +113,11 @@ export function configuredInferenceUrl(config: InferenceConfiguration) {
     : null
 }
 
+/** The edge gateway, when the console is configured with one. */
+export function edgeInferenceUrl(config: InferenceConfiguration) {
+  return config.edgeUrl?.trim() ? validUrl(config.edgeUrl.trim(), !config.production) : null
+}
+
 function completionUrl(url: URL) {
   const result = new URL(url)
   const path = result.pathname.replace(/\/+$/, "")
@@ -117,10 +129,12 @@ function completionUrl(url: URL) {
   throw new PlaygroundError(503, "Configure the inference gateway base URL for this deployment.")
 }
 
-export function resolveInferenceUrl(statuses: DeploymentStatus[], config: InferenceConfiguration) {
-  if (!statuses.length) throw new PlaygroundError(409, "This deployment has no ready placement at its current generation.")
-  const configured = configuredInferenceUrl(config)
-  if (configured) return completionUrl(configured).toString()
+/** Base URL (ending in /v1) for showing a gateway to people. */
+export function gatewayDisplayUrl(url: URL) {
+  return completionUrl(url).toString().replace(/\/chat\/completions$/, "")
+}
+
+function approvals(config: InferenceConfiguration) {
   const origins = new Set((config.allowedOrigins ?? "").split(",").map((entry) => entry.trim()).filter(Boolean).map((entry) => {
     const url = validUrl(entry, false)
     if (url.pathname !== "/") throw new PlaygroundError(503, "Inference allowlist entries must be HTTPS origins.")
@@ -130,17 +144,66 @@ export function resolveInferenceUrl(statuses: DeploymentStatus[], config: Infere
   if (domains.some((domain) => !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(domain))) {
     throw new PlaygroundError(503, "Inference domain configuration is invalid.")
   }
+  return { origins, domains }
+}
+
+/**
+ * The chat-completions URL for one deployment, from its ready placements.
+ *
+ * 1. The edge gateway, if configured: it reaches every stamp.
+ * 2. Otherwise the gateway of a stamp holding a ready placement: the status endpoint the
+ *    stamp reported, or the stamp's own inference URL (`stampUrls`, by stamp id). A
+ *    stamp-reported URL is used only when the server approves it: an allowlisted origin or
+ *    domain, or the origin of FABRIC_INFERENCE_URL.
+ * 3. Otherwise FABRIC_INFERENCE_URL, the single gateway this console was given.
+ */
+export function resolveInferenceUrl(statuses: DeploymentStatus[], config: InferenceConfiguration, stampUrls?: ReadonlyMap<string, string>) {
+  if (!statuses.length) throw new PlaygroundError(409, "This deployment has no ready placement at its current generation.")
+  const edge = edgeInferenceUrl(config)
+  if (edge) return completionUrl(edge).toString()
+  const configured = configuredInferenceUrl(config)
+  const { origins, domains } = approvals(config)
+  if (configured?.protocol === "https:") origins.add(configured.origin)
   for (const status of statuses) {
-    if (!status.endpoint) continue
-    try {
-      const url = validUrl(status.endpoint, false)
-      const domainApproved = url.port === "" && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))
-      if (origins.has(url.origin) || domainApproved) return completionUrl(url).toString()
-    } catch {
-      // A stamp-reported URL has no authority to bypass the server's allowlist.
+    for (const candidate of [status.endpoint, stampUrls?.get(status.stamp_id)]) {
+      if (!candidate) continue
+      try {
+        const url = validUrl(candidate, false)
+        const domainApproved = url.port === "" && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))
+        if (origins.has(url.origin) || domainApproved) return completionUrl(url).toString()
+      } catch {
+        // A stamp-reported URL has no authority to bypass the server's allowlist.
+      }
     }
   }
+  if (configured) return completionUrl(configured).toString()
   throw new PlaygroundError(503, "Inference requires a configured gateway URL or an approved status endpoint.")
+}
+
+/** Stamp id to the inference URL that stamp reports, for the resolver's fallback. */
+export function stampInferenceUrls(stamps: Stamp[] | undefined) {
+  const urls = new Map<string, string>()
+  for (const stamp of stamps ?? []) {
+    const url = stamp.capabilities?.inference_url
+    if (typeof url === "string" && url) urls.set(stamp.id, url)
+  }
+  return urls
+}
+
+/**
+ * Where `model: "auto"` and `model: "cascade"` go. Both choose among the account's
+ * deployments on one gateway, so the best gateway is the one serving the most of them;
+ * ties keep the order the deployments were given in. With the edge every candidate shares
+ * one gateway, and the edge picks the stamp.
+ */
+export function selectorGateway<T extends { endpoint: string }>(available: T[]) {
+  const counts = new Map<string, number>()
+  for (const item of available) counts.set(item.endpoint, (counts.get(item.endpoint) ?? 0) + 1)
+  let best: T | null = null
+  for (const item of available) {
+    if (!best || (counts.get(item.endpoint) ?? 0) > (counts.get(best.endpoint) ?? 0)) best = item
+  }
+  return best ? { anchor: best, endpoint: best.endpoint, deployments: counts.get(best.endpoint) ?? 0, gateways: counts.size } : null
 }
 
 export function routingDiagnostics(headers: Headers) {

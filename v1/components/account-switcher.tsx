@@ -74,7 +74,7 @@ export function AccountSwitcher({ context }: { context: ConsoleContext }) {
                 {others.map((item) => (
                   <DropdownMenuItem
                     key={item.account_id}
-                    className="gap-2"
+                    className="w-full gap-2"
                     render={<button type="submit" form="account-switcher-form" name="accountId" value={item.account_id} />}
                   >
                     <div className="flex size-6 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold">

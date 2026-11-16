@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
-import { configuredInferenceUrl, readyPlacements, resolveInferenceUrl, routingDiagnostics, validatePlaygroundRequest } from "../lib/fabric/playground"
+import { configuredInferenceUrl, edgeInferenceUrl, readyPlacements, resolveInferenceUrl, routingDiagnostics, selectorGateway, stampInferenceUrls, validatePlaygroundRequest } from "../lib/fabric/playground"
 import { PlaygroundStreamParser, completionTokensPerSecond } from "../lib/fabric/playground-stream"
 import type { Deployment, DeploymentStatus, Placement } from "../lib/fabric/types"
 
@@ -102,4 +102,45 @@ test("partial streams and running subtotals never become completed metrics", () 
 test("malformed and error frames stop the comparison", () => {
   assert.throws(() => new PlaygroundStreamParser().feed("data: invalid\n\n"))
   assert.throws(() => new PlaygroundStreamParser().feed('data: {"error":{"code":"upstream_unavailable"}}\n\n'))
+})
+
+test("the edge gateway serves every deployment, whatever stamp holds it", () => {
+  const edge = { production: true, edgeUrl: "https://edge.example", configuredUrl: "https://edge.example" }
+  assert.equal(resolveInferenceUrl([status], edge), "https://edge.example/v1/chat/completions")
+  assert.equal(resolveInferenceUrl([{ ...status, stamp_id: "stamp-2", endpoint: "https://other-stamp.example/v1" }], edge), "https://edge.example/v1/chat/completions")
+  // The edge still needs a ready placement: it routes to a stamp that serves the model.
+  assert.throws(() => resolveInferenceUrl([], edge))
+  assert.equal(edgeInferenceUrl({ production: true }), null)
+  assert.throws(() => edgeInferenceUrl({ production: true, edgeUrl: "http://edge.example" }))
+})
+
+test("without an edge, each deployment goes to its own stamp's approved gateway before the configured one", () => {
+  // FABRIC_INFERENCE_URL names stamp A; a deployment on stamp B must not be sent there.
+  const config = { production: true, configuredUrl: "https://stamp-a.example", allowedDomains: "gw.example.com" }
+  const onB = { ...status, stamp_id: "stamp-b", endpoint: "https://stamp-b.gw.example.com/v1" }
+  assert.equal(resolveInferenceUrl([onB], config), "https://stamp-b.gw.example.com/v1/chat/completions")
+  // The configured gateway's own origin counts as approved.
+  assert.equal(resolveInferenceUrl([{ ...status, endpoint: "https://stamp-a.example/v1" }], config), "https://stamp-a.example/v1/chat/completions")
+  // An unapproved stamp falls back to the configured gateway, as before.
+  assert.equal(resolveInferenceUrl([{ ...status, endpoint: "https://unknown.example/v1" }], config), "https://stamp-a.example/v1/chat/completions")
+})
+
+test("a stamp's own inference URL backs up a status without an endpoint, under the same allowlist", () => {
+  const config = { production: true, allowedDomains: "gw.example.com" }
+  const silent = { ...status, endpoint: null }
+  assert.equal(resolveInferenceUrl([silent], config, new Map([["stamp-1", "https://k3s.gw.example.com"]])), "https://k3s.gw.example.com/v1/chat/completions")
+  assert.throws(() => resolveInferenceUrl([silent], config, new Map([["stamp-1", "https://attacker.example"]])))
+  assert.throws(() => resolveInferenceUrl([silent], config))
+  assert.deepEqual([...stampInferenceUrls([{ id: "stamp-1", capabilities: { inference_url: "https://k3s.gw.example.com" } }, { id: "stamp-2", capabilities: {} }] as never)], [["stamp-1", "https://k3s.gw.example.com"]])
+})
+
+test("auto and cascade go to the gateway serving most of the account's deployments", () => {
+  assert.equal(selectorGateway([]), null)
+  const choice = selectorGateway([{ id: "a", endpoint: "https://one" }, { id: "b", endpoint: "https://two" }, { id: "c", endpoint: "https://two" }])
+  assert.equal(choice?.endpoint, "https://two")
+  assert.equal(choice?.anchor.id, "b")
+  assert.equal(choice?.deployments, 2)
+  assert.equal(choice?.gateways, 2)
+  // A tie keeps the first gateway listed.
+  assert.equal(selectorGateway([{ id: "a", endpoint: "https://one" }, { id: "b", endpoint: "https://two" }])?.anchor.id, "a")
 })

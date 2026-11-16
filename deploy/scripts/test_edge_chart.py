@@ -113,6 +113,19 @@ class EdgeChartTest(unittest.TestCase):
         env = {item["name"]: item.get("value") for item in
                console["spec"]["template"]["spec"]["containers"][0]["env"]}
         self.assertEqual(env["FABRIC_INFERENCE_URL"], "https://inference.example.com")
+        # The console is told which gateway is the edge, so it routes every deployment there.
+        self.assertEqual(env["FABRIC_EDGE_INFERENCE_URL"], "https://inference.example.com")
+
+        # A console with its own fixed gateway still learns where the edge is.
+        items = resources(EDGE_VALUES | values | {"console.inferenceUrl": "https://stamp.example.com"})
+        console = next(
+            item for item in by_kind(items, "Deployment")
+            if item["metadata"]["labels"].get("app.kubernetes.io/component") == "console"
+        )
+        env = {item["name"]: item.get("value") for item in
+               console["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual(env["FABRIC_INFERENCE_URL"], "https://stamp.example.com")
+        self.assertEqual(env["FABRIC_EDGE_INFERENCE_URL"], "https://inference.example.com")
 
     def test_persistence_and_its_replica_guard(self):
         items = edge_items({"edge.persistence.enabled": "true", "edge.replicas": "1"})

@@ -3,17 +3,55 @@
 import * as React from "react"
 import { cn } from "cn"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+/**
+ * A table that scrolls sideways inside its card when its columns do not fit. Edge fades
+ * appear on whichever side has more columns, the scrollbar stays visible, and the scroll
+ * area becomes focusable so it can be scrolled from the keyboard.
+ */
+function Table({ className, containerClassName, ...props }: React.ComponentProps<"table"> & { containerClassName?: string }) {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [edges, setEdges] = React.useState({ start: false, end: false })
+
+  React.useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const update = () => {
+      const start = container.scrollLeft > 1
+      const end = container.scrollLeft + container.clientWidth < container.scrollWidth - 1
+      setEdges((current) => current.start === start && current.end === end ? current : { start, end })
+    }
+    // The observer reports once on observe, so the first measurement needs no direct call.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update)
+    observer?.observe(container)
+    if (container.firstElementChild) observer?.observe(container.firstElementChild)
+    container.addEventListener("scroll", update, { passive: true })
+    return () => {
+      observer?.disconnect()
+      container.removeEventListener("scroll", update)
+    }
+  }, [])
+
+  const scrollable = edges.start || edges.end
   return (
-    <div
-      data-slot="table-container"
-      className="relative w-full overflow-x-auto"
-    >
-      <table
-        data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
-        {...props}
-      />
+    <div data-slot="table-frame" className="relative w-full min-w-0">
+      <div
+        ref={containerRef}
+        data-slot="table-container"
+        data-scrollable={scrollable ? "" : undefined}
+        tabIndex={scrollable ? 0 : undefined}
+        className={cn(
+          "relative w-full overflow-x-auto outline-none [scrollbar-color:var(--border)_transparent] [scrollbar-width:thin] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
+          containerClassName
+        )}
+      >
+        <table
+          data-slot="table"
+          className={cn("w-full caption-bottom text-sm", className)}
+          {...props}
+        />
+      </div>
+      <div aria-hidden="true" data-slot="table-fade" data-side="start" data-visible={edges.start ? "" : undefined} className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-linear-to-r from-card to-transparent opacity-0 transition-opacity duration-200 data-visible:opacity-100" />
+      <div aria-hidden="true" data-slot="table-fade" data-side="end" data-visible={edges.end ? "" : undefined} className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-linear-to-l from-card via-card/70 to-transparent opacity-0 transition-opacity duration-200 data-visible:opacity-100" />
     </div>
   )
 }

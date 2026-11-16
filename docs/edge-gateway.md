@@ -185,8 +185,14 @@ edge:
     enabled: false   # emptyDir: survives container restarts, not rescheduling
 ```
 
-When the console is enabled and has no `console.inferenceUrl`, it uses the edge's HTTPS
-URL as its gateway.
+When the console is enabled, the chart also passes the edge's HTTPS URL to it as
+`FABRIC_EDGE_INFERENCE_URL` (override with `console.edgeInferenceUrl`), and as
+`FABRIC_INFERENCE_URL` when `console.inferenceUrl` is empty. With the edge configured, the
+console's playground and agent playground send every deployment, and `model: "auto"` and
+`model: "cascade"`, through the edge, and Overview and Stamps show an **Edge gateway** card
+with the URL. Without it, the console sends each deployment to the gateway of a stamp holding
+a ready placement (an approved status endpoint or stamp `inference_url`), falling back to
+`FABRIC_INFERENCE_URL`.
 
 Listeners:
 

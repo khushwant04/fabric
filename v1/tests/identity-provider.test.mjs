@@ -57,7 +57,7 @@ function actions({ scopes = ["members:read", "members:write"], respond } = {}) {
   const calls = []
   const revalidated = []
   class FabricApiError extends Error { constructor(message, status) { super(message); this.status = status } }
-  const module = compile("../lib/fabric/identity-provider-actions.ts", {
+  const actionsModule = compile("../lib/fabric/identity-provider-actions.ts", {
     "next/cache": { revalidatePath: (path) => revalidated.push(path) },
     "@/lib/fabric/client": { FabricApiError, async controlPlaneRequest(path, init) { calls.push({ path, init }); return respond ? respond(path, init, FabricApiError) : {} } },
     "@/lib/fabric/identity-provider": identityProvider,
@@ -67,7 +67,7 @@ function actions({ scopes = ["members:read", "members:write"], respond } = {}) {
       requireScope(context, scope) { if (!context.identity.scopes.includes(scope)) throw new Error(`Missing required scope: ${scope}`) },
     },
   })
-  return { module, calls, revalidated }
+  return { module: actionsModule, calls, revalidated }
 }
 
 test("saving replaces the selected account's provider with PUT and refreshes the page", async () => {

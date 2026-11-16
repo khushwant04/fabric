@@ -5,6 +5,7 @@ import { BudgetMeter, RunStatusBadge } from "@/components/agents/run-status"
 import { StartRunSnippet } from "@/components/agents/start-run-snippet"
 import { LiveRefresh } from "@/components/console/live-refresh"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
+import { TruncatedText } from "@/components/console/truncated-text"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -45,14 +46,14 @@ export default async function AgentRunsPage({ searchParams }: PageProps<"/agents
         </nav>
         <p className="text-xs text-muted-foreground">Runs live in gateway memory and expire after an hour without activity.</p>
       </CardContent>
-      {runs.length ? <div className="border-t"><Table>
+      {runs.length ? <div className="border-t"><Table className="min-w-[900px]">
         <TableHeader><TableRow>
           <TableHead className="pl-6">Run</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Steps</TableHead>
           <TableHead className="w-56">Tokens</TableHead><TableHead className="text-right">Refusals</TableHead><TableHead className="text-right">Guard repairs</TableHead>
           <TableHead className="pr-6 text-right">Last activity</TableHead>
         </TableRow></TableHeader>
         <TableBody>{runs.map((run) => <TableRow key={run.runId}>
-          <TableCell className="max-w-72 pl-6"><Link href={`/agents/runs/${encodeURIComponent(run.runId)}`} className="block truncate font-mono text-[13px] font-medium hover:underline">{run.runId}</Link><div className="text-xs text-muted-foreground">Started {formatRelative(run.createdAt)}</div></TableCell>
+          <TableCell className="pl-6"><Link href={`/agents/runs/${encodeURIComponent(run.runId)}`} className="block max-w-64 font-mono text-[13px] font-medium hover:underline"><TruncatedText text={run.runId} /></Link><div className="text-xs text-muted-foreground">Started {formatRelative(run.createdAt)}</div></TableCell>
           <TableCell><RunStatusBadge status={run.status} /></TableCell>
           <TableCell className="text-right tabular-nums">{run.totals.steps}{run.budget.steps ? <span className="text-muted-foreground"> / {run.budget.steps}</span> : null}</TableCell>
           <TableCell><BudgetMeter used={run.totals.tokens} budget={run.budget.tokens} unit="tokens" /></TableCell>

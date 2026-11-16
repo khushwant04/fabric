@@ -1,8 +1,8 @@
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
 import { inferenceConfiguration } from "@/lib/fabric/playground-data"
-import { MAX_REQUEST_BYTES, PlaygroundError, readyPlacements, resolveInferenceUrl, routingDiagnostics, validatePlaygroundRequest } from "@/lib/fabric/playground"
+import { MAX_REQUEST_BYTES, PlaygroundError, readyPlacements, resolveInferenceUrl, stampInferenceUrls, routingDiagnostics, validatePlaygroundRequest } from "@/lib/fabric/playground"
 import { getAuthSession, getConsoleContext, getFabricAccessToken, getFabricInferenceToken, hasScope } from "@/lib/fabric/session"
-import type { Deployment, DeploymentStatus, Placement } from "@/lib/fabric/types"
+import type { Deployment, DeploymentStatus, Placement, Stamp } from "@/lib/fabric/types"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -74,11 +74,16 @@ export async function POST(request: Request) {
       deployment = null
     }
     if (!deployment || deployment.account_id !== context.account.id) throw new PlaygroundError(404, "Deployment is not available to this account.")
-    const [placements, statuses] = await Promise.all([
+    const [placements, statuses, stamps] = await Promise.all([
       controlPlaneRequest<Placement[]>(`${deploymentPath}/placements`, { token: controlToken, signal: abort.signal }),
       controlPlaneRequest<DeploymentStatus[]>(`${deploymentPath}/status`, { token: controlToken, signal: abort.signal }),
+      // A stamp's own inference URL backs up a status without an endpoint. Optional: the
+      // status endpoint is enough, and managed stamps are not listed here.
+      hasScope(context, "stamps:read")
+        ? controlPlaneRequest<Stamp[]>(`/v1/accounts/${encodeURIComponent(context.account.id)}/stamps`, { token: controlToken, signal: abort.signal }).catch(() => undefined)
+        : Promise.resolve(undefined),
     ])
-    const url = resolveInferenceUrl(readyPlacements(deployment, placements, statuses), inferenceConfiguration())
+    const url = resolveInferenceUrl(readyPlacements(deployment, placements, statuses), inferenceConfiguration(), stampInferenceUrls(stamps))
     if (input.model === "auto") {
       const owned = await controlPlaneRequest<Deployment[]>(accountPath, { token: controlToken, signal: abort.signal })
       if (owned.some((item) => item.model_alias === "auto")) throw new PlaygroundError(400, "Choose the account's exact auto deployment.")
