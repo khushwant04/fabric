@@ -3,14 +3,12 @@
 import * as React from "react"
 import Link from "next/link"
 import {
-  BotIcon,
   BoxesIcon,
   ChartNoAxesCombinedIcon,
   CpuIcon,
   KeyRoundIcon,
   HouseIcon,
   NetworkIcon,
-  FlaskConicalIcon,
   FingerprintIcon,
   ListTreeIcon,
   ScrollTextIcon,
@@ -46,14 +44,12 @@ const sections: NavSection[] = [
       { title: "Deployments", url: "/deployments", icon: <BoxesIcon />, scope: "deployments:read" },
       { title: "Inference stamps", url: "/stamps", icon: <CpuIcon />, scope: "stamps:read" },
       { title: "Usage", url: "/usage", icon: <ChartNoAxesCombinedIcon />, scope: "deployments:read" },
-      { title: "Playground", url: "/playground", icon: <FlaskConicalIcon />, scope: "deployments:read" },
     ],
   },
   {
     label: "Agents",
     items: [
       { title: "Runs", url: "/agents/runs", icon: <ListTreeIcon />, scope: "deployments:read" },
-      { title: "Agent playground", url: "/agents/playground", icon: <BotIcon />, scope: "deployments:read", badge: "New" },
     ],
   },
   {

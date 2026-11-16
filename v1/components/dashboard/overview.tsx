@@ -136,9 +136,9 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
     notices.push(<AttentionCard key="ok" tone="good" icon={<CheckCircle2Icon />} href="/deployments" link="View deployments">{ready === deployments.total ? `All ${deployments.total} deployments are serving.` : `${ready} of ${deployments.total} deployments are serving; the rest are rolling out.`}</AttentionCard>)
   }
 
-  // One notice leaves half the row empty; the agent playground fills it once models serve.
+  // One notice leaves half the row empty; agent runs fill it once models serve.
   if (notices.length === 1 && ready > 0) {
-    notices.push(<AttentionCard key="agents" tone="brand" icon={<BotIcon />} href="/agents/playground" link="Open the agent playground">Run a tool-using agent on your deployed models and watch every step it takes.</AttentionCard>)
+    notices.push(<AttentionCard key="agents" tone="brand" icon={<BotIcon />} href="/agents/runs" link="View agent runs">Agents on your gateways leave step traces, budgets and tool-call repairs here.</AttentionCard>)
   }
 
   const noStamps = stamps !== null && activeStamps === 0
@@ -154,7 +154,7 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
     <section className="flex flex-col gap-3" aria-labelledby="quick-start">
       <h2 id="quick-start" className={labelClass}>Quick start</h2>
       <div className="grid gap-4 md:grid-cols-3">
-        <QuickStart icon={<FlaskConicalIcon />} title="Playground" description="Compare two deployed models side by side: answers, speed and routing." action={<Button nativeButton={false} render={<Link href="/playground" />}>Open playground</Button>} />
+        <QuickStart icon={<FlaskConicalIcon />} title="Usage" description="Requests, tokens and latency for every deployment on your gateways." action={<Button nativeButton={false} render={<Link href="/usage" />}>View usage</Button>} />
         <QuickStart icon={<RocketIcon />} title="Deploy a model" description="Pick a model; Fabric places it on a GPU stamp with room for it." action={canCreate ? <CreateDeploymentDrawer stamps={stampOptions} infrastructureUnavailable={infrastructureUnavailable} label="Deploy" icon={false} /> : <Button nativeButton={false} render={<Link href="/deployments" />}>View deployments</Button>} />
         {noStamps
           ? <QuickStart icon={<ServerIcon />} title="Enroll a stamp" description="Connect a GPU cluster; its agent reports capacity and runs models." action={<Button nativeButton={false} render={<Link href="/stamps" />}>Enroll stamp</Button>} />

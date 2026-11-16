@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { BotIcon, CheckIcon, FlaskConicalIcon, ServerCrashIcon, WorkflowIcon } from "lucide-react"
+import { BotIcon, CheckIcon, ServerCrashIcon, WorkflowIcon } from "lucide-react"
 
 import { BudgetMeter, RunStatusBadge } from "@/components/agents/run-status"
 import { StartRunSnippet } from "@/components/agents/start-run-snippet"
@@ -8,7 +8,6 @@ import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { Section } from "@/components/console/section"
 import { TruncatedText } from "@/components/console/truncated-text"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { listAgentRuns } from "@/lib/fabric/agent-data"
@@ -31,7 +30,7 @@ export default async function AgentRunsPage({ searchParams }: PageProps<"/agents
   const counts = { all: all.length, active: all.filter((run) => run.status === "active").length, budget_exhausted: all.filter((run) => run.status === "budget_exhausted").length }
 
   return <PageContainer>
-    <PageHeader title="Runs" description="Budgets, step traces and tool-call guard repairs for agent loops on your inference gateways. Traces hold counts and outcomes only, never prompts or completions." actions={<Button nativeButton={false} render={<Link href="/agents/playground" />}><FlaskConicalIcon /> Agent playground</Button>} />
+    <PageHeader title="Runs" description="Budgets, step traces and tool-call guard repairs for agent loops on your inference gateways. Traces hold counts and outcomes only, never prompts or completions." />
     <LiveRefresh checkedAt={checkedAt} error={partial ? error : null} />
     {query.deleted === "1" ? <Alert><CheckIcon /><AlertTitle>Run deleted</AlertTitle><AlertDescription>The gateway no longer holds that trace or its budget.</AlertDescription></Alert> : null}
     {unsupported ? <Alert><ServerCrashIcon /><AlertTitle>Agent runs are not available on this gateway</AlertTitle><AlertDescription>{error} Model requests keep working; only run budgets and traces need the newer gateway.</AlertDescription></Alert>
@@ -59,8 +58,8 @@ export default async function AgentRunsPage({ searchParams }: PageProps<"/agents
           <TableCell className="text-right text-muted-foreground tabular-nums">{formatRelative(run.updatedAt ?? run.createdAt)}</TableCell>
         </TableRow>)}</TableBody>
       </Table> : all.length ? <Empty className="min-h-56"><EmptyHeader><EmptyMedia variant="icon"><WorkflowIcon /></EmptyMedia><EmptyTitle>No runs with this status</EmptyTitle><EmptyDescription>Choose another filter to see the account&apos;s other runs.</EmptyDescription></EmptyHeader></Empty>
-        : <Empty className="py-12"><EmptyHeader><EmptyMedia variant="icon"><BotIcon /></EmptyMedia><EmptyTitle>No agent runs yet</EmptyTitle><EmptyDescription className="max-w-xl">Tag each model call of a task with an <code className="font-mono text-foreground">X-Fabric-Run-Id</code> header, optionally with a token and step budget. The gateway enforces the budget and records a trace here. Server-side agent runs from the playground appear automatically.</EmptyDescription></EmptyHeader>
-          <EmptyContent className="max-w-4xl"><StartRunSnippet /><Button nativeButton={false} variant="outline" render={<Link href="/agents/playground" />}><FlaskConicalIcon /> Start a run in the agent playground</Button></EmptyContent></Empty>}
+        : <Empty className="py-12"><EmptyHeader><EmptyMedia variant="icon"><BotIcon /></EmptyMedia><EmptyTitle>No agent runs yet</EmptyTitle><EmptyDescription className="max-w-xl">Tag each model call of a task with an <code className="font-mono text-foreground">X-Fabric-Run-Id</code> header, optionally with a token and step budget. The gateway enforces the budget and records a trace here.</EmptyDescription></EmptyHeader>
+          <EmptyContent className="max-w-4xl"><StartRunSnippet /></EmptyContent></Empty>}
     </Section> : null}
   </PageContainer>
 }

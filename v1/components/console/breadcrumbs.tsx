@@ -8,7 +8,6 @@ import { ChevronRightIcon } from "lucide-react"
 const labels: Record<string, string> = {
   dashboard: "Home",
   architecture: "Architecture",
-  playground: "Playground",
   deployments: "Deployments",
   new: "Create",
   stamps: "Inference stamps",

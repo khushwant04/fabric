@@ -3,14 +3,12 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
-  BotIcon,
   BoxesIcon,
   ChartNoAxesCombinedIcon,
   CpuIcon,
   KeyRoundIcon,
   HouseIcon,
   NetworkIcon,
-  FlaskConicalIcon,
   FingerprintIcon,
   ListTreeIcon,
   PlusIcon,
@@ -40,7 +38,6 @@ const actions: Entry[] = [
   { label: "Create deployment", href: "/deployments/new", icon: PlusIcon, group: "Actions", hint: "Deploy a model on a stamp" },
   { label: "Enroll a stamp", href: "/stamps", icon: CpuIcon, group: "Actions", hint: "Connect a GPU cluster" },
   { label: "Create API key", href: "/access/api-keys", icon: KeyRoundIcon, group: "Actions", hint: "Scoped key for an app" },
-  { label: "Open playground", href: "/playground", icon: FlaskConicalIcon, group: "Actions", hint: "Try a deployed model" },
 ]
 
 const pages: Entry[] = [
@@ -49,9 +46,7 @@ const pages: Entry[] = [
   { label: "Deployments", href: "/deployments", icon: BoxesIcon, group: "Infrastructure" },
   { label: "Inference stamps", href: "/stamps", icon: CpuIcon, group: "Infrastructure" },
   { label: "Usage", href: "/usage", icon: ChartNoAxesCombinedIcon, group: "Infrastructure" },
-  { label: "Playground", href: "/playground", icon: FlaskConicalIcon, group: "Infrastructure" },
   { label: "Runs", href: "/agents/runs", icon: ListTreeIcon, group: "Agents" },
-  { label: "Agent playground", href: "/agents/playground", icon: BotIcon, group: "Agents" },
   { label: "Members", href: "/access/members", icon: UsersIcon, group: "Identity & access" },
   { label: "Service principals", href: "/access/service-principals", icon: UserRoundCogIcon, group: "Identity & access" },
   { label: "API keys", href: "/access/api-keys", icon: KeyRoundIcon, group: "Identity & access" },
