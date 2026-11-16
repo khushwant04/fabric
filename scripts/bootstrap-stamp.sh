@@ -17,6 +17,11 @@
 set -Eeuo pipefail
 umask 077
 
+# Run as `curl ... | sudo bash -s -- ...`, bash reads this script from the same stdin its
+# commands inherit. Everything lives in main(), so bash has read the whole file before the first
+# command runs: no command can consume the rest of the script or block reading it.
+main() {
+
 REPOSITORY=https://github.com/khushwant04/fabric
 # Chart and images come from the same commit. CI publishes images for every commit on main.
 DEFAULT_RELEASE=97ef926631f59de6dfd2f3a77a59ee29b8329dd6
@@ -31,7 +36,7 @@ LOG_FILE=/var/log/fabric-stamp-bootstrap.log
 
 NAME="" CONTROL_PLANE="" ISSUER_URL="" TOKEN="${FABRIC_ENROLLMENT_TOKEN:-}" HOST="" EMAIL=""
 REGION="" RELEASE="$DEFAULT_RELEASE" REGISTRY="$DEFAULT_REGISTRY" GPU=auto DTYPE="" PREPULL=""
-CONSOLE_URL="${FABRIC_CONSOLE_URL:-}" DRY_RUN=0
+CONSOLE_URL="${FABRIC_CONSOLE_URL:-}" DRY_RUN=0 VERBOSE=1
 
 usage() {
     cat <<'EOF'
@@ -56,6 +61,7 @@ Optional:
   --release SHA           Fabric commit whose chart and images to install (default: pinned)
   --registry REGISTRY     image registry (default: public.ecr.aws/hexelstudio/fabric)
   --dry-run               print the plan and the Helm command, change nothing
+  --quiet                 show only the numbered steps; detailed output stays in the log
 
 Steps: 1 Checking GPU, 2 Installing k3s, 3 GPU runtime, 4 TLS, 5 Enrolling, 6 Done.
 Detailed output goes to /var/log/fabric-stamp-bootstrap.log.
@@ -69,8 +75,8 @@ EOF
 TOTAL_STEPS=6
 STEP=0
 STEP_NAME=""
-if [ -t 1 ]; then GREEN=$'\033[32m' RED=$'\033[31m' YELLOW=$'\033[33m' BOLD=$'\033[1m' RESET=$'\033[0m'
-else GREEN="" RED="" YELLOW="" BOLD="" RESET=""; fi
+if [ -t 1 ]; then GREEN=$'\033[32m' RED=$'\033[31m' YELLOW=$'\033[33m' BOLD=$'\033[1m' DIM=$'\033[2m' RESET=$'\033[0m'
+else GREEN="" RED="" YELLOW="" BOLD="" DIM="" RESET=""; fi
 
 step() { STEP=$((STEP + 1)); STEP_NAME=$1; printf '\n%s[%d/%d] %s%s\n' "$BOLD" "$STEP" "$TOTAL_STEPS" "$1" "$RESET"; }
 ok() { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
@@ -86,7 +92,22 @@ die() {
     exit 1
 }
 # Detailed output of a step goes to the log, so the numbered steps stay readable.
-quiet() { "$@" >>"$LOG_FILE" 2>&1; }
+# Runs a step's command with its output streamed live, indented under the step (and kept in the
+# log), and a heartbeat every 20 seconds so a long wait never looks like a hang. --quiet keeps
+# only the log.
+quiet() {
+    local started=$SECONDS heartbeat status=0
+    ( while sleep 20; do printf '    %s… still working (%ss)%s\n' "$DIM" $((SECONDS - started)) "$RESET"; done ) &
+    heartbeat=$!
+    if [ "$VERBOSE" -eq 1 ]; then
+        "$@" 2>&1 | tee -a "$LOG_FILE" | while IFS= read -r line; do printf '    %s│ %s%s\n' "$DIM" "${line:0:200}" "$RESET"; done || status=$?
+    else
+        "$@" >>"$LOG_FILE" 2>&1 || status=$?
+    fi
+    kill "$heartbeat" 2>/dev/null || true
+    wait "$heartbeat" 2>/dev/null || true
+    return "$status"
+}
 on_error() {
     local status=$? line=$1
     trap - ERR
@@ -119,6 +140,7 @@ while [ "$#" -gt 0 ]; do
         --registry) need_value "$@"; REGISTRY=${2%/}; shift 2 ;;
         --no-gpu) GPU=off; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --quiet) VERBOSE=0; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (see --help)" ;;
     esac
@@ -408,8 +430,10 @@ STAMP_ID=""
 STARTED=$(date +%s)
 LAST_NOTE=0
 while :; do
-    AGENT_LOG=$( { "${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --previous --tail=200 2>/dev/null
-                   "${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --tail=400 2>/dev/null; } || true)
+    # By pod name: "logs statefulset/..." resolves pods by label, and the operator's pod shares
+    # those labels, so kubectl can pick it and fail with "container agent is not valid".
+    AGENT_LOG=$( { "${KUBECTL[@]}" -n "$NAMESPACE" logs "pod/$NAME-fabric-stamp-0" -c agent --previous --tail=200 2>/dev/null
+                   "${KUBECTL[@]}" -n "$NAMESPACE" logs "pod/$NAME-fabric-stamp-0" -c agent 2>/dev/null; } || true)
     if printf '%s' "$AGENT_LOG" | grep -qE '"msg":"(enrolled|using persisted stamp identity)"'; then
         STAMP_ID=$(printf '%s' "$AGENT_LOG" | grep -oE '"stamp_id":"[0-9a-f-]{36}"' | tail -1 | cut -d'"' -f4 || true)
         break
@@ -435,9 +459,11 @@ while :; do
             die "the agent image could not be pulled ($POD_REASON). Check outbound HTTPS to the registry; release ${RELEASE:0:12} must have published images." ;;
     esac
     ELAPSED=$(( $(date +%s) - STARTED ))
-    [ "$ELAPSED" -lt 900 ] || die "the agent did not enroll within 15 minutes; check: sudo k3s kubectl -n $NAMESPACE logs statefulset/$NAME-fabric-stamp -c agent"
-    if [ $((ELAPSED - LAST_NOTE)) -ge 30 ]; then
-        note "still waiting (${ELAPSED}s)${POD_REASON:+: $POD_REASON}"
+    [ "$ELAPSED" -lt 900 ] || die "the agent did not enroll within 15 minutes; check: sudo k3s kubectl -n $NAMESPACE logs $NAME-fabric-stamp-0 -c agent"
+    if [ $((ELAPSED - LAST_NOTE)) -ge 15 ]; then
+        LAST_MSG=$(printf '%s' "$AGENT_LOG" | grep -oE '"msg":"[^"]*"' | tail -1 | cut -d'"' -f4 | cut -c1-120 || true)
+        PHASE=$("${KUBECTL[@]}" -n "$NAMESPACE" get pod "$NAME-fabric-stamp-0" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+        note "waiting for enrollment (${ELAPSED}s): pod ${PHASE:-not created yet}${POD_REASON:+ ($POD_REASON)}${LAST_MSG:+; agent: $LAST_MSG}"
         LAST_NOTE=$ELAPSED
     fi
     sleep 5
@@ -446,10 +472,23 @@ if [ "$INSTALLED" -eq 1 ]; then ok "agent reused its enrolled identity (stamp $S
 else ok "enrolled as stamp $STAMP_ID"; fi
 
 if [ -n "$HOST" ]; then
-    if "${KUBECTL[@]}" -n "$NAMESPACE" wait --for=condition=Ready certificate --all --timeout=300s >/dev/null 2>&1; then
+    # Let's Encrypt validates over HTTP on port 80; report what it is doing while it does.
+    CERT_READY=0
+    for attempt in $(seq 1 30); do
+        CERT_STATE=$("${KUBECTL[@]}" -n "$NAMESPACE" get certificate \
+            -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{" "}{.status.conditions[?(@.type=="Ready")].message}{"\n"}{end}' 2>/dev/null | head -1 || true)
+        case "$CERT_STATE" in True*) CERT_READY=1; break ;; esac
+        if [ $((attempt % 2)) -eq 1 ]; then
+            CHALLENGE=$("${KUBECTL[@]}" -n "$NAMESPACE" get challenges \
+                -o jsonpath='{range .items[*]}{.status.state}{" "}{.status.reason}{"\n"}{end}' 2>/dev/null | head -1 | cut -c1-160 || true)
+            note "certificate for $HOST: ${CHALLENGE:-${CERT_STATE:-waiting for cert-manager}} ($((attempt * 10))s)"
+        fi
+        sleep 10
+    done
+    if [ "$CERT_READY" -eq 1 ]; then
         ok "TLS certificate issued for $HOST"
     else
-        warn "certificate not ready yet; check DNS for $HOST and that ports 80/443 are open"
+        warn "certificate not ready after 5 minutes. Let's Encrypt must reach http://$HOST on port 80: check the DNS A record and that inbound TCP 80 and 443 are open. It keeps retrying on its own."
     fi
 fi
 
@@ -476,3 +515,6 @@ cat <<EOF
   Details:     $LOG_FILE
   Re-run this command at any time to upgrade or repair the stamp; no new token is needed.
 EOF
+}
+
+main "$@"

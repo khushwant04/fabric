@@ -3,7 +3,7 @@ import { test } from "node:test"
 
 import {
   ACTIVE_POLL_MS, IDLE_POLL_MS, diagnoseHost, elapsedSeconds, formatBytes, formatDuration, hostPollDelay, hostStages,
-  hostSummary, isDeploymentId, isFailureEvent, isFollowing, logFileName, logLines, pullInfo, queuedStages, weightProgress,
+  hostSummary, isDeploymentId, isFailureEvent, isFollowing, logFileName, logLines, pullInfo, queuedStages, weightProgress, isStartupWait
 } from "../lib/fabric/host-status"
 import type { HostEvent, HostSnapshot } from "../lib/fabric/types"
 
@@ -125,4 +125,15 @@ test("the log follows only while scrolled to the bottom", () => {
 test("only a UUID is forwarded as a deployment id", () => {
   assert.ok(isDeploymentId("0b7e7c1e-0000-4000-8000-00000000000a"))
   assert.ok(!isDeploymentId("../stamps"))
+})
+
+test("startup-probe misses while the server loads are expected, other probe failures are not", () => {
+  const event = (message: string): HostEvent => ({ type: "Warning", reason: "Unhealthy", message, count: 3, at: "2026-11-16T22:00:00Z" })
+  const waiting = event('Startup probe failed: Get "http://10.42.0.20:8000/health": dial tcp 10.42.0.20:8000: connect: connection refused')
+  assert.equal(isStartupWait(waiting), true)
+  assert.equal(isFailureEvent(waiting), false)
+  const liveness = event('Liveness probe failed: Get "http://10.42.0.20:8000/health": context deadline exceeded')
+  assert.equal(isStartupWait(liveness), false)
+  assert.equal(isFailureEvent(liveness), true)
+  assert.equal(isFailureEvent({ type: "Warning", reason: "BackOff", message: "Back-off restarting failed container", count: 1, at: "" }), true)
 })
