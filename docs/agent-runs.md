@@ -107,6 +107,16 @@ charged to the run budget. If the reply is still invalid after the last retry, t
 returns it unchanged with `X-Fabric-Tool-Guard: failed; attempts=N`, and the trace step gets
 `error_code: tool_guard_failed`.
 
+**Structured final answers.** vLLM does not enforce `response_format` while `tools` are offered
+with automatic tool choice, so a small model often ends an agent loop with prose where a JSON
+object was requested. The OpenAI Agents SDK then fails with "Invalid JSON when parsing model
+output" on an agent with both `tools` and an `output_type`. When a request declares `tools` and
+a `json_schema` or `json_object` `response_format`, and the reply calls no tool but its content
+is not JSON matching that schema, the gateway asks once more with the same messages and no
+tools. With nothing to call, the host enforces the schema. The retry is billed like the others,
+and `X-Fabric-Tool-Guard` reports `repaired; attempts=2`, or `failed; attempts=2` if it still
+does not match.
+
 Streamed responses pass through unchecked, because the gateway cannot take back tokens the
 client has already received. `/v1/completions` and `/v1/responses` also pass through
 unchecked. Retries reuse the backend that served the first attempt. They do not appear in that

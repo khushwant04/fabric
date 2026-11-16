@@ -10,6 +10,13 @@ Honest about cost: every retry is a real model invocation, so its tokens are rec
 debited from the account's token rate and charged to the agent run's budget. A caller that
 would rather handle invalid calls itself sends ``X-Fabric-Tool-Guard: off``.
 
+Structured final answers: vLLM does not enforce ``response_format`` while ``tools`` are on
+offer with automatic tool choice, so a small model often ends an agent loop with prose where a
+JSON object was requested (the OpenAI Agents SDK then fails with "Invalid JSON"). When a request
+declares both, and the reply calls no tool but its content is not JSON matching the requested
+schema, the gateway asks once more with the same messages and no tools; with nothing to call,
+the host enforces the schema. That retry is charged like any other.
+
 Scope (v1): non-streaming ``/v1/chat/completions`` only. Streamed responses and the other
 endpoints pass through unchecked; the gateway cannot take back tokens a client has already
 been sent.
@@ -254,6 +261,42 @@ def _tokens(body: Any) -> tuple[int, int]:
         return 0, 0
 
 
+def requested_schema(payload: Any) -> tuple[bool, Any]:
+    """Whether the request asked for a JSON reply, and the schema to check it against."""
+    response_format = payload.get("response_format") if isinstance(payload, dict) else None
+    if not isinstance(response_format, dict):
+        return False, None
+    if response_format.get("type") == "json_schema":
+        spec = response_format.get("json_schema")
+        return True, spec.get("schema") if isinstance(spec, dict) else None
+    if response_format.get("type") == "json_object":
+        return True, {"type": "object"}
+    return False, None
+
+
+def final_answer_errors(body: Any, schema: Any) -> list[str]:
+    """Why a reply that calls no tool does not satisfy the requested JSON format."""
+    choices = body.get("choices") if isinstance(body, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return []
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str):
+        return []
+    try:
+        value = json.loads(content)
+    except ValueError:
+        return ["response: not valid JSON"]
+    return validate(value, schema, path="response") if schema is not None else []
+
+
+def _without_tools(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in payload.items()
+        if key not in {"tools", "tool_choice", "parallel_tool_calls"}
+    }
+
+
 async def guard_tool_calls(
     plane: Any,
     *,
@@ -279,7 +322,10 @@ async def guard_tool_calls(
         return response, body
     checks = check_calls(body, payload)
     if not checks:
-        return response, body
+        return await _enforce_final_format(
+            plane, payload=payload, upstream_payload=upstream_payload, response=response,
+            body=body, step=step, principal=principal, deployment=deployment, send=send,
+        )
 
     outcome = GuardOutcome(status="valid", attempts=1)
     step.guard = outcome
@@ -316,6 +362,55 @@ async def guard_tool_calls(
         response, body = retry, retry_body
         checks = check_calls(body, payload)
 
+    plane.metrics.tool_guard(
+        deployment=str(deployment.deployment_id),
+        outcome=outcome.status,
+        retries=outcome.attempts - 1,
+    )
+    return response, body
+
+
+async def _enforce_final_format(
+    plane: Any,
+    *,
+    payload: dict[str, Any],
+    upstream_payload: dict[str, Any],
+    response: httpx.Response,
+    body: Any,
+    step: RunStep,
+    principal: Any,
+    deployment: Any,
+    send: Callable[[dict[str, Any]], Awaitable[httpx.Response]],
+) -> tuple[httpx.Response, Any]:
+    """Re-ask once without tools when a final answer ignored the requested JSON format."""
+    wants_json, schema = requested_schema(payload)
+    if not wants_json:
+        return response, body
+    errors = final_answer_errors(body, schema)
+    if not errors:
+        return response, body
+
+    outcome = GuardOutcome(status="failed", attempts=1, errors=[errors[:_MAX_ERRORS]])
+    step.guard = outcome
+    try:
+        retry = await send(_without_tools(upstream_payload))
+        retry_body = retry.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("structured final-answer retry failed: %s", exc)
+        retry, retry_body = None, None
+    if retry is not None:
+        outcome.attempts += 1
+    if retry is not None and retry.is_success and isinstance(retry_body, dict):
+        spent_in, spent_out = _tokens(body)
+        outcome.retry_input_tokens += spent_in
+        outcome.retry_output_tokens += spent_out
+        plane.record_usage(principal, deployment, body, streamed=False)
+        response, body = retry, retry_body
+        remaining = final_answer_errors(body, schema)
+        if remaining:
+            outcome.errors.append(remaining[:_MAX_ERRORS])
+        else:
+            outcome.status = "repaired"
     plane.metrics.tool_guard(
         deployment=str(deployment.deployment_id),
         outcome=outcome.status,
