@@ -11,6 +11,7 @@ from app.schemas import RuntimeSpec
 @pytest.mark.parametrize("release,parser", [
     ("Qwen/Qwen3-VL-4B-Instruct", "hermes"),
     ("Qwen/Qwen2.5-Coder-3B-Instruct", "hermes"),
+    ("Qwen/Qwen3.5-2B", "qwen3_xml"),
     ("Qwen/Qwen3.5-4B", "qwen3_xml"),
     ("Qwen/Qwen3.5-4B", "qwen3_coder"),
 ])

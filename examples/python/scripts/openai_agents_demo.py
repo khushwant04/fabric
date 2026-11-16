@@ -305,6 +305,10 @@ async def async_main() -> None:
 
     run_id = f"trip-{uuid.uuid4().hex[:8]}"
     settings = ModelSettings(
+        # Bounded replies: a small model on one T4 streams ~33 tokens/s, so an unbounded
+        # step can outlast the client timeout.
+        max_tokens=768,
+        temperature=0.2,
         extra_headers={
             "X-Fabric-Run-Id": run_id,
             "X-Fabric-Run-Budget-Tokens": str(args.budget_tokens),

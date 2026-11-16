@@ -242,9 +242,11 @@ for attempt in $(seq 1 60); do
             https://127.0.0.1:6443|https://localhost:6443|https://\[::1\]:6443) ;;
             *) die 'local k3s kubeconfig must target its loopback API on port 6443' ;;
         esac
-        if "${KUBECTL[@]}" get nodes >/dev/null 2>&1; then break; fi
+        # The API answers before a fresh server has registered its own node, so wait for
+        # the node itself; counting too early reported "found 0 nodes" on a new VM.
+        if [ -n "$("${KUBECTL[@]}" get nodes -o name 2>/dev/null)" ]; then break; fi
     fi
-    [ "$attempt" -lt 60 ] || die 'k3s API did not become available; inspect journalctl -u k3s'
+    [ "$attempt" -lt 60 ] || die 'k3s did not register its node; inspect journalctl -u k3s'
     sleep 2
 done
 LOCAL_NAMES=$("${KUBECTL[@]}" get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')

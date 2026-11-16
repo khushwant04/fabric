@@ -1248,6 +1248,7 @@ func TestToolCallingUsesTheExactNativeModelFormat(t *testing.T) {
 		{name: "qwen vision", release: "Qwen/Qwen3-VL-4B-Instruct", expected: "hermes"},
 		{name: "qwen coder", release: "Qwen/Qwen2.5-Coder-3B-Instruct", expected: "hermes"},
 		{name: "qwen hybrid", release: "Qwen/Qwen3.5-4B", expected: "qwen3_xml"},
+		{name: "qwen hybrid small", release: "Qwen/Qwen3.5-2B", expected: "qwen3_xml"},
 		{name: "unknown", release: "vendor/ocr"},
 		{name: "no prefix guessing", release: "Qwen/unknown-model"},
 		{name: "explicit disabled", release: "Qwen/Qwen3-VL-4B-Instruct", enabled: &disabled},
