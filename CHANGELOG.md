@@ -8,6 +8,36 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Console deployment form: kernel mode (auto by default), every balancing strategy the
+  control plane accepts (including prefix aware, explained for agent workloads), model
+  capabilities and automatic-routing eligibility, priority and an optional cascade tier, in
+  Serving settings and a new Routing section. The deployment overview shows them in Runtime
+  and Routing cards.
+- Cascade tier end to end: `spec.capabilities.cascade_tier` (optional, -1000 to 1000) is
+  validated by the control plane, read by the agent, carried on the `ModelDeployment`
+  resource (`cascadeTier`, added to the stamp chart's CRD) and rendered as the data plane
+  entry's `cascade_tier`, so a `model: "cascade"` ladder no longer needs a hand-edited
+  `deployments.json`.
+- Console identity provider page (`/access/identity-provider`): the registered OIDC provider
+  with issuer, audience, signing keys, claim mappings, first sign-in role and status;
+  owners and admins register or edit it in a drawer and remove it with a confirmation.
+- `GET /v1/accounts/{id}/members` returns each member's `email` and `display_name`, and
+  `GET /v1/me` memberships include `account_name` and `account_slug`. A profile refreshed at
+  sign-in expires the cached member lists of that user's accounts. The console shows member
+  names, emails and initials, and names accounts in the workspace chooser and the account
+  switcher, which now switches between accounts directly.
+- Console edge gateway support: with `FABRIC_EDGE_INFERENCE_URL` (set by the control-plane
+  chart from `edge.ingress.host`, or `console.edgeInferenceUrl`), the playground and agent
+  playground send every deployment, `auto` and `cascade` through the edge, and Overview and
+  Stamps show an Edge gateway card. Without it, each deployment goes to the gateway of the
+  stamp holding its ready placement (approved status endpoint or stamp `inference_url`,
+  with `FABRIC_INFERENCE_URL`'s origin approved), and `auto`/`cascade` go to the stamp gateway
+  serving most of the account's deployments.
+- The console demo runs the real edge gateway in front of its three stamps, so the
+  playground compares models on different stamps; screenshots cover the identity provider
+  page, the deployment drawer's Routing section, member names, the account switcher and the
+  Agents pages.
+
 - Console **Agents** section (`docs/console-agents.md`): a Runs page (recent agent runs from
   every approved gateway, status filter, token and step budget meters, refusals and
   tool-guard repairs, live refresh, a clear message for gateways without agent runs), a run
@@ -203,6 +233,15 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Changed
 
+- Console tables scroll sideways inside their card with edge fades and a visible
+  scrollbar, keep sensible minimum widths, and truncate long names, releases and audit
+  details with a tooltip showing the full value.
+- The console's create-deployment action no longer hard-codes `kernel_mode: "standard"` and
+  `strategy: "least_in_flight"`; it sends the form's choices (kernel mode defaults to
+  `auto`, which the operator currently serves with the engine's own kernels).
+- The console playground prefers a deployment's own stamp gateway over a single
+  `FABRIC_INFERENCE_URL` when that stamp's endpoint is approved, so deployments on other
+  stamps no longer fail.
 - With `FABRIC_KERNEL` set on a T4, the packed kernel now defaults to the measured 16/1
   tile at batch 16 and below, instead of vLLM's 32/1. Set `FABRIC_KERNEL_BLOCK_V=32`,
   `FABRIC_KERNEL_NUM_WARPS=1` and `FABRIC_KERNEL_NUM_STAGES=3` for the previous tile.

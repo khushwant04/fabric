@@ -36,6 +36,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -75,16 +76,19 @@ STAMPS = [
 ]
 
 # name, alias, release, stamp (None = not placed), outcome, extra spec, requests to send.
-# Small Qwen3.5 models served by vLLM; the "-large" alias is the cascade's upper tier.
+# Small Qwen3.5 models served by vLLM. cascade_tier orders model="cascade": chat-fast first,
+# then support-assistant, then the "-large" alias as the upper tier.
 DEPLOYMENTS = [
     ("support-assistant", "qwen3.5-2b", "Qwen/Qwen3.5-2B", "aks-gpu", "ready",
      {"replicas": 2, "resources": {"gpu_class": "t4"},
+      "capabilities": {"cascade_tier": 1},
       "runtime": {"max_model_len": 16384, "strategy": "prefix_aware"}}, 140),
     ("chat-fast", "qwen3.5-0.8b", "Qwen/Qwen3.5-0.8B", "aks-gpu", "ready",
-     {"resources": {"gpu_class": "t4"}, "capabilities": {"priority": -10},
+     {"resources": {"gpu_class": "t4"}, "capabilities": {"priority": -10, "cascade_tier": 0},
       "runtime": {"max_model_len": 8192}}, 95),
     ("assistant-large", "qwen3.5-2b-large", "Qwen/Qwen3.5-2B", "gcp-rtx6000", "ready",
-     {"resources": {"gpu_class": "a10"}, "capabilities": {"priority": 10, "reasoning": True},
+     {"resources": {"gpu_class": "a10"},
+      "capabilities": {"priority": 10, "reasoning": True, "cascade_tier": 2},
       "runtime": {"max_model_len": 65536, "max_num_seqs": 256}}, 60),
     ("code-review-bot", "qwen3.5-2b-code", "Qwen/Qwen3.5-2B", "gcp-rtx6000", "deploying",
      {"resources": {"gpu_class": "a10"}, "capabilities": {"code": True}}, 0),
@@ -559,6 +563,13 @@ class Demo:
             "deployment_ids": {name: d["id"] for name, d in self.deployments.items()},
             "playground_deployment_id": playground["id"],
             "stamps": {name: s["id"] for name, s in self.stamps.items()},
+            # Where each stamp's reported gateway really listens, for the demo edge gateway's
+            # address overrides: {"aks-gpu.gw.northstar-labs.example:443": "127.0.0.1:8090"}.
+            "gateway_addresses": {
+                f"{urlsplit(s['inference_url']).hostname}:443":
+                    f"127.0.0.1:{urlsplit(s['dp_url']).port}"
+                for s in self.stamps.values()
+            },
         }
         Path(self.args.state_file).write_text(json.dumps(state, indent=2))
 

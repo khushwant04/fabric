@@ -8,6 +8,7 @@
 #   stamps (3)         real  Go agent enrollment, desired state, credentials
 #   data planes (3)    real  one per stamp, configured from the agent-written file
 #   collector          real  forwards usage from each data plane
+#   edge gateway       real  one HTTPS inference URL in front of the three stamps
 #   model host         MOCK  scripts/demo-console/model_host.py (canned, streamed answers)
 #   console            real  v1/, unmodified (production build by default)
 #
@@ -19,7 +20,8 @@
 #   DEMO_CONTROL_PORT    control-plane port (default 8080)
 #   DEMO_IDP_PORT        mock identity provider HTTPS port (default 8443)
 #   DEMO_IDP_BROWSER_PORT  its plain-HTTP localhost port for /authorize and logout (8444)
-#   DEMO_INFERENCE_PORT  aks-gpu data plane HTTPS port, used by the playground (default 8090)
+#   DEMO_INFERENCE_PORT  aks-gpu data plane HTTPS port (default 8090)
+#   DEMO_EDGE_PORT       edge gateway HTTPS port, used by the playground (default 8091)
 #   DEMO_MODEL_PORT      mock model host port (default 9009)
 #   DEMO_CONSOLE_MODE    "start" (default): next build + next start; "dev": next dev
 #   DEMO_SCREENSHOTS=1   capture docs/screenshots/console/ and exit instead of waiting
@@ -38,6 +40,10 @@ IDP_BROWSER_PORT="${DEMO_IDP_BROWSER_PORT:-8444}"
 # connections for it to 127.0.0.1:$IDP_PORT, verified against the throwaway CA.
 IDP_HOST="idp.fabric-demo.test"
 INFERENCE_PORT="${DEMO_INFERENCE_PORT:-8090}"
+EDGE_PORT="${DEMO_EDGE_PORT:-8091}"
+# The edge gateway's public name. Like the identity provider's, nothing resolves it: the
+# console's resolve-idp.cjs sends it to 127.0.0.1:$EDGE_PORT, verified against the demo CA.
+EDGE_HOST="inference.northstar-labs.example"
 MODEL_PORT="${DEMO_MODEL_PORT:-9009}"
 CONSOLE_MODE="${DEMO_CONSOLE_MODE:-start}"
 AUDIENCE="https://api.fabric.demo/control"
@@ -79,7 +85,7 @@ trap 'exit 130' INT TERM
 [ -d "$REPO_ROOT/v1/node_modules" ] || die "console dependencies missing (run: cd v1 && npm ci)"
 command -v go >/dev/null || die "go is required to build the agent and collector"
 
-for port in "$CONSOLE_PORT" "$CONTROL_PORT" "$IDP_PORT" "$IDP_BROWSER_PORT" "$INFERENCE_PORT" "$MODEL_PORT"; do
+for port in "$CONSOLE_PORT" "$CONTROL_PORT" "$IDP_PORT" "$IDP_BROWSER_PORT" "$INFERENCE_PORT" "$EDGE_PORT" "$MODEL_PORT"; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
         die "port $port is already in use; set the DEMO_*_PORT variables to free ones"
     fi
@@ -106,7 +112,10 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=Fabric demo CA (tem
     >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
     -keyout "$WORK/server-key.pem" -out "$WORK/server.csr" >/dev/null 2>&1
-printf 'subjectAltName=DNS:localhost,DNS:%s,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' "$IDP_HOST" > "$WORK/server.ext"
+# One certificate for every demo listener: the identity provider, each stamp's reported
+# gateway name (verified by the edge gateway) and the edge gateway's public name.
+printf 'subjectAltName=DNS:localhost,DNS:%s,DNS:*.gw.northstar-labs.example,DNS:%s,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' \
+    "$IDP_HOST" "$EDGE_HOST" > "$WORK/server.ext"
 openssl x509 -req -in "$WORK/server.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca-key.pem" \
     -CAcreateserial -days 2 -extfile "$WORK/server.ext" -out "$WORK/server.pem" >/dev/null 2>&1
 openssl genrsa -out "$WORK/signing.pem" 2048 2>/dev/null
@@ -151,7 +160,13 @@ export FABRIC_CREDENTIAL_PEPPER="demo-pepper-$(openssl rand -hex 16)"
     cd "$REPO_ROOT/control-plane"
     "$CONTROL_PY" -m alembic upgrade head >"$WORK/migrate.log" 2>&1
     "$CONTROL_PY" -m app.cli seed-system-account >>"$WORK/migrate.log" 2>&1
+    # The edge gateway's routing-table credential (edge:routing:read only), as an operator
+    # mints it for the Helm chart.
+    "$CONTROL_PY" -m app.cli create-edge-credential --name fabric-edge >"$WORK/edge-credential.txt" 2>>"$WORK/migrate.log"
 ) || { cat "$WORK/migrate.log"; die "migration failed"; }
+EDGE_API_KEY=$(awk '$1 == "api_key" {print $2}' "$WORK/edge-credential.txt")
+[ -n "$EDGE_API_KEY" ] || die "could not create the edge gateway credential"
+rm -f "$WORK/edge-credential.txt"
 (
     cd "$REPO_ROOT/control-plane"
     # The control plane fetches the identity provider's keys over HTTPS; trust only the
@@ -190,7 +205,29 @@ for _ in $(seq 1 900); do
     sleep 0.2
 done
 [ -f "$STATE" ] || die "seeding did not finish"
-INFERENCE_URL=$("$CONTROL_PY" -c "import json;print(json.load(open('$STATE'))['inference_url'])")
+
+# --------------------------------------------------------------------------
+log "6b. Edge gateway"
+# --------------------------------------------------------------------------
+EDGE_ADMIN_PORT=$("$CONTROL_PY" -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1])")
+EDGE_OVERRIDES=$("$CONTROL_PY" -c "import json;print(json.dumps(json.load(open('$STATE'))['gateway_addresses']))")
+(
+    cd "$REPO_ROOT/data-plane"
+    export FABRIC_EDGE_HOST=127.0.0.1 FABRIC_EDGE_PORT="$EDGE_PORT"
+    export FABRIC_EDGE_ADMIN_HOST=127.0.0.1 FABRIC_EDGE_ADMIN_PORT="$EDGE_ADMIN_PORT"
+    export FABRIC_EDGE_CONTROL_PLANE_URL="$CONTROL_URL" FABRIC_EDGE_API_KEY="$EDGE_API_KEY"
+    export FABRIC_EDGE_JWT_ISSUER="$JWT_ISSUER"
+    export FABRIC_EDGE_JWKS_URL="$CONTROL_URL/.well-known/jwks.json"
+    export FABRIC_EDGE_POLL_INTERVAL_SECONDS=2
+    export FABRIC_EDGE_STAMP_CA_BUNDLE="$WORK/ca.pem"
+    export FABRIC_EDGE_STAMP_ADDRESS_OVERRIDES="$EDGE_OVERRIDES"
+    export DEMO_EDGE_CERT="$WORK/server.pem" DEMO_EDGE_KEY="$WORK/server-key.pem"
+    exec "$DATA_PY" "$HERE/edge.py"
+) >"$WORK/edge.log" 2>&1 &
+PIDS+=($!)
+wait_for "http://127.0.0.1:$EDGE_ADMIN_PORT/readyz" "edge gateway"
+INFERENCE_URL="https://$EDGE_HOST"
+info "$INFERENCE_URL on https://localhost:$EDGE_PORT, routing to every stamp's data plane"
 
 # --------------------------------------------------------------------------
 log "7. Console"
@@ -206,6 +243,7 @@ fi
     export APP_BASE_URL="$CONSOLE_URL"
     export AUTH0_DOMAIN="$IDP_HOST"
     export NODE_OPTIONS="--require $HERE/resolve-idp.cjs${NODE_OPTIONS:+ $NODE_OPTIONS}"
+    export DEMO_HOST_MAP="$EDGE_HOST=127.0.0.1:$EDGE_PORT"
     export AUTH0_CLIENT_ID="$CLIENT_ID"
     export AUTH0_CLIENT_SECRET="$CLIENT_SECRET"
     export AUTH0_SECRET="$SESSION_SECRET"
@@ -213,7 +251,9 @@ fi
     export FABRIC_CONTROL_PLANE_URL="$CONTROL_URL"
     export FABRIC_CONTROL_PLANE_PUBLIC_URL="$JWT_ISSUER"
     export FABRIC_CONTROL_PLANE_JWT_ISSUER="$JWT_ISSUER"
+    # The edge reaches every stamp, so the playground works for deployments on any of them.
     export FABRIC_INFERENCE_URL="$INFERENCE_URL"
+    export FABRIC_EDGE_INFERENCE_URL="$INFERENCE_URL"
     # Node trusts the throwaway CA in addition to its usual roots.
     export NODE_EXTRA_CA_CERTS="$WORK/ca.pem"
     export NEXT_TELEMETRY_DISABLED=1
@@ -240,7 +280,8 @@ cat <<EOF
     Sign in          click "Sign in"; the demo identity provider signs you in as
                      Maya Chen (maya.chen@northstar-labs.example), owner of Northstar Labs
     Control plane    $CONTROL_URL/docs
-    Playground       answers come from a stub model host through the real data plane
+    Edge gateway     $INFERENCE_URL (https://localhost:$EDGE_PORT)
+    Playground       answers come from a stub model host through the edge and the real data planes
 
   Logs: $WORK
 EOF
