@@ -65,6 +65,8 @@ export function stampSetupError(setup: StampSetup, requireIssuer = true): string
   if (setup.runtimeClass && (!dnsLabel.test(setup.runtimeClass) || setup.runtimeClass.length > 63)) return "Use a valid Kubernetes RuntimeClass name."
   if (!setup.modelImage || /\s|[\x00-\x1f]/.test(setup.modelImage)) return "Enter the vLLM container image for this cluster."
   if (setup.gatewayHost && (!hostname.test(setup.gatewayHost) || setup.gatewayHost.length > 253 || setup.gatewayHost.split(".").some((label) => label.length > 63))) return "Enter the inference gateway DNS hostname without https:// or a path."
+  // The stamp's own name in the control-plane field produces a stamp that never enrolls.
+  if (setup.gatewayHost && httpsControlPlaneUrl(setup.controlPlaneUrl) === `https://${setup.gatewayHost}`) return "The control-plane address is the Fabric API this stamp joins, not the stamp's own hostname. Keep the console's control-plane address here and put the stamp hostname under Runtime & gateway."
   if (setup.gatewayHost && setup.target === "k3s" && !email.test(setup.acmeEmail)) return "Enter a contact email for the Let's Encrypt certificate."
   if (setup.gatewayHost && setup.target === "kubernetes" && !setup.certificateIssuer) return "Enter an existing cert-manager ClusterIssuer for the inference gateway."
   if (setup.certificateIssuer && (!hostname.test(`${setup.certificateIssuer}.local`) || setup.certificateIssuer.length > 253)) return "Use a valid ClusterIssuer name."

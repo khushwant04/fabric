@@ -57,3 +57,9 @@ test("existing Kubernetes gets a Helm command pinned to the same release and ima
   assert.match(helm, /gpu\.runtimeClassName='nvidia'/)
   assert.doesNotMatch(helm, /singletenant-20261006/)
 })
+
+test("the stamp's own hostname is refused as the control-plane address", () => {
+  const swapped = { ...vm, controlPlaneUrl: "https://rtx-pro-6000.stamps.example.com" }
+  assert.match(stampSetupError(swapped) ?? "", /not the stamp's own hostname/)
+  assert.equal(stampBootstrapCommand(swapped, "t", true), null)
+})
