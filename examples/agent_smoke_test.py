@@ -13,10 +13,14 @@ Runs eight checks against a deployed model and prints PASS/FAIL for each:
   8. stream    a streamed agent run with tool-call events
   then the Fabric run trace (tokens, steps, tool-guard repairs) for the whole session.
 
-Setup:
+Setup (terminal):
     pip install openai-agents openai httpx pydantic
     export FABRIC_API_KEY=...          # console -> API keys
     python agent_smoke_test.py --model qwen3.5-2b
+
+Colab or Jupyter (they already run an event loop and pass their own arguments): paste this
+file into a cell, then run `await notebook_main(model="qwen3.5-2b")` in the next one. It
+asks for the API key when FABRIC_API_KEY is not set.
 
 Everything runs locally except the model calls; the tools are fakes and tracing to OpenAI is
 off. Exit code is 0 only when every check passes.
@@ -234,6 +238,35 @@ async def run_checks(args: argparse.Namespace) -> None:
     await client.close()
 
 
+def summary() -> int:
+    passed = sum(1 for _, ok, _ in RESULTS if ok)
+    print(f"\n{passed}/{len(RESULTS)} checks passed")
+    return 0 if passed == len(RESULTS) else 1
+
+
+async def notebook_main(
+    model: str = "qwen3.5-2b",
+    control_url: str = "https://api.nscale.host",
+    inference_url: str = "https://inference.nscale.host",
+    max_tokens: int = 512,
+    timeout: float = 180.0,
+    api_key: str | None = None,
+) -> int:
+    """Entry point for Colab and Jupyter: ``await notebook_main(model="qwen3.5-2b")``."""
+    if api_key is None:
+        api_key = os.getenv("FABRIC_API_KEY")
+    if not api_key:
+        from getpass import getpass
+
+        api_key = getpass("Fabric API key: ")
+    RESULTS.clear()
+    args = argparse.Namespace(model=model, control_url=control_url, inference_url=inference_url,
+                              max_tokens=max_tokens, timeout=timeout, api_key=api_key)
+    print(f"Testing {model} at {inference_url}\n")
+    await run_checks(args)
+    return summary()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", default=os.getenv("FABRIC_MODEL", "qwen3.5-2b"),
@@ -252,10 +285,12 @@ def main() -> int:
 
     print(f"Testing {args.model} at {args.inference_url}\n")
     asyncio.run(run_checks(args))
-    passed = sum(1 for _, ok, _ in RESULTS if ok)
-    print(f"\n{passed}/{len(RESULTS)} checks passed")
-    return 0 if passed == len(RESULTS) else 1
+    return summary()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if "ipykernel" in sys.modules:
+        # Pasted into a notebook cell: the kernel's own arguments would break argparse.
+        print('Defined. Now run:  await notebook_main(model="qwen3.5-2b")')
+    else:
+        sys.exit(main())
