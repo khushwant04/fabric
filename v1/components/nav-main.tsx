@@ -59,7 +59,7 @@ export function NavMain({
               </SidebarGroupLabel>
             ) : null}
             <SidebarGroupContent>
-              <SidebarMenu highlight={false} className="gap-0.5">
+              <SidebarMenu className="gap-0.5">
                 {items.map((item) => {
                   const isActive =
                     pathname === item.url ||
