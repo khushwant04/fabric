@@ -227,3 +227,93 @@ def test_validator_handles_nested_and_combined_schemas():
     assert validate(True, {"type": "integer"}) == ["arguments: expected integer, got boolean"]
     # Unknown keywords never make a call invalid.
     assert validate("x", {"type": "string", "format": "email", "pattern": "^y"}) == []
+
+
+TRIP_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "trip",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "nights": {"type": "integer"}},
+            "required": ["city", "nights"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def answer(content, prompt_tokens=10, completion_tokens=5):
+    return {
+        "id": "c",
+        "object": "chat.completion",
+        "choices": [
+            {"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+        ],
+        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+    }
+
+
+async def test_prose_final_answer_is_reasked_without_tools_and_charged(
+    client, plane, signing_key, scripted
+):
+    # vLLM skips response_format while tools are offered, so the model answers in prose.
+    script, seen = scripted
+    script.extend([answer("Here is your trip: Lisbon, 3 nights.", 80, 12),
+                   answer('{"city": "Lisbon", "nights": 3}', 70, 9)])
+    headers = auth(signing_key, **{"X-Fabric-Run-Id": "f", "X-Fabric-Run-Budget-Tokens": "1000"})
+    reply = await client.post(CHAT, json=request(response_format=TRIP_FORMAT), headers=headers)
+    assert reply.status_code == 200
+    content = reply.json()["choices"][0]["message"]["content"]
+    assert json.loads(content) == {"city": "Lisbon", "nights": 3}
+    assert reply.headers["x-fabric-tool-guard"] == "repaired; attempts=2"
+
+    # The retry kept the messages and the format, and dropped only the tools.
+    assert len(seen) == 2
+    assert "tools" in seen[0] and "tools" not in seen[1]
+    assert seen[1]["messages"] == seen[0]["messages"]
+    assert seen[1]["response_format"] == TRIP_FORMAT
+
+    records = plane.usage.drain()
+    assert [(r.input_tokens, r.output_tokens) for r in records] == [(80, 12), (70, 9)]
+    assert reply.headers["x-fabric-run-tokens-used"] == "171"
+
+
+async def test_schema_mismatch_is_reasked_but_a_valid_answer_is_not(client, signing_key, scripted):
+    script, seen = scripted
+    script.extend([answer('{"city": "Lisbon"}'), answer('{"city": "Lisbon", "nights": 3}')])
+    reply = await client.post(CHAT, json=request(response_format=TRIP_FORMAT),
+                              headers=auth(signing_key))
+    assert reply.headers["x-fabric-tool-guard"] == "repaired; attempts=2"
+    assert len(seen) == 2
+
+    seen.clear()
+    script.clear()
+    script.append(answer('{"city": "Porto", "nights": 2}'))
+    reply = await client.post(CHAT, json=request(response_format=TRIP_FORMAT),
+                              headers=auth(signing_key))
+    assert len(seen) == 1
+    assert "x-fabric-tool-guard" not in reply.headers
+
+
+async def test_final_answer_without_a_json_format_or_with_guard_off_is_untouched(
+    client, signing_key, scripted
+):
+    script, seen = scripted
+    script.append(answer("Lisbon is sunny."))
+    await client.post(CHAT, json=request(), headers=auth(signing_key))
+    await client.post(CHAT, json=request(response_format=TRIP_FORMAT),
+                      headers=auth(signing_key, **{"X-Fabric-Tool-Guard": "off"}))
+    assert len(seen) == 2
+
+
+async def test_unrepaired_final_answer_is_served_and_marked_failed(client, signing_key, scripted):
+    script, seen = scripted
+    script.append(answer("still prose"))
+    reply = await client.post(CHAT, json=request(response_format=TRIP_FORMAT),
+                              headers=auth(signing_key))
+    assert reply.status_code == 200
+    assert reply.json()["choices"][0]["message"]["content"] == "still prose"
+    assert reply.headers["x-fabric-tool-guard"] == "failed; attempts=2"
+    assert len(seen) == 2
