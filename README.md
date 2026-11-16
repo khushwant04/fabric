@@ -71,20 +71,26 @@ plane, so serving keeps working when the control plane does not.
 ```mermaid
 flowchart LR
     clients["Apps & agents<br/><small>OpenAI · Anthropic SDKs</small>"]
-    subgraph central["Control site (e.g. AKS)"]
+    cf["Cloudflare<br/><small>DNS</small>"]
+    subgraph central["Azure AKS — control plane + edge"]
+        ingress["Ingress · TLS"]
         edge["Edge gateway"]
         cp["Control plane"]
         db[("PostgreSQL<br/><small>row-level security</small>")]
         console["Console"]
     end
-    subgraph stamps["GPU stamps — any cloud, VM or on-prem"]
+    subgraph stamps["GPU stamps — AKS, Google Cloud, VMs"]
         gw["Stamp gateway<br/><small>limits · agents · tools</small>"] --> host["vLLM model host<br/><small>Fabric kernel</small>"]
         agent["Agent · Operator"] -.creates.-> host
     end
-    clients -- inference --> edge -- HTTPS --> gw
-    console --> cp --> db
+    kv["Azure Key Vault"]
+    ecr["Amazon ECR Public"]
+    clients -- inference --> cf --> ingress --> edge -- HTTPS --> gw
+    ingress --> console --> cp --> db
     edge -. routing table .-> cp
     agent -. outbound only .-> cp
+    kv -. secrets .-> central
+    ecr -. images .-> central & stamps
 ```
 
 </details>
