@@ -13,6 +13,7 @@ from app.schemas import RuntimeSpec
     ("Qwen/Qwen2.5-Coder-3B-Instruct", "hermes"),
     ("Qwen/Qwen3.5-2B", "qwen3_xml"),
     ("Qwen/Qwen3.5-4B", "qwen3_xml"),
+    ("Qwen/Qwen3.6-35B-A3B-FP8", "qwen3_xml"),
     ("Qwen/Qwen3.5-4B", "qwen3_coder"),
 ])
 def test_explicit_enable_and_native_parser_are_accepted(release, parser):

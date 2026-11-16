@@ -18,7 +18,7 @@ import type { DeploymentStampOption } from "@/lib/fabric/resource-state"
 
 const executionModes = [{ value: "default", label: "Cluster default" }, { value: "eager", label: "Eager" }, { value: "cuda_graph", label: "CUDA graphs" }]
 const toolChoiceModes = [{ value: "default", label: "Model default" }, { value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]
-const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100"]
+const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100", "rtx-pro-6000"]
 
 /** The full-page form at /deployments/new (deep links and no-JS submissions). */
 export function DeploymentForm({ children }: { children: React.ReactNode }) {

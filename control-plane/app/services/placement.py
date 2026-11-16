@@ -99,6 +99,7 @@ GPU_CLASSES: dict[str, GpuClass] = {
     "a100-80gb": GpuClass(80 * _GIB, (8, 0)),
     "l40s": GpuClass(48 * _GIB, (8, 9)),
     "h100": GpuClass(80 * _GIB, (9, 0)),
+    "rtx-pro-6000": GpuClass(96 * _GIB, (12, 0)),
 }
 
 #: Reported product strings mapped to a class, used *only* to fill in memory or capability a
@@ -119,6 +120,8 @@ _PRODUCT_CLASSES: dict[str, str] = {
     "nvidia l40s": "l40s",
     "nvidia h100": "h100",
     "nvidia rtx a4000": "rtx-a4000",
+    "nvidia rtx pro 6000 blackwell server edition": "rtx-pro-6000",
+    "nvidia rtx pro 6000 blackwell workstation edition": "rtx-pro-6000",
 }
 
 
