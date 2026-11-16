@@ -330,6 +330,14 @@ func (c *Client) ReportStatus(ctx context.Context, stampID string, report Status
 	return c.do(ctx, http.MethodPost, path, report, nil, true)
 }
 
+// ReportHosts sends a snapshot of this stamp's model-host pods: status, recent events
+// and the log tail (see internal/hostreport). The control plane keeps the latest snapshot
+// per pod and forgets pods a report no longer names.
+func (c *Client) ReportHosts(ctx context.Context, stampID string, report any) error {
+	path := "/v1/stamps/" + url.PathEscape(stampID) + "/hosts"
+	return c.do(ctx, http.MethodPost, path, report, nil, true)
+}
+
 // MaxUsageBatch matches the server's per-request limit, so a larger backlog is
 // chunked rather than rejected wholesale.
 const MaxUsageBatch = 500

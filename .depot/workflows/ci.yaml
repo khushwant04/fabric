@@ -239,6 +239,7 @@ jobs:
           python deploy/scripts/test_edge_chart.py
           python deploy/scripts/test_hosted_tools_chart.py
           python deploy/scripts/test_cache_chart.py
+          python deploy/scripts/test_prepull_chart.py
           bash deploy/scripts/test-stamp-exposure-chart.sh
       - name: Verify upgrades from legacy release values
         run: python deploy/scripts/test_upgrade_automation.py

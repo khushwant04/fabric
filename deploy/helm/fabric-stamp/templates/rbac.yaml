@@ -142,6 +142,45 @@ subjects:
     name: {{ include "fabric-stamp.fullname" . }}-operator
     namespace: {{ .Release.Namespace }}
 {{- end }}
+{{- if include "fabric-stamp.reportsHosts" . }}
+---
+# Model-host status for the console (docs/model-host-logs.md). The agent pushes each host's
+# phase, recent events and log tail to the control plane, which cannot ask for them itself
+# because it never connects to a stamp. A Role, not a ClusterRole: the operator creates
+# hosts in this namespace only, and read access to pod logs elsewhere would expose other
+# workloads' output for no benefit. Read-only, and no exec, attach or secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-hosts
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "fabric-stamp.fullname" . }}-agent-hosts
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "fabric-stamp.fullname" . }}-agent-hosts
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "fabric-stamp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- if .Values.stamp.measureCapacity }}
 ---
 # The agent reports this stamp's capacity so the control plane can decide whether a

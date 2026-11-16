@@ -183,6 +183,18 @@ true
 {{- end -}}
 
 {{/*
+Whether the agent pushes model-host pod status, events and log tails to the control plane
+(docs/model-host-logs.md). Only meaningful when the operator runs the hosts. Compared as a
+string so `helm upgrade --reuse-values` from a chart without the value keeps it on, while
+an explicit false still turns it off.
+*/}}
+{{- define "fabric-stamp.reportsHosts" -}}
+{{- if and (include "fabric-stamp.managesModelHost" .) (ne (toString .Values.agent.reportHosts) "false") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 The upstream the data plane starts with. A host that cannot be reached fails closed with
 a gateway error, which is the right behaviour before a deployment is placed: answering
 from the wrong upstream would be worse than not answering.

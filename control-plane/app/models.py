@@ -485,6 +485,64 @@ class DeploymentStatus(Base):
     )
 
 
+class DeploymentHostSnapshot(Base):
+    """The latest status, events and log tail a stamp reported for one model-host pod.
+
+    One row per pod, overwritten by each report and deleted once a report stops naming the
+    pod, so the table holds what is running now and never grows with history. Anchored to
+    the placement like ``deployment_status``: the owning account is the placement's, and
+    removing the placement removes the snapshots with it.
+    """
+
+    __tablename__ = "deployment_host_snapshots"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    deployment_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    stamp_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    pod_name: Mapped[str] = mapped_column(String(253), nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    terminating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    restart_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    container_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    container_reason: Mapped[str | None] = mapped_column(String(128))
+    container_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    conditions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JsonColumn, nullable=False, default=list
+    )
+    events: Mapped[list[dict[str, Any]]] = mapped_column(JsonColumn, nullable=False, default=list)
+    log_tail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    log_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    log_previous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    log_error: Mapped[str | None] = mapped_column(String(200))
+    #: The stamp's clock when it read the pod; ``reported_at`` is the control plane's.
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reported_at: Mapped[dt.datetime] = _created_at()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "deployment_id", "stamp_id"],
+            [
+                "deployment_placements.account_id",
+                "deployment_placements.deployment_id",
+                "deployment_placements.stamp_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_deployment_host_snapshots_placement",
+        ),
+        UniqueConstraint(
+            "account_id",
+            "deployment_id",
+            "stamp_id",
+            "pod_name",
+            name="uq_deployment_host_snapshots_pod",
+        ),
+        Index("ix_deployment_host_snapshots_stamp_id", "stamp_id"),
+    )
+
+
 class UsageEvent(Base):
     """Operational token accounting. Not billing-grade in MVP."""
 

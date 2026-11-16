@@ -807,6 +807,129 @@ class StatusReportResponse(BaseModel):
     accepted_at: dt.datetime
 
 
+# --- model-host status and logs (docs/model-host-logs.md) ------------------
+
+#: Bounds on what one host report may carry. The agent trims to fit before sending; these
+#: exist so a stamp cannot turn the endpoint into unbounded storage.
+MAX_HOST_PODS_PER_REPORT = 64
+MAX_HOST_EVENTS = 50
+MAX_HOST_LOG_CHARS = 64 * 1024
+
+
+class HostEventReport(BaseModel):
+    """One Kubernetes event about a model-host pod."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(max_length=32)
+    reason: str = Field(max_length=128)
+    message: str = Field(max_length=1000)
+    count: int = Field(default=1, ge=0)
+    at: dt.datetime
+
+
+class HostConditionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(min_length=1, max_length=64)
+    status: Literal["True", "False", "Unknown"]
+    reason: str | None = Field(default=None, max_length=128)
+    message: str | None = Field(default=None, max_length=1000)
+    last_transition_time: dt.datetime | None = None
+
+
+class HostPodReport(BaseModel):
+    """A bounded snapshot of one model-host pod, as the stamp's agent read it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=253)
+    phase: str = Field(max_length=32)
+    ready: bool = False
+    terminating: bool = False
+    restart_count: int = Field(default=0, ge=0)
+    container_state: Literal["waiting", "running", "terminated", "unknown"] = "unknown"
+    container_reason: str | None = Field(default=None, max_length=128)
+    container_message: str | None = Field(default=None, max_length=1000)
+    started_at: dt.datetime | None = None
+    conditions: list[HostConditionReport] = Field(default_factory=list, max_length=16)
+    events: list[HostEventReport] = Field(default_factory=list, max_length=MAX_HOST_EVENTS)
+    log: str = Field(default="", max_length=MAX_HOST_LOG_CHARS)
+    log_truncated: bool = False
+    log_previous: bool = False
+    log_error: str | None = Field(default=None, max_length=200)
+
+
+class HostDeploymentReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deployment_id: uuid.UUID
+    pods: list[HostPodReport] = Field(max_length=MAX_HOST_PODS_PER_REPORT)
+
+
+class HostReportRequest(BaseModel):
+    """Every model-host pod on the stamp, at one moment.
+
+    A complete set rather than a delta: a pod the report does not name is gone, and its
+    snapshot is deleted. Ownership is never read from here; the placement decides it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    observed_at: dt.datetime
+    deployments: list[HostDeploymentReport] = Field(
+        default_factory=list, max_length=MAX_HOST_PODS_PER_REPORT
+    )
+
+    @model_validator(mode="after")
+    def _bounded(self) -> HostReportRequest:
+        if sum(len(item.pods) for item in self.deployments) > MAX_HOST_PODS_PER_REPORT:
+            raise ValueError(f"a report may describe at most {MAX_HOST_PODS_PER_REPORT} pods")
+        if len({item.deployment_id for item in self.deployments}) != len(self.deployments):
+            raise ValueError("each deployment may appear once")
+        return self
+
+
+class HostReportResponse(BaseModel):
+    stamp_id: uuid.UUID
+    accepted_at: dt.datetime
+    accepted_pods: int
+    #: Deployments named in the report that are not placed on this stamp (or were
+    #: deleted). Their pods are not stored.
+    ignored_deployments: list[uuid.UUID]
+
+
+class HostSnapshotResponse(ORMModel):
+    stamp_id: uuid.UUID
+    pod_name: str
+    phase: str
+    ready: bool
+    terminating: bool
+    restart_count: int
+    container_state: str
+    container_reason: str | None
+    container_message: str | None
+    started_at: dt.datetime | None
+    conditions: list[dict[str, Any]]
+    events: list[dict[str, Any]]
+    log_tail: str
+    log_truncated: bool
+    log_previous: bool
+    log_error: str | None
+    observed_at: dt.datetime
+    reported_at: dt.datetime
+    #: No report has refreshed this pod recently; the stamp may be disconnected.
+    stale: bool = False
+
+
+class DeploymentHostsResponse(BaseModel):
+    deployment_id: uuid.UUID
+    #: The newest report among the hosts, or null when no stamp has reported any.
+    reported_at: dt.datetime | None
+    stale_after_seconds: int
+    hosts: list[HostSnapshotResponse]
+
+
 # --- edge routing table (ADR 0021) -----------------------------------------
 
 

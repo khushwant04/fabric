@@ -6,6 +6,14 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ## Unreleased
 
+### Added
+
+- Live model-host status and log tails in the console: the stamp agent pushes each
+  model-host pod's phase, container state, recent Kubernetes events and the last lines of
+  its log to a new stamp-authenticated endpoint, and the deployment detail page's **Hosts**
+  tab shows a start-up timeline and an auto-scrolling log. See
+  [docs/model-host-logs.md](docs/model-host-logs.md).
+
 ### Changed
 
 - CI publishes `model-host` (vLLM with the Fabric kernel) to ECR Public with the other

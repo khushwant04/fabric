@@ -14,6 +14,7 @@ from app.core.security import PrincipalContext, account_scope
 from app.schemas import (
     AccountUsageResponse,
     DeploymentCreateRequest,
+    DeploymentHostsResponse,
     DeploymentResponse,
     DeploymentStatusResponse,
     DeploymentUpdateRequest,
@@ -33,6 +34,7 @@ from app.services.deployments import (
     list_placements,
     update_deployment,
 )
+from app.services.host_reports import list_deployment_hosts
 from app.services.usage import summarize_account_usage, summarize_deployment_usage
 
 router = APIRouter(tags=["deployments"])
@@ -306,6 +308,31 @@ async def read_status(
         loader=load,
         live=True,
     )
+
+
+@router.get(
+    _BASE + "/{deployment_id}/hosts",
+    response_model=DeploymentHostsResponse,
+    summary="Read model-host pod status, events and log tails",
+)
+async def read_hosts(
+    response: Response,
+    deployment_id: uuid.UUID = Path(...),
+    principal: PrincipalContext = Depends(account_scope(scope_defs.DEPLOYMENTS_READ)),
+    session: AsyncSession = Depends(get_db_session),
+) -> DeploymentHostsResponse:
+    """The latest snapshot of each host the deployment's stamps reported.
+
+    Not cached: it changes every few seconds while a host starts, and a console polling it
+    wants the newest log lines, not the ones from the last cache fill.
+    """
+    # Confirms the deployment exists, is not deleted, and belongs to the token's account.
+    await get_deployment(session, principal.account_id, deployment_id)
+    hosts = await list_deployment_hosts(
+        session, account_id=principal.account_id, deployment_id=deployment_id
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return hosts
 
 
 @router.get(

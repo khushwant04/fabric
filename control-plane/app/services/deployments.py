@@ -30,6 +30,7 @@ from app.models import (
 from app.services import placement
 from app.services.accounts import get_account, get_system_account
 from app.services.audit import publish_outbox, record_audit
+from app.services.host_reports import delete_deployment_hosts
 
 
 async def create_deployment(
@@ -318,6 +319,9 @@ async def delete_deployment(
     deployment.deleted_at = dt.datetime.now(tz=dt.UTC)
     deployment.generation += 1
     deployment.status = "terminating"
+    # Host logs are tenant data with no use once the deployment is gone, and its hosts
+    # endpoint stops answering, so they are removed now rather than at the next report.
+    await delete_deployment_hosts(session, account_id=account_id, deployment_id=deployment.id)
     await _bump_placements(session, deployment)
     await session.execute(
         update(DeploymentPlacement)

@@ -61,6 +61,11 @@ stamp-authenticated APIs a production stamp uses, with each stamp's own agent cr
   forwards what it sees. Here the script reports the operator-style conditions: Applied,
   Available and Progressing. This is what makes one deployment *Ready*, another *Deploying*
   and another *Failed*.
+- **Model-host status and logs.** In a cluster, the agent pushes each model-host pod's status,
+  Kubernetes events and log tail (see [model-host-logs.md](model-host-logs.md)). Here the script
+  sends the same report for each stamp: ready hosts with a startup log, one host still loading
+  its weights, and one crash-looping because its KV cache does not fit. It is re-sent every
+  30 s so the **Hosts** tab stays fresh.
 
 Nothing is written to the database directly. Every other record is created through the public
 APIs by the person or machine that would create it.
