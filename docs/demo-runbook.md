@@ -12,7 +12,7 @@ the first run downloads packages and builds the console.
 ## 1. Images: published by Depot CI to ECR Public
 
 The `images` job in `.depot/workflows/ci.yaml` builds `control-plane`, `agent`,
-`data-plane`, `console` and `sandbox` and pushes them to
+`data-plane`, `console`, `sandbox` and `model-host` and pushes them to
 `public.ecr.aws/hexelstudio/fabric/<component>:git-<full commit sha>`. It runs only for a
 push to `main`, and only after every CI job passes (python, control-plane-postgres,
 runtime, e2e, agent, console, packaging).
@@ -23,8 +23,12 @@ Before the first publish of this branch's work:
   new to the matrix. Without it that one push fails (the others still publish, the matrix
   doesn't fail fast). The `ecr-github-cicd` role must be allowed to push to it.
 - The edge gateway uses the `data-plane` image; there is no separate edge image.
-- The model host is not built by CI; keep your existing vLLM image. The RTX PRO 6000
-  (Blackwell) needs one built for CUDA 12.8 or newer.
+- **Create the ECR Public repository `fabric/model-host`** too. It is the vLLM image with
+  the Fabric kernel (`deploy/images/model-host.Dockerfile`, based on
+  `vllm/vllm-openai:v0.26.0`); set `operator.managedModelHost.image` to
+  `$REGISTRY/model-host:$TAG`. Its first push uploads the multi-gigabyte vLLM base layers.
+  The RTX PRO 6000 (Blackwell) needs a vLLM build for CUDA 12.8 or newer; check the base
+  image before relying on that stamp.
 - Images are built on Depot's default x86_64 runners, so nodes must be amd64.
 - ECR Public images are pullable by anyone; nothing secret is baked in (keys come from
   Kubernetes Secrets at runtime), and no `imagePullSecrets` are needed.

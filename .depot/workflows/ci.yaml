@@ -247,19 +247,21 @@ jobs:
   # once every check above has passed. Pushes to main only, never pull requests.
   # Authenticates with Depot CI's OIDC token: the role's trust policy must allow
   # identity.depot.dev, and the role must be allowed to push to the fabric/* repositories.
-  # Tags are `git-<commit sha>`, matching the Azure release workflow.
+  # Tags are `git-<commit sha>`, matching the Azure release workflow. `model-host` is the vLLM
+  # image with the Fabric kernel (deploy/images/model-host.Dockerfile); the job allows 60
+  # minutes because its first push uploads the vLLM base layers.
   images:
     needs: [python, control-plane-postgres, runtime, e2e, agent, console, packaging]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: depot-ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
     strategy:
       fail-fast: false
       matrix:
-        component: [control-plane, agent, data-plane, console, sandbox]
+        component: [control-plane, agent, data-plane, console, sandbox, model-host]
     steps:
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v4
@@ -269,6 +271,11 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
+      # model-host builds on the multi-gigabyte vLLM base image; log free space so a
+      # runner that runs short is visible in the job output.
+      - name: Disk space
+        if: matrix.component == 'model-host'
+        run: df -h / /var/lib/docker 2>/dev/null || df -h /
       - name: Build and push ${{ matrix.component }}
         env:
           IMAGE: public.ecr.aws/hexelstudio/fabric/${{ matrix.component }}:git-${{ github.sha }}
