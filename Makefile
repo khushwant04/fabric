@@ -8,6 +8,8 @@
 #                   FABRIC_E2E_UPSTREAM points at a real one
 #   make demo-agent-loop  one request runs a whole agent on the gateway (POST /v1/agent/runs)
 #   make demo-cascade     model "cascade": small tier first, escalate on cheap checks
+#   make demo-hosted-tools  hosted tools on the gateway: web_search, web_fetch and a
+#                   sandboxed code_interpreter (local sandbox process), no GPU needed
 #   make demo-edge  the edge gateway (ADR 0021) in front of two local stamps: routing by
 #                   model, failover, and serving through a control-plane outage
 #   make check      every test and lint suite CI runs (except PostgreSQL)
@@ -22,6 +24,9 @@ PYTHON_VERSION ?= 3.12
 RUFF := uv run --no-project --with ruff==0.8.4 ruff
 DATA_PLANE_TEST := uv run --python $(PYTHON_VERSION) --with-editable . \
 	--with pytest==8.3.4 --with pytest-asyncio==0.24.0 pytest -q
+# The sandbox suite includes the pinned scientific stack so the plotting path is tested.
+SANDBOX_TEST := uv run --python $(PYTHON_VERSION) --no-project --with-editable '.[science,dev]' \
+	pytest -q
 TORCH_CPU := UV_INDEX=https://download.pytorch.org/whl/cpu UV_INDEX_STRATEGY=unsafe-best-match
 
 # The settings the control plane needs to import, matching its test configuration.
@@ -31,7 +36,8 @@ OPENAPI_ENV := FABRIC_APP_ENV=test FABRIC_DATABASE_URL=sqlite+aiosqlite:///:memo
 	FABRIC_JWT_ISSUER=https://control.fabric.test \
 	FABRIC_CREDENTIAL_PEPPER=test-pepper-value FABRIC_SYSTEM_ACCOUNT_SLUG=fabric-system
 
-.PHONY: help setup setup-python demo demo-agent demo-agent-loop demo-cascade demo-edge check check-control-plane check-data-plane check-agent \
+.PHONY: help setup setup-python demo demo-agent demo-agent-loop demo-cascade demo-edge \
+	demo-hosted-tools check check-control-plane check-data-plane check-sandbox check-agent \
 	check-runtime check-console test-postgres openapi bench-routing
 
 help:
@@ -70,13 +76,23 @@ demo-cascade: setup-python
 	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
 	FABRIC_E2E_AGENT_DEMO=cascade PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
 
-check: check-control-plane check-data-plane check-agent check-runtime check-console
+# Hosted tools (docs/hosted-tools.md): the sandbox runs as a local process with the pinned
+# scientific stack. Set FABRIC_DP_E2B_API_KEY and/or FABRIC_DEMO_FIRECRAWL_URL to add the
+# optional connected-backend step.
+demo-hosted-tools: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=hosted PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+check: check-control-plane check-data-plane check-sandbox check-agent check-runtime check-console
 
 check-control-plane:
 	cd control-plane && uv run --python $(PYTHON_VERSION) --extra dev pytest -q && $(RUFF) check .
 
 check-data-plane:
 	cd data-plane && $(DATA_PLANE_TEST) && $(RUFF) check .
+
+check-sandbox:
+	cd sandbox && $(SANDBOX_TEST) && $(RUFF) check .
 
 check-agent:
 	cd agent && test -z "$$(gofmt -l .)" && go vet ./... && go test ./...

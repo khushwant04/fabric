@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fabric-sandbox"
+version = "0.1.0"
+description = "Fabric code-interpreter sandbox: runs model-written Python in isolated subprocesses."
+requires-python = ">=3.12"
+
+# The service itself. The scientific stack the *executed* code may import is a separate
+# extra so the image can install it into its own interpreter environment (see
+# deploy/images/sandbox.Dockerfile) and the service's packages stay out of reach of
+# user code where possible.
+dependencies = [
+  "fastapi==0.162.0",
+  "uvicorn==0.54.0",
+  "pydantic==2.14.2",
+  "pydantic-settings==2.16.2",
+]
+
+[project.optional-dependencies]
+science = [
+  "numpy==2.1.3",
+  "pandas==2.2.3",
+  "matplotlib==3.9.2",
+]
+dev = [
+  "pytest==8.3.4",
+  "pytest-asyncio==0.24.0",
+  "httpx==0.28.1",
+  "ruff==0.8.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["fabric_sandbox"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

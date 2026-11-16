@@ -37,6 +37,7 @@ from fabric_data_plane import cascade
 from fabric_data_plane.agent_runs import RUN_ID_HEADER
 from fabric_data_plane.agent_tools import ToolRunner, ToolSpec, parse_tools
 from fabric_data_plane.errors import ApiError, BadRequest
+from fabric_data_plane.hosted_tools import ToolContext, enabled_tools
 
 AGENT_RUNS_PATH = "/v1/agent/runs"
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
@@ -81,6 +82,9 @@ class RunState:
     #: A gateway refusal (limits, ownership) behind ``failed``, re-raised as an HTTP error
     #: when it happened before any step completed.
     refusal: ApiError | None = None
+    #: Files produced by hosted tools (code_interpreter images), for the run response.
+    files: list[dict[str, Any]] = field(default_factory=list)
+    include_files: bool = True
 
     def result(self, *, return_messages: bool) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -100,6 +104,12 @@ class RunState:
             body["error"] = self.error
         if return_messages or self.status == "requires_action":
             body["messages"] = self.messages
+        if self.files:
+            body["files"] = (
+                self.files
+                if self.include_files
+                else [{k: v for k, v in f.items() if k != "content_base64"} for f in self.files]
+            )
         return body
 
 
@@ -114,6 +124,7 @@ class RunRequest:
     stream: bool
     return_messages: bool
     options: dict[str, Any]
+    include_files: bool = True
 
 
 def _positive_int(payload: dict[str, Any], name: str, default: int, ceiling: int) -> int:
@@ -134,7 +145,7 @@ def parse_run_request(
         raise BadRequest("invalid_request", "messages must be a non-empty list")
     if not all(isinstance(m, dict) and isinstance(m.get("role"), str) for m in messages):
         raise BadRequest("invalid_request", "each message needs a role")
-    model_tools, specs = parse_tools(payload.get("tools"), allowlist)
+    model_tools, specs = parse_tools(payload.get("tools"), allowlist, enabled_tools(settings))
     return RunRequest(
         model=model.strip(),
         messages=[dict(m) for m in messages],
@@ -150,6 +161,7 @@ def parse_run_request(
         stream=bool(payload.get("stream")),
         return_messages=bool(payload.get("return_messages")),
         options={k: payload[k] for k in _MODEL_OPTIONS if k in payload},
+        include_files=payload.get("include_files", True) is not False,
     )
 
 
@@ -201,7 +213,10 @@ class AgentLoop:
             ]
             headers.append((RUN_ID_HEADER.encode(), run_id.encode()))
             self.request = Request({**request.scope, "headers": headers}, request.receive)
-        self.state = RunState(run_id=run_id, model=run.model, messages=run.messages)
+        self.state = RunState(
+            run_id=run_id, model=run.model, messages=run.messages, include_files=run.include_files
+        )
+        self.context = ToolContext(account_id=str(principal.account_id), run_id=run_id)
 
     async def _call_model(self) -> tuple[dict[str, Any], dict[str, Any]]:
         """One model call; returns (response body, step info). Raises ApiError on refusal."""
@@ -249,6 +264,23 @@ class AgentLoop:
         return body, info
 
     async def run_loop(self, emit: Emit) -> RunState:
+        try:
+            return await self._loop(emit)
+        finally:
+            # Hosted tools keep per-run state (sandbox files, an E2B sandbox). It survives a
+            # requires_action pause, which is resumed under the same run id, and is dropped
+            # on every other ending, including cancellation.
+            if self.state.status != "requires_action" and self._uses_hosted_state():
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(self.tools.release(self.context))
+
+    def _uses_hosted_state(self) -> bool:
+        return any(
+            spec.kind == "hosted" and spec.builtin == "code_interpreter"
+            for spec in self.run.specs.values()
+        )
+
+    async def _loop(self, emit: Emit) -> RunState:
         state = self.state
         try:
             for index in range(self.run.max_steps):
@@ -325,7 +357,9 @@ class AgentLoop:
                 await emit("tool.started", {"tool_call_id": call.get("id"), "name": name})
                 if spec is None:
                     spec = ToolSpec(name=name, kind="unknown")
-                outcome = await self.tools.execute(spec, function.get("arguments"))
+                outcome = await self.tools.execute(
+                    spec, function.get("arguments"), self.context
+                )
             step = {
                 "type": "tool",
                 "name": name,
@@ -337,6 +371,19 @@ class AgentLoop:
                 "result_bytes": outcome.result_bytes,
                 "truncated": outcome.truncated,
             }
+            if spec.kind == "hosted":
+                # Sizes and codes only: never code, page text or results.
+                step["hosted_tool"] = spec.builtin
+                step.update({k: v for k, v in outcome.details.items() if k not in step})
+                self.plane.metrics.hosted_tools.record(
+                    tool=spec.builtin or name,
+                    ok=outcome.ok,
+                    error=outcome.error,
+                    duration_ms=outcome.duration_ms,
+                    result_bytes=outcome.result_bytes,
+                    details=outcome.details,
+                )
+                self._collect_files(call.get("id"), outcome.files)
             await emit("tool.completed", step)
             return {"step": step, "content": outcome.content}
 
@@ -353,6 +400,30 @@ class AgentLoop:
             state.pending = client
             return False
         return True
+
+
+    def _collect_files(self, tool_call_id: Any, files: list[dict[str, Any]]) -> None:
+        settings = self.plane.settings
+        budget = settings.code_interpreter_max_run_file_bytes - sum(
+            int(f.get("bytes") or 0) for f in self.state.files if "content_base64" in f
+        )
+        for item in files:
+            entry = {
+                "tool_call_id": tool_call_id,
+                "name": str(item.get("name")),
+                "mime_type": item.get("mime_type"),
+                "bytes": int(item.get("bytes") or 0),
+            }
+            content = item.get("content_base64")
+            if isinstance(content, str):
+                if entry["bytes"] <= min(budget, settings.code_interpreter_max_file_bytes):
+                    entry["content_base64"] = content
+                    budget -= entry["bytes"]
+                else:
+                    entry["omitted"] = "size_cap"
+            elif item.get("omitted"):
+                entry["omitted"] = item["omitted"]
+            self.state.files.append(entry)
 
 
 class _UpstreamRejected(Exception):

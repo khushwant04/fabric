@@ -24,6 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# code_interpreter's e2b backend (docs/hosted-tools.md). Imported lazily, only when
+# FABRIC_DP_CODE_INTERPRETER_BACKEND=e2b; the default image installs it.
+e2b = ["e2b-code-interpreter==2.11.10"]
 dev = [
   "pytest==9.2.0",
   "pytest-asyncio==1.4.1.post1",

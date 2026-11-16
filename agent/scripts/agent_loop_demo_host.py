@@ -1,11 +1,15 @@
 """A deterministic model host for `make demo-agent-loop` and `make demo-cascade` (no GPU).
 
-Two behaviours, chosen from the request:
+Three behaviours, chosen from the request:
 
 * Tool loop (the request declares a ``calculator`` tool): split a restaurant bill. Turn one
   calls ``calculator`` and ``current_time`` in parallel, turn two calls the client tool
   ``get_loyalty_discount``, turn three applies the discount with ``calculator``, then answers
   using the tool results.
+* Hosted tools (the request declares ``code_interpreter``, `make demo-hosted-tools`): search
+  the web, fetch the report URL named in the task (and, like a prompt-injected model would,
+  try the cloud metadata endpoint, which the gateway refuses), load the table into pandas in
+  the sandbox, then plot it in a second sandbox call that reads the CSV the first one wrote.
 * Cascade (anything else): the small tier answers easy questions well, but truncates a long
   "step by step" answer (``finish_reason: length``) and returns structured output missing a
   required field. The large tier (release name ending ``-large``) answers everything.
@@ -16,6 +20,7 @@ Loaded by agent/scripts/e2e.sh as an httpx.MockTransport handler; never used in 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -76,6 +81,79 @@ def _tool_loop(body: dict[str, Any]) -> httpx.Response:
     return _reply(body, {"content": None, "tool_calls": calls}, "tool_calls", 20)
 
 
+_ROW = re.compile(r"\|\s*([A-Za-z][A-Za-z .-]*?)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*(\d+)")
+_URL = re.compile(r"https?://[^\s'\")]+")
+_FALLBACK = [("Region A", 120, 300, 500), ("Region B", 140, 360, 400), ("Region C", 95, 240, 900)]
+
+
+def _hosted(body: dict[str, Any]) -> httpx.Response:
+    messages = body.get("messages") or []
+    results = {m.get("tool_call_id"): m.get("content") for m in messages if m.get("role") == "tool"}
+
+    def result(call_id: str) -> dict[str, Any]:
+        try:
+            return json.loads(results.get(call_id) or "{}")
+        except ValueError:
+            return {}
+
+    task = next((str(m.get("content")) for m in messages if m.get("role") == "user"), "")
+    url = (_URL.findall(task) or ["http://fabric-demo.test/reports/latest"])[0].rstrip(".")
+    if "call_search" not in results:
+        calls = [_call("call_search", "web_search",
+                       {"query": "Fabric Q3 inference latency report", "count": 3})]
+    elif "call_fetch" not in results:
+        calls = [
+            _call("call_fetch", "web_fetch", {"url": url}),
+            # What a prompt-injected model might try. The gateway must refuse it.
+            _call("call_metadata", "web_fetch",
+                  {"url": "http://169.254.169.254/latest/meta-data/iam/security-credentials/"}),
+        ]
+    elif "call_stats" not in results:
+        rows = [(r, int(a), int(b), int(c)) for r, a, b, c in
+                _ROW.findall(str(result("call_fetch").get("text") or ""))] or _FALLBACK
+        code = (
+            "import pandas as pd\n"
+            f"rows = {rows!r}\n"
+            "df = pd.DataFrame(rows, columns=['region', 'p50_ms', 'p95_ms', 'requests_k'])\n"
+            "df.to_csv('latency.csv', index=False)\n"
+            "weighted = (df.p95_ms * df.requests_k).sum() / df.requests_k.sum()\n"
+            "print(df.describe().loc[['mean', 'min', 'max'], ['p50_ms', 'p95_ms']].round(1))\n"
+            "print(f'traffic-weighted p95: {weighted:.1f} ms')\n"
+        )
+        calls = [_call("call_stats", "code_interpreter", {"code": code})]
+    elif "call_plot" not in results:
+        code = (
+            "import pandas as pd\n"
+            "import matplotlib.pyplot as plt\n"
+            "df = pd.read_csv('latency.csv')  # written by the previous call in this run\n"
+            "ax = df.plot.bar(x='region', y=['p50_ms', 'p95_ms'], figsize=(7, 4),\n"
+            "                 title='Q3 latency by region (ms)', rot=0)\n"
+            "ax.axhline(400, color='red', linestyle='--', linewidth=1, label='p95 SLO')\n"
+            "ax.legend()\n"
+            "plt.tight_layout()\n"
+            "plt.savefig('latency.png', dpi=110)\n"
+            "worst = df.loc[df.p95_ms.idxmax()]\n"
+            "print(f'worst p95: {worst.region} at {worst.p95_ms} ms')\n"
+        )
+        calls = [_call("call_plot", "code_interpreter", {"code": code})]
+    else:
+        stats = result("call_stats")
+        plot = result("call_plot")
+        weighted = next((line for line in str(stats.get("stdout", "")).splitlines()
+                         if "weighted" in line), "no weighted p95")
+        worst = str(plot.get("stdout", "")).strip() or "no plot output"
+        worst = worst[:1].upper() + worst[1:]
+        blocked = result("call_metadata").get("error")
+        content = (
+            f"I found the Q3 report, loaded its table into pandas and plotted it "
+            f"({', '.join(plot.get('files') or []) or 'no chart'}). {worst}, above "
+            f"the 400 ms SLO; {weighted}. The metadata endpoint request was refused by the "
+            f"gateway ({blocked})."
+        )
+        return _reply(body, {"content": content}, "stop", 64)
+    return _reply(body, {"content": None, "tool_calls": calls}, "tool_calls", 30)
+
+
 def _cascade(body: dict[str, Any]) -> httpx.Response:
     large = str(body.get("model") or "").endswith("-large")
     messages = body.get("messages") or []
@@ -103,6 +181,8 @@ def handler(request: httpx.Request) -> httpx.Response:
         (t.get("function") or {}).get("name") for t in body.get("tools") or []
         if isinstance(t, dict)
     }
+    if "code_interpreter" in tools:
+        return _hosted(body)
     if "calculator" in tools:
         return _tool_loop(body)
     if not body.get("messages"):

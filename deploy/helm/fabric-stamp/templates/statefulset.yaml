@@ -199,6 +199,80 @@ spec:
             - name: FABRIC_DP_UPSTREAM_CA_BUNDLE
               value: /etc/fabric/upstream-ca/ca.crt
             {{- end }}
+            {{- with .Values.hostedTools }}
+            # Hosted tools (docs/hosted-tools.md). Secrets come from Secrets, never values.
+            {{- if .codeInterpreter.enabled }}
+            - name: FABRIC_DP_CODE_INTERPRETER_ENABLED
+              value: "true"
+            - name: FABRIC_DP_CODE_INTERPRETER_BACKEND
+              value: {{ .codeInterpreter.backend | quote }}
+            - name: FABRIC_DP_CODE_INTERPRETER_TIMEOUT_SECONDS
+              value: {{ .codeInterpreter.timeoutSeconds | quote }}
+            {{- if eq .codeInterpreter.backend "sandbox" }}
+            - name: FABRIC_DP_CODE_INTERPRETER_URL
+              value: http://{{ include "fabric-stamp.sandboxName" $ }}:8090
+            - name: FABRIC_DP_CODE_INTERPRETER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fabric-stamp.sandboxSecretName" $ }}
+                  key: {{ $.Values.sandbox.token.existingSecretKey }}
+            {{- else }}
+            - name: FABRIC_DP_E2B_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .codeInterpreter.e2b.existingSecret }}
+                  key: {{ .codeInterpreter.e2b.existingSecretKey }}
+            {{- with .codeInterpreter.e2b.template }}
+            - name: FABRIC_DP_E2B_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .codeInterpreter.e2b.domain }}
+            - name: FABRIC_DP_E2B_DOMAIN
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FABRIC_DP_E2B_ALLOW_INTERNET
+              value: {{ .codeInterpreter.e2b.allowInternet | quote }}
+            - name: FABRIC_DP_E2B_MAX_SANDBOXES
+              value: {{ .codeInterpreter.e2b.maxSandboxes | int64 | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if or .webFetch.enabled .webSearch.enabled }}
+            - name: FABRIC_DP_WEB_BACKEND
+              value: {{ .web.backend | quote }}
+            {{- end }}
+            {{- if .webFetch.enabled }}
+            - name: FABRIC_DP_WEB_FETCH_ENABLED
+              value: "true"
+            - name: FABRIC_DP_WEB_FETCH_ALLOWED_HOSTS
+              value: {{ .webFetch.allowedHosts | quote }}
+            {{- end }}
+            {{- if .webSearch.enabled }}
+            - name: FABRIC_DP_WEB_SEARCH_ENABLED
+              value: "true"
+            - name: FABRIC_DP_WEB_SEARCH_URL
+              value: {{ .web.searchUrl | quote }}
+            {{- if .web.searchApiKey.existingSecret }}
+            - name: FABRIC_DP_WEB_SEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .web.searchApiKey.existingSecret }}
+                  key: {{ .web.searchApiKey.existingSecretKey }}
+            - name: FABRIC_DP_WEB_SEARCH_API_KEY_HEADER
+              value: {{ .web.searchApiKey.header | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if and (or .webFetch.enabled .webSearch.enabled) (eq .web.backend "firecrawl") }}
+            - name: FABRIC_DP_FIRECRAWL_URL
+              value: {{ .web.firecrawl.url | quote }}
+            {{- if .web.firecrawl.existingSecret }}
+            - name: FABRIC_DP_FIRECRAWL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .web.firecrawl.existingSecret }}
+                  key: {{ .web.firecrawl.existingSecretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: inference
               containerPort: 8080

@@ -14,9 +14,13 @@ COPY data-plane/fabric_data_plane ./fabric_data_plane
 # Installed with pip rather than uv so the build needs only the Python base image.
 # Versions are pinned in pyproject.toml, so the resolver choice does not change what
 # lands in the image.
+# EXTRAS=e2b (the default) adds the SDK for code_interpreter's e2b backend; it is inert
+# unless FABRIC_DP_CODE_INTERPRETER_BACKEND=e2b. Build with --build-arg EXTRAS= for a
+# minimal air-gapped image.
+ARG EXTRAS=e2b
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip==24.3.1 && \
-    /opt/venv/bin/pip install --no-cache-dir .
+    /opt/venv/bin/pip install --no-cache-dir ".${EXTRAS:+[$EXTRAS]}"
 
 FROM python:3.12-slim-bookworm
 

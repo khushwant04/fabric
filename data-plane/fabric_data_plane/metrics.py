@@ -17,6 +17,7 @@ import threading
 import time
 from collections import defaultdict
 
+from fabric_data_plane.hosted_tools.metrics import HostedToolMetrics
 from fabric_data_plane.streaming import UNMETERED_REASONS
 
 #: Upper bounds in seconds. Chosen for a language model rather than a web service: the
@@ -69,6 +70,8 @@ class Metrics:
         self._agent_budget_refusals: dict[tuple[str, str], int] = defaultdict(int)
         self._tool_guard: dict[tuple[str, str], int] = defaultdict(int)
         self._tool_guard_retries: dict[str, int] = defaultdict(int)
+        # Hosted tools (hosted_tools/): executions, outcomes, bytes.
+        self.hosted_tools = HostedToolMetrics()
         self._started = time.time()
 
     def verification_state(
@@ -424,6 +427,8 @@ class Metrics:
             lines.append(
                 f'fabric_dp_tool_guard_retries_total{{deployment_id="{deployment}"}} {value}'
             )
+
+        lines.extend(self.hosted_tools.lines())
 
         lines.append("# HELP fabric_dp_uptime_seconds Seconds since this process started.")
         lines.append("# TYPE fabric_dp_uptime_seconds gauge")

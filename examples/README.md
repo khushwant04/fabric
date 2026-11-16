@@ -38,6 +38,7 @@ uv run --project examples/python python examples/python/scripts/<name>.py --help
 | `tool_calling.py [city]` | Manual local function/tool call loop. |
 | `agent_demo.py` | Multi-step agent under a Fabric agent-run budget: run headers, the `GET /v1/runs/{id}` trace, tool-call guard repairs, and a budget refusal. See [docs/agent-runs.md](../docs/agent-runs.md). |
 | `agent_loop_demo.py` | One `POST /v1/agent/runs` request runs a whole agent: built-in `calculator`/`current_time` executed by the gateway, a client tool answered locally after `requires_action`, streamed step events, then the run trace. See [docs/agent-tool-loop.md](../docs/agent-tool-loop.md). |
+| `hosted_tools_demo.py` | Hosted tools in one agent run: `web_search`, `web_fetch` (a metadata-endpoint attempt refused by the SSRF guard) and two `code_interpreter` calls sharing a session (pandas, then a matplotlib chart saved from the run's `files`). See [docs/hosted-tools.md](../docs/hosted-tools.md). |
 | `cascade_demo.py` | `model: "cascade"`: an easy prompt stays on the small deployment, a truncated and a schema-failing one escalate; prints the `X-Fabric-Cascade-*` headers. See [docs/model-cascade.md](../docs/model-cascade.md). |
 | `control_inspect.py [--deployment ID]` | Read self, account, deployments, per-stamp status, and aggregate usage. |
 | `raw_http_chat.py [prompt]` | Chat through raw `httpx`, without the OpenAI SDK. |

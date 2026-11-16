@@ -8,6 +8,27 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Hosted agent tools (`docs/hosted-tools.md`) for `POST /v1/agent/runs`, each off by
+  default and refused with `400 hosted_tool_disabled` unless enabled per stamp:
+  `code_interpreter` (backends: the new self-hosted sandbox service `sandbox/` with
+  per-execution subprocesses, rlimits, process-group kill, scrubbed environment,
+  non-dumpable processes, per-run sessions with TTL and size cap, and a shared secret; or
+  E2B microVMs through the pinned async SDK, one sandbox per run), `web_fetch` (allowlist
+  with `*` for public hosts, private/loopback/link-local/metadata refusal, DNS pinning,
+  re-checked redirects, no cookies, stdlib HTML-to-text; or Firecrawl scrape) and
+  `web_search` (SearXNG, a generic HTTP API template, or Firecrawl). Run responses gain
+  `files` (produced images, base64, size-capped); tool steps gain size/outcome fields and
+  never content. Metrics `fabric_dp_hosted_tool_*`. Settings `FABRIC_DP_CODE_INTERPRETER_*`,
+  `FABRIC_DP_E2B_*`, `FABRIC_DP_WEB_*`, `FABRIC_DP_FIRECRAWL_*`.
+- Helm: `hostedTools.*` and `sandbox.*` in the stamp chart (sandbox Deployment, Service,
+  generated shared secret, NetworkPolicy denying all egress and admitting only the
+  gateway, read-only root filesystem, dropped capabilities, seccomp, optional
+  `runtimeClassName`); E2B and Firecrawl keys from existing Secrets.
+  `deploy/images/sandbox.Dockerfile`; the data-plane image installs the `e2b` extra unless
+  built with `--build-arg EXTRAS=`.
+- `make demo-hosted-tools` (no GPU: local sandbox process and SearXNG stub, optional
+  E2B/Firecrawl pass) and `make check-sandbox` (part of `make check` and CI).
+
 - Edge gateway (ADR 0021, `docs/edge-gateway.md`): `python -m fabric_data_plane.edge`, one
   inference URL in front of every stamp. It verifies inference tokens locally with the
   stamp's own code; routes `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
