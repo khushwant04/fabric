@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/agent-fabric-banner.webp" alt="Agent Fabric — fluid inference infrastructure for AI agents" width="100%">
+</p>
+
 # Fabric
 
 **A managed inference platform for open models, built for agents.**
