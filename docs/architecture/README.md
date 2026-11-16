@@ -1,6 +1,8 @@
 # Fabric architecture
 
-Three views of the same architecture. The control plane and edge gateway run on Azure AKS;
+![Fabric architecture: request flow from clients through Cloudflare, the AKS ingress and the edge gateway to GPU stamps on AKS, Google Cloud and VMs](../assets/fabric-architecture.webp)
+
+The diagram above shows the deployed topology and request flow. Below are three more views of the same architecture. The control plane and edge gateway run on Azure AKS;
 GPU stamps run on AKS node pools, Google Cloud VMs and other VMs. Each stamp enrolls with
 the control plane over outbound connections only, and inference never passes through the
 control plane.

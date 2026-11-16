@@ -61,6 +61,13 @@ plane, so serving keeps working when the control plane does not.
 
 ## Architecture
 
+<p align="center">
+  <img src="docs/assets/fabric-architecture.webp" alt="Fabric architecture: clients reach one edge URL through Cloudflare and the AKS ingress; the edge gateway routes to GPU stamps on AKS, Google Cloud and VMs, whose agents connect outbound to the control plane" width="100%">
+</p>
+
+<details>
+<summary>Text version (Mermaid)</summary>
+
 ```mermaid
 flowchart LR
     clients["Apps & agents<br/><small>OpenAI · Anthropic SDKs</small>"]
@@ -79,6 +86,8 @@ flowchart LR
     edge -. routing table .-> cp
     agent -. outbound only .-> cp
 ```
+
+</details>
 
 The control plane owns accounts, credentials, deployments and placement. Each stamp runs an
 agent that pulls desired state outbound, an operator that runs the model hosts, and a gateway
