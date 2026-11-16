@@ -104,6 +104,15 @@ await visit("06b-deployment-detail-routing", `/deployments/${deploymentId}`, asy
   await current.getByText("Balancing strategy", { exact: true }).scrollIntoViewIfNeeded()
   await current.evaluate(() => document.querySelector(".fabric-page-content")?.scrollBy(0, 160))
 })
+// Hosts: a deployment still loading its weights, then one whose host is crash-looping.
+await visit("06c-deployment-detail-hosts", `/deployments/${state.deployment_ids["code-review-bot"]}`, async (current) => {
+  await current.getByRole("tab", { name: "Hosts" }).click()
+  await current.getByText("Loading weights", { exact: true }).first().waitFor()
+})
+await visit("07b-deployment-detail-host-crashloop", `/deployments/${state.deployment_ids["long-context-eval"]}`, async (current) => {
+  await current.getByRole("tab", { name: "Hosts" }).click()
+  await current.getByText("CrashLoopBackOff").first().waitFor()
+})
 await visit("07-deployment-detail-failed-status", `/deployments/${state.deployment_ids["long-context-eval"]}`, async (current) => {
   await current.getByRole("tab", { name: "Status" }).click()
 })

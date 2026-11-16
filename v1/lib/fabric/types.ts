@@ -203,3 +203,49 @@ export type ConsoleContext = {
   me: Me
   singleTenant?: boolean
 }
+
+// Model-host pod snapshots the stamp's agent pushes (docs/model-host-logs.md).
+export type HostEvent = {
+  type: string
+  reason: string
+  message: string
+  count: number
+  at: string
+}
+
+export type HostCondition = {
+  type: string
+  status: string
+  reason?: string | null
+  message?: string | null
+  last_transition_time?: string | null
+}
+
+export type HostSnapshot = {
+  stamp_id: string
+  pod_name: string
+  phase: string
+  ready: boolean
+  terminating: boolean
+  restart_count: number
+  container_state: string
+  container_reason: string | null
+  container_message: string | null
+  started_at: string | null
+  conditions: HostCondition[]
+  events: HostEvent[]
+  log_tail: string
+  log_truncated: boolean
+  log_previous: boolean
+  log_error: string | null
+  observed_at: string
+  reported_at: string
+  stale: boolean
+}
+
+export type DeploymentHosts = {
+  deployment_id: string
+  reported_at: string | null
+  stale_after_seconds: number
+  hosts: HostSnapshot[]
+}

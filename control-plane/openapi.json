@@ -406,6 +406,46 @@
         "title": "DeploymentCreateRequest",
         "type": "object"
       },
+      "DeploymentHostsResponse": {
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "hosts": {
+            "items": {
+              "$ref": "#/components/schemas/HostSnapshotResponse"
+            },
+            "title": "Hosts",
+            "type": "array"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "stale_after_seconds": {
+            "title": "Stale After Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "reported_at",
+          "stale_after_seconds",
+          "hosts"
+        ],
+        "title": "DeploymentHostsResponse",
+        "type": "object"
+      },
       "DeploymentResponse": {
         "properties": {
           "account_id": {
@@ -1214,6 +1254,463 @@
           "received_at"
         ],
         "title": "HeartbeatResponse",
+        "type": "object"
+      },
+      "HostConditionReport": {
+        "additionalProperties": false,
+        "properties": {
+          "last_transition_time": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Transition Time"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "True",
+              "False",
+              "Unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "status"
+        ],
+        "title": "HostConditionReport",
+        "type": "object"
+      },
+      "HostDeploymentReport": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "pods": {
+            "items": {
+              "$ref": "#/components/schemas/HostPodReport"
+            },
+            "maxItems": 64,
+            "title": "Pods",
+            "type": "array"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "pods"
+        ],
+        "title": "HostDeploymentReport",
+        "type": "object"
+      },
+      "HostEventReport": {
+        "additionalProperties": false,
+        "description": "One Kubernetes event about a model-host pod.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "count": {
+            "default": 1,
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "message": {
+            "maxLength": 1000,
+            "title": "Message",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 128,
+            "title": "Reason",
+            "type": "string"
+          },
+          "type": {
+            "maxLength": 32,
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "reason",
+          "message",
+          "at"
+        ],
+        "title": "HostEventReport",
+        "type": "object"
+      },
+      "HostPodReport": {
+        "additionalProperties": false,
+        "description": "A bounded snapshot of one model-host pod, as the stamp's agent read it.",
+        "properties": {
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/HostConditionReport"
+            },
+            "maxItems": 16,
+            "title": "Conditions",
+            "type": "array"
+          },
+          "container_message": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Message"
+          },
+          "container_reason": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Reason"
+          },
+          "container_state": {
+            "default": "unknown",
+            "enum": [
+              "waiting",
+              "running",
+              "terminated",
+              "unknown"
+            ],
+            "title": "Container State",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/HostEventReport"
+            },
+            "maxItems": 50,
+            "title": "Events",
+            "type": "array"
+          },
+          "log": {
+            "default": "",
+            "maxLength": 65536,
+            "title": "Log",
+            "type": "string"
+          },
+          "log_error": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Error"
+          },
+          "log_previous": {
+            "default": false,
+            "title": "Log Previous",
+            "type": "boolean"
+          },
+          "log_truncated": {
+            "default": false,
+            "title": "Log Truncated",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 253,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "phase": {
+            "maxLength": 32,
+            "title": "Phase",
+            "type": "string"
+          },
+          "ready": {
+            "default": false,
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "restart_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Restart Count",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "terminating": {
+            "default": false,
+            "title": "Terminating",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "phase"
+        ],
+        "title": "HostPodReport",
+        "type": "object"
+      },
+      "HostReportRequest": {
+        "additionalProperties": false,
+        "description": "Every model-host pod on the stamp, at one moment.\n\nA complete set rather than a delta: a pod the report does not name is gone, and its\nsnapshot is deleted. Ownership is never read from here; the placement decides it.",
+        "properties": {
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/HostDeploymentReport"
+            },
+            "maxItems": 64,
+            "title": "Deployments",
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "observed_at"
+        ],
+        "title": "HostReportRequest",
+        "type": "object"
+      },
+      "HostReportResponse": {
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "title": "Accepted At",
+            "type": "string"
+          },
+          "accepted_pods": {
+            "title": "Accepted Pods",
+            "type": "integer"
+          },
+          "ignored_deployments": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Ignored Deployments",
+            "type": "array"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "accepted_at",
+          "accepted_pods",
+          "ignored_deployments"
+        ],
+        "title": "HostReportResponse",
+        "type": "object"
+      },
+      "HostSnapshotResponse": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "container_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Message"
+          },
+          "container_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Reason"
+          },
+          "container_state": {
+            "title": "Container State",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "log_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Log Error"
+          },
+          "log_previous": {
+            "title": "Log Previous",
+            "type": "boolean"
+          },
+          "log_tail": {
+            "title": "Log Tail",
+            "type": "string"
+          },
+          "log_truncated": {
+            "title": "Log Truncated",
+            "type": "boolean"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "pod_name": {
+            "title": "Pod Name",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          },
+          "restart_count": {
+            "title": "Restart Count",
+            "type": "integer"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "terminating": {
+            "title": "Terminating",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "pod_name",
+          "phase",
+          "ready",
+          "terminating",
+          "restart_count",
+          "container_state",
+          "container_reason",
+          "container_message",
+          "started_at",
+          "conditions",
+          "events",
+          "log_tail",
+          "log_truncated",
+          "log_previous",
+          "log_error",
+          "observed_at",
+          "reported_at"
+        ],
+        "title": "HostSnapshotResponse",
         "type": "object"
       },
       "ManagedCapacityRequest": {
@@ -3977,6 +4474,62 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/deployments/{deployment_id}/hosts": {
+      "get": {
+        "description": "The latest snapshot of each host the deployment's stamps reported.\n\nNot cached: it changes every few seconds while a host starts, and a console polling it\nwants the newest log lines, not the ones from the last cache fill.",
+        "operationId": "read_hosts_v1_accounts__account_id__deployments__deployment_id__hosts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentHostsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read model-host pod status, events and log tails",
+        "tags": [
+          "deployments"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/deployments/{deployment_id}/placements": {
       "get": {
         "operationId": "read_placements_v1_accounts__account_id__deployments__deployment_id__placements_get",
@@ -5266,6 +5819,60 @@
           }
         },
         "summary": "Report liveness and bounded capabilities",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
+    "/v1/stamps/{stamp_id}/hosts": {
+      "post": {
+        "description": "Replace this stamp's model-host snapshots with a complete new set.\n\nAuthorized by the status-write scope every agent credential already holds: this is\nobserved state, like a status report, at a finer grain. Pods the report does not name\nare deleted, and deployments not placed on this stamp are ignored, never stored.",
+        "operationId": "report_hosts_v1_stamps__stamp_id__hosts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report model-host pod status, events and log tails",
         "tags": [
           "stamps"
         ]

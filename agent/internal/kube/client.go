@@ -194,6 +194,49 @@ func (c *Client) Get(ctx context.Context, path string, out any) error {
 	return c.do(ctx, http.MethodGet, path, nil, out, "")
 }
 
+// GetText reads a plain-text subresource such as a container log, returning at most
+// limit bytes. The JSON helpers above cannot carry it: the log endpoint answers
+// text/plain, and decoding it as JSON would fail on the first line.
+func (c *Client) GetText(ctx context.Context, path string, limit int64) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	request.Header.Set("Accept", "text/plain, */*")
+	if c.token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", path, err)
+	}
+	defer response.Body.Close()
+
+	if limit <= 0 {
+		limit = 1 << 20
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, limit))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if response.StatusCode >= 300 {
+		apiErr := &APIError{Status: response.StatusCode, Message: string(payload)}
+		var status struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(payload, &status) == nil && status.Reason != "" {
+			apiErr.Reason = status.Reason
+			apiErr.Message = status.Message
+		}
+		if response.StatusCode == http.StatusUnauthorized {
+			c.refreshToken()
+		}
+		return nil, apiErr
+	}
+	return payload, nil
+}
+
 // Create posts a new resource.
 func (c *Client) Create(ctx context.Context, path string, body any, out any) error {
 	return c.do(ctx, http.MethodPost, path, body, out, "")

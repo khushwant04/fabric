@@ -206,6 +206,7 @@ are in [Measured results](docs/measured-results.md); planned work is in the
 [Getting started](docs/getting-started.md) ·
 [Deployment record](docs/deployment.md) ·
 [Edge gateway](docs/edge-gateway.md) ·
+[Model-host status and logs](docs/model-host-logs.md) ·
 [Console](docs/console-agents.md) ·
 [Console demo](docs/console-demo.md) ·
 [Kernel tuning](docs/kernel-tuning-t4-a10.md) ·

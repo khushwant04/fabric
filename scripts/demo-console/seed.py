@@ -331,6 +331,7 @@ class Demo:
             self.deployments[name] = {
                 "id": created["id"], "alias": alias, "stamp": stamp, "outcome": outcome,
                 "gpus": gpus, "requests": requests, "replicas": spec["replicas"],
+                "release": release, "max_model_len": spec["runtime"].get("max_model_len"),
             }
             if stamp:
                 self.call("POST", self.acct(f"/deployments/{created['id']}/placements"),
@@ -341,6 +342,7 @@ class Demo:
             self.run_agent(stamp)  # pull desired state, write deployments.json, report
             self.heartbeat(stamp)
         self.report_observations()
+        self.report_hosts()
 
     def placement_generation(self, deployment: dict) -> int:
         placements = self.call("GET", self.acct(f"/deployments/{deployment['id']}/placements"))
@@ -398,6 +400,174 @@ class Demo:
                           "conditions": conditions,
                       })
         log("model-host observations reported for every placement")
+
+    def report_hosts(self) -> None:
+        """What the agent's host reporter would push: each pod's status, events, log tail.
+
+        One complete report per stamp, as the agent sends it (docs/model-host-logs.md). It is
+        re-sent from keepalive so the snapshots stay fresh instead of going stale.
+        """
+        now = time.time()
+
+        def at(seconds_ago: float) -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - seconds_ago))
+
+        def event(kind: str, reason: str, message: str, seconds_ago: float, count: int = 1):
+            return {"type": kind, "reason": reason, "message": message, "count": count,
+                    "at": at(seconds_ago)}
+
+        def stamp_line(seconds_ago: float, level: str, source: str, text: str) -> str:
+            clock = time.strftime("%m-%d %H:%M:%S", time.gmtime(now - seconds_ago))
+            return f"{level} {clock} [{source}] {text}"
+
+        image = "public.ecr.aws/hexelstudio/fabric/model-host:git-4f1c2a9"
+        by_stamp: dict[str, list[dict]] = {}
+        for name, deployment in self.deployments.items():
+            if not deployment["stamp"]:
+                continue
+            release = deployment["release"]
+            outcome = deployment["outcome"]
+            pods = []
+            for replica in range(deployment["replicas"]):
+                pod_name = f"fabric-host-{deployment['id']}-7c9d5f8b6-{'xk2pqr'[replica:]}{replica}"
+                scheduled = [
+                    event("Normal", "Scheduled",
+                          f"Successfully assigned {pod_name} to gpu-node-{replica}", 900),
+                    event("Normal", "Pulling", f'Pulling image "{image}"', 898),
+                    event("Normal", "Pulled",
+                          f'Successfully pulled image "{image}" in 1m42.3s (1m42.3s including '
+                          "waiting). Image size: 9876543210 bytes.", 796),
+                    event("Normal", "Created", "Created container model-host", 795),
+                    event("Normal", "Started", "Started container model-host", 795),
+                ]
+                startup = [
+                    stamp_line(794, "INFO", "api_server.py:1351", "vLLM API server version 0.11.0"),
+                    stamp_line(794, "INFO", "utils.py:253",
+                               f"non-default args: {{'model': '{release}', 'port': 8000}}"),
+                    stamp_line(780, "INFO", "model.py:657", "Resolved architecture from config"),
+                    stamp_line(770, "INFO", "gpu_model_runner.py:1958",
+                               f"Starting to load model {release}..."),
+                    stamp_line(768, "INFO", "cuda.py:328", "Using Flash Attention backend."),
+                ]
+                conditions_ready = [
+                    {"type": "PodScheduled", "status": "True", "last_transition_time": at(900)},
+                    {"type": "Initialized", "status": "True", "last_transition_time": at(899)},
+                ]
+                if outcome in ("ready", "updating"):
+                    log_lines = startup + [
+                        stamp_line(760, "INFO", "default_loader.py:262",
+                                   "Loading weights took 6.84 seconds"),
+                        stamp_line(758, "INFO", "gpu_model_runner.py:2007",
+                                   "Model loading took 4.21 GiB and 7.62 seconds"),
+                        stamp_line(740, "INFO", "gpu_worker.py:276",
+                                   "Available KV cache memory: 6.12 GiB"),
+                        stamp_line(738, "INFO", "kv_cache_utils.py:849",
+                                   "GPU KV cache size: 57,344 tokens"),
+                        stamp_line(722, "INFO", "core.py:210",
+                                   "init engine (profile, create kv cache, warmup model) took 18.4 s"),
+                        stamp_line(720, "INFO", "launcher.py:28", "Available routes are: /v1/models, "
+                                   "/v1/chat/completions, /v1/completions, /health, /metrics"),
+                        stamp_line(719, "INFO", "server.py:83", "Started server process [1]"),
+                        stamp_line(719, "INFO", "on.py:62", "Application startup complete."),
+                    ] + [
+                        stamp_line(600 - 30 * i, "INFO", "loggers.py:123",
+                                   f"Engine 000: Avg prompt throughput: {180 + 7 * i:.1f} tokens/s, "
+                                   f"Avg generation throughput: {42 + i:.1f} tokens/s, Running: "
+                                   f"{1 + i % 3} reqs, Waiting: 0 reqs, GPU KV cache usage: "
+                                   f"{2.1 + i * 0.4:.1f}%, Prefix cache hit rate: {38 + i}.0%")
+                        for i in range(12)
+                    ]
+                    pods.append({
+                        "name": pod_name, "phase": "Running", "ready": True,
+                        "restart_count": 0, "container_state": "running", "started_at": at(900),
+                        "conditions": conditions_ready + [
+                            {"type": "ContainersReady", "status": "True",
+                             "last_transition_time": at(718)},
+                            {"type": "Ready", "status": "True", "last_transition_time": at(718)},
+                        ],
+                        "events": scheduled,
+                        "log": "\n".join(log_lines),
+                    })
+                elif outcome == "deploying":
+                    log_lines = startup + [
+                        stamp_line(120, "INFO", "weight_utils.py:449",
+                                   "Using model weights format ['*.safetensors']"),
+                    ] + [
+                        stamp_line(100 - 12 * i, "INFO", "default_loader.py:268",
+                                   f"Loading safetensors checkpoint shards: {i + 1}/8 "
+                                   f"[{(i + 1) * 12.5:.0f}%]")
+                        for i in range(5)
+                    ]
+                    pods.append({
+                        "name": pod_name, "phase": "Running", "ready": False,
+                        "restart_count": 0, "container_state": "running", "started_at": at(900),
+                        "conditions": conditions_ready + [
+                            {"type": "ContainersReady", "status": "False",
+                             "reason": "ContainersNotReady",
+                             "message": "containers with unready status: [model-host]",
+                             "last_transition_time": at(795)},
+                            {"type": "Ready", "status": "False", "reason": "ContainersNotReady",
+                             "last_transition_time": at(795)},
+                        ],
+                        "events": scheduled + [
+                            event("Warning", "Unhealthy",
+                                  "Startup probe failed: Get \"http://10.42.1.17:8000/health\": "
+                                  "dial tcp 10.42.1.17:8000: connect: connection refused",
+                                  15, count=9),
+                        ],
+                        "log": "\n".join(log_lines),
+                    })
+                else:  # failed: the KV cache for the configured context does not fit
+                    length = deployment["max_model_len"] or 262144
+                    log_lines = startup + [
+                        stamp_line(330, "INFO", "default_loader.py:262",
+                                   "Loading weights took 7.02 seconds"),
+                        stamp_line(328, "INFO", "gpu_model_runner.py:2007",
+                                   "Model loading took 4.21 GiB and 7.80 seconds"),
+                        stamp_line(310, "INFO", "gpu_worker.py:276",
+                                   "Available KV cache memory: 10.10 GiB"),
+                        stamp_line(309, "ERROR", "core.py:708", "EngineCore failed to start."),
+                        "Traceback (most recent call last):",
+                        '  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py", '
+                        "line 699, in run_engine_core",
+                        "    engine_core = EngineCoreProc(*args, **kwargs)",
+                        '  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py", '
+                        "line 702, in check_enough_kv_cache_memory",
+                        "    raise ValueError(",
+                        f"ValueError: To serve at least one request with the models's max seq len "
+                        f"({length}), (21.40 GiB KV cache is needed, which is larger than the "
+                        "available KV cache memory (10.10 GiB). Based on the available memory, "
+                        "the estimated maximum model length is 123648. Try increasing "
+                        "`gpu_memory_utilization` or decreasing `max_model_len` when initializing "
+                        "the engine.",
+                    ]
+                    pods.append({
+                        "name": pod_name, "phase": "Running", "ready": False,
+                        "restart_count": 3, "container_state": "waiting",
+                        "container_reason": "CrashLoopBackOff",
+                        "container_message": "back-off 2m40s restarting failed container=model-host",
+                        "started_at": at(900),
+                        "conditions": conditions_ready + [
+                            {"type": "ContainersReady", "status": "False",
+                             "reason": "ContainersNotReady", "last_transition_time": at(300)},
+                            {"type": "Ready", "status": "False", "reason": "ContainersNotReady",
+                             "last_transition_time": at(300)},
+                        ],
+                        "events": scheduled + [
+                            event("Warning", "BackOff",
+                                  "Back-off restarting failed container model-host in pod "
+                                  f"{pod_name}", 40, count=6),
+                        ],
+                        "log": "\n".join(log_lines),
+                        "log_previous": True,
+                    })
+            by_stamp.setdefault(deployment["stamp"], []).append(
+                {"deployment_id": deployment["id"], "pods": pods})
+
+        for stamp_name, deployments in by_stamp.items():
+            stamp = self.stamps[stamp_name]
+            self.call("POST", f"/v1/stamps/{stamp['id']}/hosts", token=stamp["agent_credential"],
+                      body={"observed_at": at(0), "deployments": deployments})
 
     # --- data planes, traffic, usage -----------------------------------------------
 
@@ -585,6 +755,10 @@ class Demo:
                 self.collect(quiet=True)
             except Exception as exc:  # keep the demo up through a transient failure
                 log(f"collector pass failed: {exc}")
+            try:
+                self.report_hosts()
+            except SystemExit as exc:
+                log(f"host report failed: {exc}")
 
     def stop(self, *_args) -> None:
         for child in self.children:

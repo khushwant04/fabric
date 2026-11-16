@@ -28,6 +28,8 @@ from app.schemas import (
     EnrollmentTokenResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    HostReportRequest,
+    HostReportResponse,
     StampCredentialRotationResponse,
     StampEnrollRequest,
     StampEnrollResponse,
@@ -36,6 +38,7 @@ from app.schemas import (
     StatusReportResponse,
 )
 from app.services.accounts import get_account
+from app.services.host_reports import ingest_host_report
 from app.services.stamps import (
     build_desired_state,
     create_enrollment_token,
@@ -286,6 +289,37 @@ async def desired_state(
     )
     await session.commit()
     return response
+
+
+@router.post(
+    "/v1/stamps/{stamp_id}/hosts",
+    response_model=HostReportResponse,
+    summary="Report model-host pod status, events and log tails",
+)
+async def report_hosts(
+    payload: HostReportRequest,
+    stamp_id: uuid.UUID = Path(...),
+    context: StampContext = Depends(require_agent_credential),
+    session: AsyncSession = Depends(get_db_session),
+) -> HostReportResponse:
+    """Replace this stamp's model-host snapshots with a complete new set.
+
+    Authorized by the status-write scope every agent credential already holds: this is
+    observed state, like a status report, at a finer grain. Pods the report does not name
+    are deleted, and deployments not placed on this stamp are ignored, never stored.
+    """
+    require_stamp_match(context, stamp_id)
+    context.require_scopes(scope_defs.STAMP_STATUS_WRITE)
+    accepted_at, accepted, ignored = await ingest_host_report(
+        session, stamp_id=context.stamp_id, report=payload
+    )
+    await session.commit()
+    return HostReportResponse(
+        stamp_id=context.stamp_id,
+        accepted_at=accepted_at,
+        accepted_pods=accepted,
+        ignored_deployments=ignored,
+    )
 
 
 @router.post(

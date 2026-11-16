@@ -14,15 +14,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/khushwant04/fabric/agent/internal/agentcontract"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
 	"github.com/khushwant04/fabric/agent/internal/hardware"
+	"github.com/khushwant04/fabric/agent/internal/hostreport"
 	"github.com/khushwant04/fabric/agent/internal/state"
 )
 
@@ -66,6 +69,12 @@ func (f CapacityFunc) Measure(ctx context.Context) (hardware.Capacity, error) {
 	return f(ctx)
 }
 
+// HostReporter collects model-host pod status and logs and sends them through send until
+// the context ends. hostreport.Reporter implements it.
+type HostReporter interface {
+	Run(ctx context.Context, send hostreport.Sender)
+}
+
 type Config struct {
 	ControlPlaneURL string
 	EnrollmentToken string
@@ -105,6 +114,10 @@ type Config struct {
 	CredentialMaxAge time.Duration
 	// Now is the clock, replaceable in tests. Nil uses time.Now.
 	Now func() time.Time
+	// HostReporter, when set, pushes model-host pod status, events and log tails to the
+	// control plane beside the reconcile loop, so the console can show a deployment
+	// starting without anyone running kubectl. Nil sends none.
+	HostReporter HostReporter
 }
 
 // Agent holds one stamp's reconciliation state.
@@ -139,6 +152,11 @@ type Agent struct {
 	// stamp look unplaceable because one API call timed out.
 	measured   hardware.Capacity
 	measuredAt time.Time
+
+	// agentCredential mirrors client.Credential for goroutines other than the reconcile
+	// loop. Rotation replaces the credential on the loop; the host reporter reads it on its
+	// own schedule, so it reads this rather than the client's plain field.
+	agentCredential atomic.Value
 }
 
 // New builds an agent. It does not perform any network call.
@@ -186,7 +204,7 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		if existing.DeploymentGenerations == nil {
 			existing.DeploymentGenerations = map[string]int{}
 		}
-		a.client.Credential = existing.AgentCredential
+		a.setAgentCredential(existing.AgentCredential)
 		if existing.CredentialsIssuedAt == "" {
 			// Written before rotation existed. The true issue time is unknown, so age is
 			// measured from now: a credential is never rotated earlier than configured.
@@ -285,11 +303,42 @@ func (a *Agent) Ensure(ctx context.Context) error {
 	a.handOffTelemetryCredential()
 	a.buildSink()
 
-	a.client.Credential = enrolled.AgentCredential
+	a.setAgentCredential(enrolled.AgentCredential)
 	a.log.Info("enrolled",
 		"stamp_id", enrolled.Stamp.ID, "mode", enrolled.Stamp.Mode,
 		"stamp_account", enrolled.Stamp.AccountID)
 	return nil
+}
+
+// setAgentCredential installs the credential every control-plane call presents.
+func (a *Agent) setAgentCredential(credential string) {
+	a.client.Credential = credential
+	a.agentCredential.Store(credential)
+}
+
+func (a *Agent) currentAgentCredential() string {
+	credential, _ := a.agentCredential.Load().(string)
+	return credential
+}
+
+// startHostReporter runs the host reporter on its own client, so a slow log upload never
+// delays a reconcile pass and the two never share mutable client state.
+func (a *Agent) startHostReporter(ctx context.Context) {
+	if a.config.HostReporter == nil || a.credentials == nil {
+		return
+	}
+	stampID := a.credentials.StampID
+	client := controlplane.New(a.config.ControlPlaneURL, a.config.RequestTimeout)
+	client.CredentialSource = a.currentAgentCredential
+	go a.config.HostReporter.Run(ctx, func(ctx context.Context, report hostreport.Report) error {
+		err := client.ReportHosts(ctx, stampID, report)
+		var apiErr *controlplane.APIError
+		if errors.As(err, &apiErr) &&
+			(apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusMethodNotAllowed) {
+			return fmt.Errorf("%w: %v", hostreport.ErrNotAccepted, err)
+		}
+		return err
+	})
 }
 
 // refreshCapacity re-measures the cluster's GPUs when the last measurement is stale.
@@ -479,7 +528,7 @@ func (a *Agent) rotateCredentials(ctx context.Context, reason string) error {
 	a.credentials.AgentCredential = next.AgentCredential
 	a.credentials.TelemetryCredential = next.TelemetryCredential
 	a.credentials.CredentialsIssuedAt = next.CredentialsIssuedAt
-	a.client.Credential = next.AgentCredential
+	a.setAgentCredential(next.AgentCredential)
 	a.handOffTelemetryCredential()
 	a.log.Info("rotated machine credentials",
 		"reason", reason,
@@ -1149,6 +1198,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.Ensure(ctx); err != nil {
 		return err
 	}
+
+	a.startHostReporter(ctx)
 
 	ticker := time.NewTicker(a.config.PollInterval)
 	defer ticker.Stop()

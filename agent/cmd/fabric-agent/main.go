@@ -23,6 +23,7 @@ import (
 	"github.com/khushwant04/fabric/agent/internal/agent"
 	"github.com/khushwant04/fabric/agent/internal/controlplane"
 	"github.com/khushwant04/fabric/agent/internal/hardware"
+	"github.com/khushwant04/fabric/agent/internal/hostreport"
 	"github.com/khushwant04/fabric/agent/internal/kube"
 	"github.com/khushwant04/fabric/agent/internal/operator"
 )
@@ -79,6 +80,13 @@ func main() {
 	capacityInterval := flag.Duration("capacity-interval", time.Minute,
 		"how often to re-measure the cluster's GPUs")
 	poll := flag.Duration("poll", 15*time.Second, "desired-state poll interval")
+	reportHosts := flag.Bool("report-hosts", os.Getenv("FABRIC_AGENT_REPORT_HOSTS") == "true",
+		"push model-host pod status, events and log tails from this namespace to the "+
+			"control plane for the console; needs pods, pods/log and events read access")
+	hostReportInterval := flag.Duration("host-report-interval", hostreport.DefaultActiveInterval,
+		"how often hosts are reported while any model host is not ready")
+	hostReportSteadyInterval := flag.Duration("host-report-steady-interval",
+		hostreport.DefaultSteadyInterval, "how often hosts are reported once all are ready")
 	credentialMaxAge := flag.Duration("credential-max-age",
 		envDuration("FABRIC_AGENT_CREDENTIAL_MAX_AGE", 30*24*time.Hour),
 		"rotate the machine credentials once they are this old; 0 rotates only on request")
@@ -157,7 +165,7 @@ func main() {
 	// Kubernetes permissions at all; measuring capacity needs only read access, and
 	// degrades to the configured --gpus when it is absent.
 	var client *kube.Client
-	if *publish == "kubernetes" || *measureCapacity {
+	if *publish == "kubernetes" || *measureCapacity || *reportHosts {
 		client, err = kube.InCluster()
 		if err != nil {
 			if *publish == "kubernetes" {
@@ -166,7 +174,7 @@ func main() {
 			}
 			// Not fatal: a stamp running outside Kubernetes, or with no service-account
 			// token mounted, reports the capacity it was configured with.
-			log.Info("not measuring capacity: no in-cluster credentials",
+			log.Info("not measuring capacity or reporting hosts: no in-cluster credentials",
 				"error", err, "reporting_allocatable_gpus", *gpus)
 			client = nil
 		}
@@ -186,6 +194,18 @@ func main() {
 				return hardware.Measure(ctx, client, nodeSelector)
 			},
 		)
+	}
+
+	if *reportHosts && client != nil {
+		// Namespaced on purpose: model hosts run in the stamp's own namespace, and the
+		// chart grants pods, pods/log and events read there and nowhere else.
+		config.HostReporter = &hostreport.Reporter{
+			Kube:           client,
+			Namespace:      client.Namespace,
+			Log:            log,
+			ActiveInterval: *hostReportInterval,
+			SteadyInterval: *hostReportSteadyInterval,
+		}
 	}
 
 	instance := agent.New(config, log)

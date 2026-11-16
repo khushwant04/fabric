@@ -101,6 +101,11 @@ spec:
             {{- if .Values.collector.enabled }}
             - --telemetry-credential-file=/etc/fabric/collector/telemetry-credential
             {{- end }}
+            {{- if include "fabric-stamp.reportsHosts" . }}
+            # Model-host status, events and log tails for the console, pushed outbound like
+            # everything else the agent sends (docs/model-host-logs.md).
+            - --report-hosts
+            {{- end }}
           env:
             # Read from the environment rather than a flag so the token never
             # appears in a process listing.

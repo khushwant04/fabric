@@ -10,6 +10,7 @@ import type {
   ApiKey,
   AuditEventPage,
   Deployment,
+  DeploymentHosts,
   DeploymentStatus,
   DeploymentUsage,
   Member,
@@ -61,6 +62,13 @@ export async function getDeploymentStatuses(deploymentId: string) {
   const context = await getConsoleContext()
   return accountRequest<DeploymentStatus[]>(
     `/v1/accounts/${context.account.id}/deployments/${deploymentId}/status`
+  )
+}
+
+export async function getDeploymentHosts(deploymentId: string) {
+  const context = await getConsoleContext()
+  return accountRequest<DeploymentHosts>(
+    `/v1/accounts/${context.account.id}/deployments/${deploymentId}/hosts`
   )
 }
 

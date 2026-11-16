@@ -78,6 +78,11 @@ agent:
   # ones keep working for the control plane's overlap window, so rotation needs no
   # downtime and no inbound connection (ADR 0018). "0s" rotates only on request.
   credentialMaxAge: 720h
+  # Push each model host's status, recent Kubernetes events and the tail of its log to the
+  # control plane, so the console shows a deployment starting (pulling, loading weights,
+  # ready) without kubectl. Applies only when the operator runs the hosts, and grants the
+  # agent read on pods, pods/log and events in this namespace. See docs/model-host-logs.md.
+  reportHosts: true
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
