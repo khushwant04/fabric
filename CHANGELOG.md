@@ -14,6 +14,23 @@ yet, so earlier work is summarised by period from the pull-request history.
   limits, retries and metering are shared. Text, system, images, tools, tool results,
   thinking and stop sequences are supported; untranslatable content is rejected with
   400. See `docs/anthropic-messages.md`.
+- Per-architecture launch table for the gated-delta decode kernels
+  (`runtime/kernels/launch_config.py`): `block_v` / `num_warps` / `num_stages` by compute
+  capability (T4 SM75, A10 SM86, RTX 4070 SM89, conservative default) and batch bucket,
+  used by `fused_packed_decode`, `gated_delta_decode`, dispatch and the vLLM substitution
+  when no tile is given. Only the T4 packed entries for batch 1–16 are measured (from the
+  committed T4 artifacts). The rest are reasoned and marked unmeasured. Explicit
+  arguments and `FABRIC_KERNEL_BLOCK_V` / `FABRIC_KERNEL_NUM_WARPS` (and the new
+  `FABRIC_KERNEL_NUM_STAGES`) still win. A sweep result can be dropped in with
+  `FABRIC_KERNEL_TUNING_FILE`. See `docs/kernel-tuning-t4-a10.md`.
+- `runtime/harness/tune.py`: on-GPU sweep of `block_v × num_warps × num_stages` per batch
+  bucket. It gates every candidate against the eager reference, refuses a `--target` that
+  does not match the GPU, and writes a versioned artifact plus a tuning file in the format
+  the table consumes.
+- BF16 policy: below compute capability 8.0 the Fabric kernels refuse BF16. Dispatch
+  `auto` falls back with a reason, `fabric` raises, and the vLLM substitution hands the
+  call back to vLLM's op. T4 hosts must serve FP16 (`--dtype half`).
+
 - Prefix-aware routing (ADR 0019): a `prefix_aware` deployment strategy that sends each
   request to the backend most likely to hold its prompt prefix in cache, within a bounded
   load, without needing a session key. Accepted by the control plane, CRD and agent.
@@ -42,6 +59,14 @@ yet, so earlier work is summarised by period from the pull-request history.
 - Every CI job has a 20-minute timeout.
 - Contributing guide, security policy, changelog, Dependabot configuration and a
   pull-request template.
+
+### Changed
+
+- With `FABRIC_KERNEL` set on a T4, the packed kernel now defaults to the measured 16/1
+  tile at batch 16 and below, instead of vLLM's 32/1. Set `FABRIC_KERNEL_BLOCK_V=32`,
+  `FABRIC_KERNEL_NUM_WARPS=1` and `FABRIC_KERNEL_NUM_STAGES=3` for the previous tile.
+  `compare_packed.py` pins its `fabric` candidate to vLLM's tile, so its comparison does
+  not change.
 
 ### Fixed
 

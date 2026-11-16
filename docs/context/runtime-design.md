@@ -148,7 +148,7 @@ Choose only after full-model profiling. Candidates are RMSNorm-gate/layout fusio
 | A10 | SM86 | FP16/BF16 | Research, paper, future capacity profile |
 | T4 | SM75 | FP16 | Production profile and release gate |
 
-Each profile may choose different value tile and warp configuration. Runtime detection verifies compute capability; unsupported hardware uses the standard path.
+Each profile may choose different value tile and warp configuration. *(Implemented in `runtime/kernels/launch_config.py`: a table keyed by compute capability and batch bucket, overridable by a sweep's tuning file; see [kernel launch tuning](../kernel-tuning-t4-a10.md). Only the T4 packed-kernel entries for batch 1–16 are measured.)* Runtime detection verifies compute capability; BF16 below SM80 and other unsupported inputs use the standard path.
 
 ## Two-A10 use
 

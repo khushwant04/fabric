@@ -18,7 +18,10 @@ The Triton kernel fuses:
 
 The recurrent state remains FP32, as in the authoritative eager fallback. Q, K,
 and V may be FP16, BF16, or FP32. T4 deployments should use FP16 because SM75
-does not provide native BF16 arithmetic; A10 can use BF16.
+does not provide native BF16 arithmetic, and the Triton path refuses BF16 below
+compute capability 8.0; A10 can use BF16.
+
+The launch shape comes from :mod:`kernels.launch_config` unless the caller passes one.
 """
 
 from __future__ import annotations
@@ -26,6 +29,13 @@ from __future__ import annotations
 import torch
 import triton
 import triton.language as tl
+
+from kernels.launch_config import (
+    KERNEL_RECURRENT,
+    bf16_unsupported_reason,
+    device_capability,
+    resolve,
+)
 
 L2_EPS = 1e-6
 _MAX_KEY_DIM = 256
@@ -210,7 +220,9 @@ def gated_delta_decode(
     state: torch.Tensor,
     *,
     out: torch.Tensor | None = None,
-    block_v: int = 32,
+    block_v: int | None = None,
+    num_warps: int | None = None,
+    num_stages: int | None = None,
     state_indices: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run the fused single-token gated-delta recurrence and update ``state`` in place.
@@ -222,12 +234,33 @@ def gated_delta_decode(
     ``state_indices`` selects one slot per sequence from a paged state cache, so a
     serving host can pass its cache directly rather than gathering rows into a
     dense tensor and scattering them back.
+
+    With no ``block_v``/``num_warps``/``num_stages`` the shape is looked up per compute
+    capability and batch bucket (tuning file, then table, then 32/8). A caller that passes
+    ``block_v`` alone gets the historical warp count for it.
     """
     batch, heads, key_dim, value_dim = _validate_inputs(
         q, k, v, g, beta, state, out, state_indices=state_indices
     )
+    capability = device_capability(q.device)
+    refusal = bf16_unsupported_reason(q.dtype, capability)
+    if refusal:
+        raise ValueError(refusal)
+    config = resolve(
+        KERNEL_RECURRENT,
+        capability,
+        batch,
+        block_v=block_v,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+    block_v = config.block_v
     if block_v not in (8, 16, 32):
         raise ValueError("block_v must be one of 8, 16, or 32")
+    if config.num_warps not in (1, 2, 4, 8):
+        raise ValueError("num_warps must be 1, 2, 4, or 8")
+    if not isinstance(config.num_stages, int) or not 1 <= config.num_stages <= 6:
+        raise ValueError("num_stages must be between 1 and 6")
     if out is None:
         out = torch.empty_like(v)
 
@@ -250,7 +283,8 @@ def gated_delta_decode(
         QUERY_SCALE=key_dim**-0.5,
         L2_EPS=L2_EPS,
         HAS_STATE_INDEX=state_indices is not None,
-        num_warps=4 if block_v <= 16 else 8,
+        num_warps=config.num_warps,
+        num_stages=config.num_stages,
     )
     return out
 

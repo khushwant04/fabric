@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from integration import dispatch
 from integration.dispatch import (
     PATH_EAGER,
     PATH_FABRIC,
@@ -196,3 +197,62 @@ def test_kernel_failure_falls_back_instead_of_raising(monkeypatch) -> None:
     # The same failure in strict mode must surface, not degrade.
     with pytest.raises(KernelUnavailableError, match="simulated launch failure"):
         dispatch_gated_delta_decode(*make_cuda_inputs(), mode="fabric")
+
+
+class _ClaimsCuda(torch.Tensor):
+    """A CPU tensor that reports itself as CUDA, to reach the dtype policy without a GPU."""
+
+    @property
+    def is_cuda(self) -> bool:  # type: ignore[override]
+        return True
+
+
+def inputs_that_claim_cuda(dtype: torch.dtype):
+    """q, k, v in ``dtype``; gates and state keep their FP32 contract."""
+    return tuple(
+        tensor.to(dtype if index < 3 else tensor.dtype).as_subclass(_ClaimsCuda)
+        for index, tensor in enumerate(make_cpu_inputs())
+    )
+
+
+def test_bf16_on_sm75_is_unsupported_with_a_clear_reason(monkeypatch) -> None:
+    monkeypatch.setattr(dispatch, "device_capability", lambda device: (7, 5))
+    reason = unsupported_reason(*inputs_that_claim_cuda(torch.bfloat16))
+    assert reason is not None
+    assert "bfloat16" in reason and "7.5" in reason and "--dtype half" in reason
+
+
+def test_bf16_on_ampere_is_not_refused_by_the_dtype_policy(monkeypatch) -> None:
+    monkeypatch.setattr(dispatch, "device_capability", lambda device: (8, 6))
+    assert unsupported_reason(*inputs_that_claim_cuda(torch.bfloat16)) is None
+
+
+def test_fp16_on_sm75_is_not_refused(monkeypatch) -> None:
+    monkeypatch.setattr(dispatch, "device_capability", lambda device: (7, 5))
+    assert unsupported_reason(*inputs_that_claim_cuda(torch.float16)) is None
+
+
+def test_auto_mode_falls_back_for_bf16_on_sm75(monkeypatch) -> None:
+    def forbidden(*args, **kwargs):
+        raise AssertionError("BF16 on SM75 reached the Fabric kernel")
+
+    monkeypatch.setattr(dispatch, "device_capability", lambda device: (7, 5))
+    monkeypatch.setattr(dispatch, "gated_delta_decode", forbidden)
+    stats = DispatchStats()
+    result, decision = dispatch_gated_delta_decode(
+        *inputs_that_claim_cuda(torch.bfloat16), mode="auto", stats=stats
+    )
+    assert decision.path == PATH_EAGER
+    assert "bfloat16" in decision.reason
+    assert stats.fallback_calls == 1
+    assert result.dtype == torch.bfloat16
+
+
+def test_fabric_mode_raises_for_bf16_on_sm75(monkeypatch) -> None:
+    monkeypatch.setattr(dispatch, "device_capability", lambda device: (7, 5))
+    with pytest.raises(KernelUnavailableError, match="bfloat16"):
+        dispatch_gated_delta_decode(*inputs_that_claim_cuda(torch.bfloat16), mode="fabric")
+
+
+def test_decoder_defaults_to_the_launch_table() -> None:
+    assert GatedDeltaDecoder().telemetry()["block_v"] is None
