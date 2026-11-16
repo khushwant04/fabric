@@ -13,6 +13,7 @@
   <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/khushwant04/fabric?filename=agent%2Fgo.mod&amp;logo=go&amp;logoColor=white">
   <img alt="Node 22" src="https://img.shields.io/badge/node-22-339933?logo=nodedotjs&amp;logoColor=white">
   <img alt="Kubernetes" src="https://img.shields.io/badge/kubernetes-Helm-326CE5?logo=kubernetes&amp;logoColor=white">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
 <p align="center">
@@ -217,3 +218,7 @@ hardware.
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities
 privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Fabric is licensed under the [Apache License 2.0](LICENSE).
