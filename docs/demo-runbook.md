@@ -9,28 +9,35 @@ Fallback for the stage: `make demo-console` runs the whole console locally with 
 account, and every `make demo-*` target runs without a GPU. Start them once beforehand —
 the first run downloads packages and builds the console.
 
-## 0. Pick a tag
+## 1. Images: published by Depot CI to ECR Public
+
+The `images` job in `.depot/workflows/ci.yaml` builds `control-plane`, `agent`,
+`data-plane`, `console` and `sandbox` and pushes them to
+`public.ecr.aws/hexelstudio/fabric/<component>:git-<full commit sha>`. It runs only for a
+push to `main`, and only after every CI job passes (python, control-plane-postgres,
+runtime, e2e, agent, console, packaging).
+
+Before the first publish of this branch's work:
+
+- **Create the ECR Public repository `fabric/sandbox`** if it doesn't exist — `sandbox` is
+  new to the matrix. Without it that one push fails (the others still publish, the matrix
+  doesn't fail fast). The `ecr-github-cicd` role must be allowed to push to it.
+- The edge gateway uses the `data-plane` image; there is no separate edge image.
+- The model host is not built by CI; keep your existing vLLM image. The RTX PRO 6000
+  (Blackwell) needs one built for CUDA 12.8 or newer.
+- Images are built on Depot's default x86_64 runners, so nodes must be amd64.
+- ECR Public images are pullable by anyone; nothing secret is baked in (keys come from
+  Kubernetes Secrets at runtime), and no `imagePullSecrets` are needed.
+
+After the `main` push, wait for the `images` job to go green in Depot, then:
 
 ```bash
-export REGISTRY=myregistry.azurecr.io/fabric
-export TAG=demo-$(git rev-parse --short HEAD)
+export REGISTRY=public.ecr.aws/hexelstudio/fabric
+export TAG=git-$(git rev-parse origin/main)      # the commit the images job built
 ```
 
-## 1. Build and push images (from the repository root, with Docker)
-
-```bash
-for c in control-plane data-plane agent console sandbox; do
-  docker build -f deploy/images/$c.Dockerfile -t $REGISTRY/$c:$TAG . && docker push $REGISTRY/$c:$TAG
-done
-```
-
-- `data-plane` serves both the stamp gateway and the edge gateway. It includes the E2B
-  client by default; an air-gapped build passes `--build-arg EXTRAS=`.
-- The model host is unchanged (`model-host.Dockerfile`, or your existing vLLM image). The
-  RTX PRO 6000 (Blackwell) needs a vLLM image built for CUDA 12.8 or newer.
-
-Check: every image is visible in the registry, and AKS and each VM can pull it
-(`imagePullSecrets` where the registry is private).
+Check: `docker manifest inspect $REGISTRY/data-plane:$TAG` (repeat per component) succeeds
+from your machine, AKS and each VM.
 
 ## 2. Control plane, console and edge on AKS
 
