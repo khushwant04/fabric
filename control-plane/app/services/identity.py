@@ -301,6 +301,12 @@ async def exchange_api_key(
         allowed = key_scopes & scope_defs.INFERENCE_SCOPES
     else:
         allowed = key_scopes & scope_defs.CONTROL_SCOPES
+        system_scopes = key_scopes & scope_defs.SYSTEM_KEY_SCOPES
+        if system_scopes and await _is_system_service_key(session, record):
+            # Only a service principal of the Fabric system account may carry these into a
+            # token. Anywhere else they are dropped rather than honoured: the scope string
+            # alone, copied onto a customer key row, must not open a cross-account read.
+            allowed = allowed | system_scopes
     if not allowed:
         raise Forbidden(
             "audience_not_permitted",
@@ -330,3 +336,13 @@ async def exchange_api_key(
         account_id=record.account_id,
         scope=" ".join(granted),
     )
+
+
+async def _is_system_service_key(session: AsyncSession, record: ApiKey) -> bool:
+    """Whether a key belongs to a service principal of the Fabric system account."""
+    if record.principal_type != PRINCIPAL_SERVICE:
+        return False
+    is_system = (
+        await session.execute(select(Account.is_system).where(Account.id == record.account_id))
+    ).scalar_one_or_none()
+    return bool(is_system)

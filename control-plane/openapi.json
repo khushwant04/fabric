@@ -735,6 +735,206 @@
         "title": "DesiredStateResponse",
         "type": "object"
       },
+      "EdgeDeployment": {
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "capabilities": {
+            "additionalProperties": true,
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "model_alias": {
+            "title": "Model Alias",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "placements": {
+            "items": {
+              "$ref": "#/components/schemas/EdgePlacement"
+            },
+            "title": "Placements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "deployment_id",
+          "name",
+          "model_alias",
+          "capabilities",
+          "placements"
+        ],
+        "title": "EdgeDeployment",
+        "type": "object"
+      },
+      "EdgeGpuSummary": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "default": 0,
+            "title": "Memory Bytes",
+            "type": "integer"
+          },
+          "product": {
+            "title": "Product",
+            "type": "string"
+          }
+        },
+        "required": [
+          "product",
+          "count"
+        ],
+        "title": "EdgeGpuSummary",
+        "type": "object"
+      },
+      "EdgePlacement": {
+        "description": "Where one deployment is served, and whether that place looks usable.\n\nStamp facts are repeated on each placement so the edge can route from one object. No\ncredential, endpoint secret or capacity detail beyond a GPU summary is included.",
+        "properties": {
+          "gpus": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeGpuSummary"
+            },
+            "title": "Gpus",
+            "type": "array"
+          },
+          "heartbeat_age_seconds": {
+            "title": "Heartbeat Age Seconds",
+            "type": "number"
+          },
+          "inference_url": {
+            "title": "Inference Url",
+            "type": "string"
+          },
+          "last_heartbeat_at": {
+            "format": "date-time",
+            "title": "Last Heartbeat At",
+            "type": "string"
+          },
+          "orchestrator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "ready_replicas": {
+            "title": "Ready Replicas",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          },
+          "stamp_name": {
+            "title": "Stamp Name",
+            "type": "string"
+          },
+          "status_reported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reported At"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "stamp_name",
+          "region",
+          "orchestrator",
+          "inference_url",
+          "ready",
+          "phase",
+          "ready_replicas",
+          "status_reported_at",
+          "last_heartbeat_at",
+          "heartbeat_age_seconds",
+          "gpus"
+        ],
+        "title": "EdgePlacement",
+        "type": "object"
+      },
+      "EdgeRoutingTable": {
+        "properties": {
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeDeployment"
+            },
+            "title": "Deployments",
+            "type": "array"
+          },
+          "etag": {
+            "title": "Etag",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "stamp_liveness_seconds": {
+            "title": "Stamp Liveness Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "etag",
+          "generated_at",
+          "stamp_liveness_seconds",
+          "deployments"
+        ],
+        "title": "EdgeRoutingTable",
+        "type": "object"
+      },
       "EnrollmentTokenCreateRequest": {
         "properties": {
           "allowed_mode": {
@@ -4689,6 +4889,59 @@
         "summary": "Ask a stamp's agent to rotate its machine credentials",
         "tags": [
           "stamps"
+        ]
+      }
+    },
+    "/v1/edge/routing-table": {
+      "get": {
+        "description": "Deployments placed on live stamps that report a public gateway URL.\n\nDeliberately not account-scoped: the edge serves every account from one URL. The\ntoken must carry ``edge:routing:read`` and belong to a service principal of the Fabric\nsystem account, and the read runs in a scoped elevation that ends with the query.",
+        "operationId": "routing_table_v1_edge_routing_table_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "if-none-match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeRoutingTable"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Unchanged since the presented ETag"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cross-account routing table for the edge gateway (edge credential only)",
+        "tags": [
+          "edge"
         ]
       }
     },

@@ -5,6 +5,7 @@ Usage:
     python -m app.cli bootstrap-account --slug acme --email ops@acme.test
     python -m app.cli issue-system-key --name fleet-operator
     python -m app.cli grant-managed-capacity --account <uuid>
+    python -m app.cli create-edge-credential --name fabric-edge
 
 ``bootstrap-account`` exists because every other route to an account goes through
 Auth0: a human logs in, exchanges that token, and creates an account. That is the right
@@ -32,6 +33,7 @@ from app.models import Account, User
 from app.services.accounts import create_account, ensure_system_account
 from app.services.api_keys import create_api_key
 from app.services.bootstrap import seed_single_tenant
+from app.services.edge import create_edge_credential
 from app.services.entitlements import set_managed_capacity
 from app.services.service_principals import create_service_principal
 
@@ -186,6 +188,26 @@ async def _grant_managed_capacity(account_id: uuid.UUID) -> None:
     await dispose_engine()
 
 
+async def _create_edge_credential(*, name: str) -> None:
+    """Issue the edge gateway's routing-table credential, printing it once (ADR 0021).
+
+    A command rather than an endpoint for the same reason as ``issue-system-key``: the
+    credential reads every account's placements, so minting one requires database access.
+    The key holds ``edge:routing:read`` only. It cannot invoke inference or change
+    anything; revoke it like any other API key of the system account.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        with system_context():
+            record, secret = await create_edge_credential(session, name=name)
+            await session.commit()
+        print(f"account   {record.account_id}")
+        print(f"key_id    {record.id}  scopes={','.join(record.scopes)}")
+        # Shown once; only a verifier is stored.
+        print(f"api_key   {secret}")
+    await dispose_engine()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -210,6 +232,9 @@ def main() -> None:
     grant = commands.add_parser("grant-managed-capacity")
     grant.add_argument("--account", required=True, type=uuid.UUID)
 
+    edge = commands.add_parser("create-edge-credential")
+    edge.add_argument("--name", default="fabric-edge")
+
     args = parser.parse_args()
 
     if args.command == "seed-system-account":
@@ -230,6 +255,8 @@ def main() -> None:
         asyncio.run(_issue_system_key(name=args.name))
     elif args.command == "grant-managed-capacity":
         asyncio.run(_grant_managed_capacity(args.account))
+    elif args.command == "create-edge-credential":
+        asyncio.run(_create_edge_credential(name=args.name))
 
 
 if __name__ == "__main__":

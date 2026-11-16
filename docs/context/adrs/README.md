@@ -25,6 +25,7 @@ ADRs record durable choices. Future changes supersede an ADR with a new record r
 | [0018](0018-stamp-credentials-rotate-with-an-overlap.md) | Rotate stamp machine credentials from the stamp, overlapping the old ones; by age or on an operator's request | Implemented |
 | [0019](0019-prefix-aware-routing-with-bounded-load.md) | Route each request to the backend likely to hold its prompt prefix in cache, within a load bound of 1.1x the mean | Implemented in the data plane |
 | [0020](0020-air-gapped-on-prem-installation-with-node-join.md) | Install on-premises with no internet from signed bundles; add GPU machines with single-use node join tokens | Proposed; not implemented |
+| [0021](0021-edge-gateway.md) | One edge gateway URL in front of every stamp, routing from a routing table it polls and caches; inference never passes through the control plane | Implemented; not yet run against production stamps |
 
 ## ADR status vocabulary
 

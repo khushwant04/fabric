@@ -43,6 +43,7 @@ See [Current State](current-state.md) for exact implemented and unimplemented bo
 | [Observability and SLOs](observability-slos.md) | Planned | Signals, initial objectives, cost, and release telemetry |
 | [Roadmap](roadmap.md) | Planned | Delivery sequence and deferred scope |
 | [Air-Gapped On-Premises Design](../airgapped-onprem-design.md) | Planned | Zero-internet installation from signed bundles, seed node, and manual node join (ADR 0020) |
+| [Edge Gateway](../edge-gateway.md) | Implemented | One inference URL in front of every stamp, routing from a cached routing table (ADR 0021) |
 | [Risks and Open Questions](risks-open-questions.md) | Living | Technical, product, and operational uncertainty |
 | [Architecture Decision Records](adrs/README.md) | Accepted decisions | Durable architectural choices and consequences |
 

@@ -9,6 +9,7 @@ from app.api.v1 import (
     api_keys,
     audit,
     deployments,
+    edge,
     identity_providers,
     service_principals,
     stamps,
@@ -26,6 +27,7 @@ api_router.include_router(api_keys.router)
 api_router.include_router(identity_providers.router)
 api_router.include_router(deployments.router)
 api_router.include_router(stamps.router)
+api_router.include_router(edge.router)
 api_router.include_router(telemetry.router)
 api_router.include_router(audit.router)
 

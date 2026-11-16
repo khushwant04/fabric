@@ -144,6 +144,8 @@ jobs:
           go-version-file: agent/go.mod
       - name: Run the platform loop
         run: make demo
+      - name: Run the edge gateway in front of two stamps
+        run: make demo-edge
 
   agent:
     runs-on: depot-ubuntu-latest
@@ -228,6 +230,7 @@ jobs:
       - name: Assert console and native stamp exposure packaging
         run: |
           python deploy/scripts/test_console_chart.py
+          python deploy/scripts/test_edge_chart.py
           python deploy/scripts/test_cache_chart.py
           bash deploy/scripts/test-stamp-exposure-chart.sh
       - name: Verify upgrades from legacy release values

@@ -8,6 +8,31 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Edge gateway (ADR 0021, `docs/edge-gateway.md`): `python -m fabric_data_plane.edge`, one
+  inference URL in front of every stamp. It verifies inference tokens locally with the
+  stamp's own code; routes `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
+  `/v1/messages` (+ `count_tokens`), `/v1/audio/*`, `/v1/agent/runs` and `/v1/runs*` by
+  model within the caller's account (`auto`/`cascade` are left to the stamp); answers
+  `GET /v1/models` from its table; prefers healthy, ready and in-region stamps, then the
+  fewest requests in flight; keeps `X-Fabric-Run-Id` requests on one stamp (strict
+  rendezvous hash) and session keys on one stamp where possible; streams with no
+  buffering; retries on another stamp only when the connection could not be established;
+  adds `X-Fabric-Edge-Stamp`; publishes Prometheus metrics and `/admin/routing`. It meters
+  nothing and enforces no limits, so usage is not counted twice.
+- `GET /v1/edge/routing-table` on the control plane: every account's deployments placed
+  on live stamps that report `inference_url`, with ETag/304 and a non-decreasing
+  revision, readable only with the new non-delegable `edge:routing:read` scope on a
+  system-account service principal (`python -m app.cli create-edge-credential`). The read
+  is elevated in a scoped, audited block, and row-level security for every other path is
+  unchanged. Setting: `FABRIC_EDGE_STAMP_LIVENESS_SECONDS` (default 300).
+- Helm: `edge.*` in the control-plane chart, disabled by default (Deployment, Service,
+  optional Ingress with TLS, credential from an existing Secret, emptyDir or PVC for the
+  cached table). When the edge has an HTTPS ingress, the console uses it as its gateway.
+  `deploy/scripts/test_edge_chart.py` runs in CI.
+- `make demo-edge`: a control plane, two stamps (Go agents plus HTTPS gateways in two
+  regions) and the edge, showing routing by model, failover and serving through a
+  control-plane outage. It also runs in the CI e2e job.
+
 - Agent runs on the data plane (`docs/agent-runs.md`): `X-Fabric-Run-Id` with optional
   `X-Fabric-Run-Budget-Tokens` / `-Steps` on chat completions, completions, responses and
   messages; an account-scoped, in-memory run store (idle TTL, LRU cap; stamp-local and

@@ -232,3 +232,91 @@ console:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 1, memory: 1Gi}
+
+# Edge gateway (ADR 0021, docs/edge-gateway.md): one public inference URL in front of every
+# stamp. It verifies the caller's inference token locally, picks a stamp holding the
+# requested model for the caller's account from a routing table it polls from this control
+# plane, and streams the request to that stamp's gateway, which verifies the token again
+# and serves it. Inference never passes through the control plane, and the edge keeps
+# serving from its cached table while the control plane is down.
+#
+# The edge meters nothing and enforces no limits: stamps already do both, and counting
+# twice would bill twice.
+#
+# Every stamp it routes to must expose its gateway over HTTPS and report inference_url
+# (docs/stamp-native-endpoint.md).
+edge:
+  enabled: false
+  replicas: 2
+  image:
+    # The data-plane image; the edge runs `python -m fabric_data_plane.edge`.
+    repository: fabric/data-plane
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  # The routing-table credential, minted once with
+  #   python -m app.cli create-edge-credential --name fabric-edge
+  # and stored in a Secret you create. Required when the edge is enabled; the key itself
+  # never goes in values.
+  credential:
+    existingSecret: ""
+    existingSecretKey: api-key
+  # Where the edge reaches this control plane for the routing table and signing keys.
+  # Defaults to this release's in-cluster Service.
+  controlPlaneUrl: ""
+  # Issuer and JWKS URL tokens are verified against; default to jwt.issuer.
+  jwtIssuer: ""
+  jwksUrl: ""
+  # CA bundle (a ConfigMap key) for stamp gateway certificates not signed by a public CA.
+  # TLS to stamps is always verified.
+  stampCaBundle:
+    configMap: ""
+    key: ca.crt
+  # {"host:port": "ip:port"}: reach a stamp at another address while still verifying its
+  # certificate name, e.g. over private peering.
+  stampAddressOverrides: {}
+  # Preferred region when a request does not send X-Fabric-Region.
+  defaultRegion: ""
+  pollIntervalSeconds: 10
+  # Long generations stream for minutes: this bounds a silence between bytes, not a whole
+  # response. Keep the ingress read timeout at least this long.
+  readTimeoutSeconds: 600
+  connectTimeoutSeconds: 5
+  maxAttempts: 3
+  stampFailureThreshold: 3
+  stampRecoverySeconds: 30
+  maxJsonBodyBytes: 16777216
+  maxAudioUploadBytes: 26214400
+  logLevel: INFO
+  # The last good routing table is kept on disk so a pod restarted during a control-plane
+  # outage still serves. Disabled uses an emptyDir: it survives container restarts but not
+  # rescheduling, and a rescheduled pod stays unready until the control plane answers.
+  # Enabled creates one ReadWriteOnce claim, so keep replicas at 1 or provide an RWX class.
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 64Mi
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    # Streaming needs response buffering off and long timeouts on most controllers, e.g.
+    # for ingress-nginx:
+    #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    #   nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    #   nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "2", memory: 512Mi}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []

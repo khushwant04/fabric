@@ -775,3 +775,60 @@ class StatusReportResponse(BaseModel):
     deployment_id: uuid.UUID
     stamp_id: uuid.UUID
     accepted_at: dt.datetime
+
+
+# --- edge routing table (ADR 0021) -----------------------------------------
+
+
+class EdgeGpuSummary(BaseModel):
+    product: str
+    count: int
+    memory_bytes: int = 0
+
+
+class EdgePlacement(BaseModel):
+    """Where one deployment is served, and whether that place looks usable.
+
+    Stamp facts are repeated on each placement so the edge can route from one object. No
+    credential, endpoint secret or capacity detail beyond a GPU summary is included.
+    """
+
+    stamp_id: uuid.UUID
+    stamp_name: str
+    region: str | None
+    orchestrator: str | None
+    #: The stamp gateway's public HTTPS base URL, as the stamp reported it.
+    inference_url: str
+    #: The stamp reported this deployment ready at its current generation.
+    ready: bool
+    phase: str
+    ready_replicas: int
+    status_reported_at: dt.datetime | None
+    last_heartbeat_at: dt.datetime
+    #: Seconds since that heartbeat when this table was generated. Informational: it is
+    #: excluded from the ETag, so a 304 does not refresh it.
+    heartbeat_age_seconds: float
+    gpus: list[EdgeGpuSummary]
+
+
+class EdgeDeployment(BaseModel):
+    account_id: uuid.UUID
+    deployment_id: uuid.UUID
+    name: str
+    model_alias: str
+    #: The ``model=auto`` metadata from the deployment spec, for the edge's information;
+    #: selection among an account's deployments still happens on the stamp.
+    capabilities: dict[str, Any]
+    placements: list[EdgePlacement]
+
+
+class EdgeRoutingTable(BaseModel):
+    #: Monotonically non-decreasing high-water mark (epoch milliseconds) over the change
+    #: times of the rows the table was built from. The edge refuses a table older than the
+    #: one it holds, which is what keeps a lagging replica from rolling it back.
+    revision: int
+    #: Content hash of everything routing depends on. Sent as the ETag header too.
+    etag: str
+    generated_at: dt.datetime
+    stamp_liveness_seconds: int
+    deployments: list[EdgeDeployment]
