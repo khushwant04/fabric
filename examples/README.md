@@ -36,6 +36,7 @@ uv run --project examples/python python examples/python/scripts/<name>.py --help
 | `audio.py transcribe\|translate [--file PATH]` | Non-streaming audio transcription or English translation. |
 | `rate_limits.py [--requests N --concurrency N]` | Bounded concurrency and 429 retry handling. |
 | `tool_calling.py [city]` | Manual local function/tool call loop. |
+| `agent_demo.py` | Multi-step agent under a Fabric agent-run budget: run headers, the `GET /v1/runs/{id}` trace, tool-call guard repairs, and a budget refusal. See [docs/agent-runs.md](../docs/agent-runs.md). |
 | `control_inspect.py [--deployment ID]` | Read self, account, deployments, per-stamp status, and aggregate usage. |
 | `raw_http_chat.py [prompt]` | Chat through raw `httpx`, without the OpenAI SDK. |
 | `agents_tool.py [city]` | Experimental OpenAI Agents SDK local function tool. |

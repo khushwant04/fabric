@@ -34,6 +34,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from fabric_data_plane import cascade
+from fabric_data_plane.agent_runs import RUN_ID_HEADER
 from fabric_data_plane.agent_tools import ToolRunner, ToolSpec, parse_tools
 from fabric_data_plane.errors import ApiError, BadRequest
 
@@ -187,9 +188,20 @@ class AgentLoop:
         self.run = run
         self.proxy = proxy
         self.tools = tools
-        self.state = RunState(
-            run_id=f"run_{uuid.uuid4().hex}", model=run.model, messages=run.messages
-        )
+        # Every model call of the loop is one step of an agent run (agent_runs.py), so run
+        # budgets (X-Fabric-Run-Budget-*) apply and GET /v1/runs/{id} shows the trace. A
+        # caller-chosen X-Fabric-Run-Id is honoured; otherwise the loop's own id is used.
+        supplied = (request.headers.get(RUN_ID_HEADER) or "").strip()
+        run_id = supplied or f"run_{uuid.uuid4().hex}"
+        if not supplied:
+            headers = [
+                (name, value)
+                for name, value in request.scope["headers"]
+                if name.lower() != RUN_ID_HEADER.encode()
+            ]
+            headers.append((RUN_ID_HEADER.encode(), run_id.encode()))
+            self.request = Request({**request.scope, "headers": headers}, request.receive)
+        self.state = RunState(run_id=run_id, model=run.model, messages=run.messages)
 
     async def _call_model(self) -> tuple[dict[str, Any], dict[str, Any]]:
         """One model call; returns (response body, step info). Raises ApiError on refusal."""

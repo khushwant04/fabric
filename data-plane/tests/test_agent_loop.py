@@ -150,8 +150,10 @@ async def test_tool_errors_are_reported_to_the_model_and_the_run_continues(
         ),
         completion("sorry"),
     ]
+    # With the tool guard off the invalid calls reach the loop's executors unrepaired.
+    headers = {**auth, "X-Fabric-Tool-Guard": "off"}
     async with gateway(build_plane(control_plane, host)) as client:
-        body = (await client.post(RUNS, headers=auth, json=run_body([CALCULATOR]))).json()
+        body = (await client.post(RUNS, headers=headers, json=run_body([CALCULATOR]))).json()
     assert body["status"] == "completed"
     tools = [s for s in body["steps"] if s["type"] == "tool"]
     assert [(s["ok"], s["error"]) for s in tools] == [
@@ -458,6 +460,37 @@ async def test_a_limit_refusal_before_any_step_is_an_http_error(control_plane, h
         response = await client.post(RUNS, headers=auth, json=run_body([CALCULATOR]))
     assert response.status_code == 429
     assert response.headers.get("retry-after")
+
+
+# --------------------------------------------------------------------------- agent runs
+
+
+async def test_loop_model_calls_are_steps_of_an_agent_run(control_plane, host, auth):
+    host.replies = [
+        completion(None, tool_calls=[tool_call("c1", "calculator", {"expression": "1+1"})]),
+        completion("2"),
+    ]
+    async with gateway(build_plane(control_plane, host)) as client:
+        body = (await client.post(RUNS, headers=auth, json=run_body([CALCULATOR]))).json()
+        trace = await client.get(f"/v1/runs/{body['id']}", headers=auth)
+    assert body["id"].startswith("run_")
+    assert trace.status_code == 200
+    assert len(trace.json()["steps"]) == 2
+    # The run id is a gateway header and never reaches the model host.
+    assert all("x-fabric-run-id" not in r["headers"] for r in host.requests)
+
+
+async def test_caller_run_id_and_step_budget_apply_to_the_loop(control_plane, host, auth):
+    host.default = completion(
+        None, tool_calls=[tool_call("c", "calculator", {"expression": "1+1"})]
+    )
+    headers = {**auth, "X-Fabric-Run-Id": "demo-run-1", "X-Fabric-Run-Budget-Steps": "2"}
+    async with gateway(build_plane(control_plane, host)) as client:
+        body = (await client.post(RUNS, headers=headers, json=run_body([CALCULATOR]))).json()
+    assert body["id"] == "demo-run-1"
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "run_budget_exhausted"
+    assert len(host.requests) == 2
 
 
 # --------------------------------------------------------------------------- streaming
