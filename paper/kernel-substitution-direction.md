@@ -371,6 +371,6 @@ Do not tune the kernel before completing steps 1–5. Without them, a faster res
 
 ## 13. Broader adaptive-inference system
 
-This paper's safe packed-kernel substitution mechanism is one component of the broader design in [`docs/adaptive-inference-research.md`](docs/adaptive-inference-research.md). That design adds architecture-aware memory envelopes, predicted-completion-time and prefix-locality routing, opt-in capability/model cascades, adaptive thinking, SLO-aware admission, and spare-GPU canary promotion.
+This paper's safe packed-kernel substitution mechanism is one component of the broader design in [`docs/adaptive-inference-research.md`](../docs/adaptive-inference-research.md). That design adds architecture-aware memory envelopes, predicted-completion-time and prefix-locality routing, opt-in capability/model cascades, adaptive thinking, SLO-aware admission, and spare-GPU canary promotion.
 
 The kernel paper should remain independently evaluable and must not attribute gains from model substitution, quantization, routing, or caching to the kernel. The broader systems paper may combine them, but must report an ablation for each layer.

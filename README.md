@@ -1,401 +1,208 @@
+<p align="center">
+  <img src="docs/assets/agent-fabric-banner.webp" alt="Agent Fabric — fluid inference infrastructure for AI agents" width="100%">
+</p>
+
 # Fabric
 
-A managed inference platform. Customers get an OpenAI-compatible API; the platform runs the
-GPUs, enforces tenant isolation, meters usage, and reconciles declared intent onto real
-hardware.
+**A managed inference platform for open models, built for agents.**
 
-Built around a strict control-plane/data-plane split: inference never traverses the control
-plane, so serving continues when the control plane does not.
+Fabric gives customers OpenAI- and Anthropic-compatible APIs on GPUs you run anywhere —
+AKS node pools, k3s on cloud VMs, or on-prem machines — and handles tenant isolation,
+routing, limits, metering and rollout for you. Inference never passes through the control
+plane, so serving keeps working when the control plane does not.
 
-**Status.** Supports Helm-installed control planes and inference stamps, a single-tenant console, dashboard model deployment, GPU capacity reporting, and native Kubernetes gateway exposure. PostgreSQL row-level security protects account data; model readiness comes from observed workloads. Fabric does not provision GPU nodes or configure DNS providers. See the [single-tenant installation guide](docs/single-tenant-installation.md) for setup and the [technical paper](FABRIC-TECHNICAL-PAPER-LATEX.md) for the architecture and validation limits.
+[Architecture](docs/architecture/README.md) ·
+[Getting started](docs/getting-started.md) ·
+[Examples](examples/README.md) ·
+[Documentation](#documentation) ·
+[Changelog](CHANGELOG.md)
 
 ---
+
+## Highlights
+
+**APIs your SDKs already speak**
+- OpenAI `/v1/chat/completions`, `/v1/completions`, `/v1/responses` and `/v1/models`, with streaming
+- Anthropic `/v1/messages`, with tools, images and streaming
+- The OpenAI Agents SDK, unmodified — tools, handoffs, guardrails, structured output
+
+**Built for agent loops**
+- **Agent runs** — token and step budgets per run, a per-step trace, and a tool-call guard that repairs malformed tool arguments before your code sees them
+- **Server-side tool loop** — one request runs a whole agent; the gateway calls the model, runs tools in parallel and streams every step
+- **Hosted tools** — code interpreter (E2B or an isolated sandbox), web search and fetch, file search with citations, and MCP connectors with per-call approval
+- **Model cascade** — answer with the smallest model, escalate only when a cheap check fails
+
+**Run it anywhere, serve it from one URL**
+- **Stamps** — any Kubernetes cluster with GPUs enrolls with a single-use token and connects outbound only
+- **Edge gateway** — one inference URL across every stamp, with failover, run affinity, and serving through a control-plane outage
+- **Declarative deployments** — capacity-aware placement, zero-downtime rollouts, and hardware-aware model-host settings
+
+**Enterprise foundations**
+- PostgreSQL row-level security on every account table, under a role that cannot bypass it
+- API keys for machines, OIDC for people, and a per-account identity provider
+- Request, token-rate and concurrency limits; metering from the model's own token counts
+- Transactional audit trail with export; stamp credential rotation; Prometheus and Grafana
+
+**GPU runtime**
+- A fused Triton gated-delta decode kernel for Qwen3.5-class models, with per-GPU launch tuning for T4 and A10 and automatic fallback to the engine's kernel
 
 ## Architecture
 
-```
-                        CUSTOMER
-                           |
-        +------------------+------------------+
-        | control operations          inference requests
-        v                                     v
-+---------------------------+     +---------------------------+
-|      CONTROL PLANE        |     |   DATA PLANE (in stamp)   |
-|                           |     |                           |
-|  accounts, members        |     |  verifies JWT locally     |
-|  API keys, OIDC providers |     |  enforces ownership       |
-|  token exchange (RS256)   |     |  rate + concurrency caps  |
-|  deployments, placements  |     |  proxies to model host    |
-|  stamp enrollment         |     |  buffers usage            |
-|  usage ingestion          |     |  publishes metrics        |
-+-------------+-------------+     +-------------+-------------+
-              |  PostgreSQL                    |
-              |  (RLS forced)                  v
-              |                    +---------------------------+
-              |                    |  MODEL HOST (vLLM, GPU)   |
-              |                    |  weights on node NVMe     |
-              |                    |  Fabric or vLLM kernel    |
-              |                    +---------------------------+
-              |  desired state                 ^
-              |  (outbound only)               | creates
-              v                                |
-+--------------------------------------------------------------+
-|                     STAMP (Kubernetes)                       |
-|  AGENT ----> renders data-plane config, publishes CRD        |
-|  OPERATOR -> reconciles CRD into host + Service, rollout     |
-|  COLLECTOR-> leases durable usage, forwards write-only telemetry |
-+--------------------------------------------------------------+
+```mermaid
+flowchart LR
+    clients["Apps & agents<br/><small>OpenAI · Anthropic SDKs</small>"]
+    subgraph central["Control site (e.g. AKS)"]
+        edge["Edge gateway"]
+        cp["Control plane"]
+        db[("PostgreSQL<br/><small>row-level security</small>")]
+        console["Console"]
+    end
+    subgraph stamps["GPU stamps — any cloud, VM or on-prem"]
+        gw["Stamp gateway<br/><small>limits · agents · tools</small>"] --> host["vLLM model host<br/><small>Fabric kernel</small>"]
+        agent["Agent · Operator"] -.creates.-> host
+    end
+    clients -- inference --> edge -- HTTPS --> gw
+    console --> cp --> db
+    edge -. routing table .-> cp
+    agent -. outbound only .-> cp
 ```
 
-The agent polls outbound only. The control plane never dials into a customer cluster.
-
-An optional **edge gateway** gives one public inference URL in front of every stamp. It
-verifies the token, picks a stamp that holds the requested model for the caller's
-account, and streams the request to that stamp's gateway. It reads its routing table
-from the control plane in the background and keeps serving from a cached copy when the
-control plane is down, so inference still never passes through the control plane
-([ADR 0021](docs/context/adrs/0021-edge-gateway.md), [Edge gateway](docs/edge-gateway.md)).
-
----
-
-## What it does
-
-| Capability | Detail |
-|---|---|
-| **OpenAI-compatible serving** | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, streaming. Verified against the official `openai` Python SDK |
-| **Responses format** | `POST /v1/responses` with native JSON/SSE, stateless input history, account routing, and input/output usage accounting. Requires an updated data-plane image and a supporting model host; see [Responses setup](docs/openai-responses.md) |
-| **Anthropic Messages API** | `POST /v1/messages`, including streaming, tools and images, translated to chat completions at the gateway so routing, limits and metering are unchanged. Works with the official `anthropic` Python SDK; see [Messages setup](docs/anthropic-messages.md) |
-| **OpenAI Agents SDK** | The unmodified `openai-agents` SDK runs on Fabric deployments: function tools, handoffs, guardrails, streaming, structured output, `cascade`/`auto`, and Fabric run budgets, traces and tool-call repair through `ModelSettings(extra_headers=...)`. Covered by an automated compatibility test; `make demo-openai-agents` runs a multi-agent trip planner without a GPU; see [Agents SDK guide](docs/openai-agents-sdk.md) |
-| **Agent runs** | Group an agent loop's calls with `X-Fabric-Run-Id`, cap it with a token/step budget (refused with `429 run_budget_exhausted` before the model is called), read its per-step trace at `GET /v1/runs/{id}` (no prompt text kept), and let the gateway re-ask the model when a tool call does not match its schema. `make demo-agent` runs it without a GPU; see [Agent runs](docs/agent-runs.md) |
-| **Edge gateway** | One inference URL in front of every stamp (AKS, k3s on GCP, any VM). Verifies the token locally, routes by model within the caller's account, prefers healthy, ready and nearby stamps, keeps agent runs on one stamp, fails over on connection errors, and keeps serving from its cached routing table when the control plane is down. `make demo-edge` runs it in front of two local stamps; see [Edge gateway](docs/edge-gateway.md) |
-| **Server-side tool loop** | `POST /v1/agent/runs` runs a whole tool-using agent in one request: the gateway calls the model, executes built-in (`calculator`, `current_time`) and allowlisted HTTP tools in parallel, hands client tools back with `requires_action`, and streams each step as SSE. Every model call is authenticated, limited and metered. `make demo-agent-loop`; see [Agent tool loop](docs/agent-tool-loop.md) |
-| **File search** | OpenAI-compatible `/v1/files` and `/v1/vector_stores` (the stock `openai` SDK works) on the stamp, account-isolated, with BM25 or hybrid (metered embeddings) ranking, and a hosted `file_search` tool in `/v1/agent/runs` that returns passages with citations. Stamp-local SQLite storage, edge affinity per account. `make demo-file-search-mcp`; see [File search](docs/file-search.md) |
-| **MCP connectors** | `{"type": "mcp", ...}` tools in `/v1/agent/runs`: the gateway connects to a remote MCP server (Streamable HTTP), exposes its allowed tools to the model and executes them, with a separate host allowlist, SSRF guards, per-server credentials that never leave for anywhere else, and optional per-call user approval. See [MCP connectors](docs/mcp-connectors.md) |
-| **Hosted agent tools** | `code_interpreter`, `web_fetch` and `web_search`, executed by the stamp inside the tool loop. Code runs in a separate sandbox service (process isolation, rlimits, no-egress NetworkPolicy, optional gVisor; works air-gapped) or in E2B microVMs; web access goes through an SSRF guard with DNS pinning, via direct fetch, SearXNG or self-hosted Firecrawl. Off by default per stamp. `make demo-hosted-tools`; see [Hosted tools](docs/hosted-tools.md) |
-| **Model cascade** | `model: "cascade"` answers with the account's smallest deployment and escalates to a larger one only on cheap, explainable checks (truncation, empty answer, bad tool call, schema mismatch), reporting the path in `X-Fabric-Cascade-*` headers. `make demo-cascade`; see [Model cascade](docs/model-cascade.md) |
-| **Context-aware model routing** | Use `model: "auto"` to select an account-owned, healthy deployment by endpoint, modality, context bound, code/reasoning fit, and configured priority—without a request-time control-plane call |
-| **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
-| **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
-| **Declarative deployment** | A customer declares intent; the operator reconciles GPU hosts to match, one at a time, rolling back a release that never becomes ready |
-| **Hardware-aware configuration** | The operator profiles its GPU nodes and corrects settings the hardware cannot execute, naming the reason |
-| **Per-deployment kernel selection** | `kernel_mode` chooses the Fabric decode kernel or the server's own, from one image |
-| **Audit trail** | Every privileged change recorded transactionally; owners and admins filter, page and export it (NDJSON), and exports are themselves audited |
-| **Token-rate limits** | Per-account tokens per minute, charged from the model's own metered usage and coordinated across gateways; an account in debt gets `429` with `Retry-After` |
-| **Credential rotation** | Stamps rotate their machine credentials by age or on request, outbound-only, with an overlap so nothing breaks mid-rotation |
-| **Metering** | The model's own token counts attributed to account, deployment, and cluster |
-| **Observability** | Prometheus and Grafana over engine, gateway, and GPU metrics |
-
----
+The control plane owns accounts, credentials, deployments and placement. Each stamp runs an
+agent that pulls desired state outbound, an operator that runs the model hosts, and a gateway
+that verifies tokens locally and serves requests. More views, including an editable draw.io
+diagram, are in [docs/architecture](docs/architecture/README.md).
 
 ## Quick start
 
-### Try the whole platform locally (no GPU, no cluster)
+### Run the whole platform locally — no GPU, no cluster
 
-With [uv](https://docs.astral.sh/uv/), Go 1.24+, `curl` and `openssl` installed:
+Requires [uv](https://docs.astral.sh/uv/), Go 1.24+, `curl` and `openssl`.
 
 ```bash
 make demo
 ```
 
-This runs a real control plane over HTTP, the compiled Go agent and usage collector, and the
-inference data plane, with a stub model host standing in for vLLM. It enrolls a stamp with a
-single-use token, places a deployment, serves an authorized OpenAI-style request, refuses a
-forged token, and meters the usage back to the account exactly once. Set
-`FABRIC_E2E_UPSTREAM` to a running OpenAI-compatible host to use a real model. `make check`
-runs every test and lint suite; see [CONTRIBUTING.md](CONTRIBUTING.md). `make demo-agent`
-runs the same loop and then a multi-step agent under a budget, with its trace and the tool-call
-guard ([Agent runs](docs/agent-runs.md)).
+This runs a real control plane, the Go agent and usage collector, and the gateway in front of a
+stub model host. It enrolls a stamp, places a deployment, serves an authorized request, refuses
+a forged token and meters the usage exactly once. Point `FABRIC_E2E_UPSTREAM` at any
+OpenAI-compatible server to use a real model.
+
+| Demo | Shows |
+|---|---|
+| `make demo-console` | The console against a local platform with a seeded account |
+| `make demo-agent` | A multi-step agent with a budget, trace and tool-call repair |
+| `make demo-agent-loop` | A whole agent in one request on the gateway |
+| `make demo-hosted-tools` | Code interpreter, web search and web fetch |
+| `make demo-file-search-mcp` | File search with citations and an approval-gated MCP tool |
+| `make demo-openai-agents` | The OpenAI Agents SDK running on Fabric |
+| `make demo-cascade` | Small model first, escalation on failed checks |
+| `make demo-edge` | One URL over two stamps, failover, control-plane outage |
 
 ### Call a deployed Fabric
 
-Fabric includes [runnable API examples](examples/README.md) for Python and curl. They exchange an
-API key for a short-lived inference token; the raw `fab_key_…` value is never sent to the data
-plane.
-
 ```bash
-cp examples/.env.example examples/.env
-# Set FABRIC_CONTROL_URL, FABRIC_INFERENCE_URL, and FABRIC_API_KEY, then:
+cp examples/.env.example examples/.env   # set FABRIC_CONTROL_URL, FABRIC_INFERENCE_URL, FABRIC_API_KEY
 set -a; source examples/.env; set +a
-uv sync --project examples/python
-uv run --project examples/python python examples/python/scripts/list_models.py
 uv run --project examples/python python examples/python/scripts/chat.py
 ```
 
-`FABRIC_MODEL` optionally selects a deployment alias (default `qwen3.5-0.8b`). Set it to
-`auto` to route from request context. Deployments declare bounded `capabilities` flags such as
-`vision`, `code`, `reasoning`, `transcription`, and `translation`, plus an optional `priority`
-from -100 to 100. Chat and completion default to enabled for legacy deployments; structurally
-different vision and audio inputs are opt-in. An OpenAI `extra_body` value such as
-`{"routing": {"task": "code"}}` can override heuristic task detection. Routing stays within the
-authenticated account and consumes the `routing` extension before the request reaches the model
-host.
+The examples exchange an API key for a short-lived inference token, so the key itself never
+reaches a gateway. See the [examples guide](examples/README.md) for streaming, tools, vision,
+audio and agents.
 
-Tokens are short-lived and audience-specific, so long-running clients should re-exchange. See the
-[examples guide](examples/README.md) for streaming, vision, audio, tools, concurrency, read-only
-control-plane inspection, API compatibility, and caveats.
+### Install on Kubernetes
 
----
-
-## Running it locally
-
-Each component is independent and pins its own dependencies.
-
-```bash
-# Control plane
-cd control-plane
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e '.[dev]'
-cp .env.example .env                       # database, identity, signing values
-openssl genrsa -out signing.pem 2048
-.venv/bin/python -m alembic upgrade head
-.venv/bin/python -m app.cli seed-system-account
-.venv/bin/python -m app.cli bootstrap-account --slug acme --email ops@acme.test
-.venv/bin/python -m uvicorn app.main:app --reload --port 8080
-```
-
-`bootstrap-account` exists because every other route to an account runs through an identity
-provider, which makes the first account impossible to create before one is configured. It is
-a command rather than an endpoint on purpose: an unauthenticated endpoint that created tenants
-would be a hole, while a command requires database credentials.
-
-```bash
-# Agent, operator, collector
-cd agent && go test ./... && go build ./...
-
-# Data plane
-cd data-plane && .venv/bin/python -m pytest -q
-
-# Kernels (needs a CUDA GPU)
-cd runtime && .venv/bin/python -m harness.runner --target rtx4070-dev
-```
-
-Declaring a harness target that does not match the GPU present fails closed, so a development
-measurement cannot be recorded as a production result.
-
-### Bootstrap a Kubernetes stamp
-
-`deploy/scripts/kind-e2e.sh` runs the complete loop on a disposable local cluster. To connect a persistent Kubernetes cluster to an existing Fabric control plane, use the workflow below.
-
-**Prerequisites:** Kubernetes 1.27 or newer, Helm 3, a default StorageClass, outbound HTTPS access to the control plane, and pull access to the configured agent and data-plane images. GPU clusters must expose allocatable `nvidia.com/gpu` resources. Keep `persistence.enabled=true`: the agent stores its durable identity on that volume, while enrollment tokens are single use.
-
-Set the control-plane URL and exchange an account API key for a short-lived control token. API-key exchange derives `ACCOUNT_ID` from the key:
-
-```bash
-export CONTROL_URL=https://control.fabric.example
-export FABRIC_API_KEY='fab_key_...'
-
-TOKEN_RESPONSE=$(curl -fsS -X POST "$CONTROL_URL/v1/token" \
-  -H 'Content-Type: application/json' \
-  -d "{\"grant_type\":\"api_key\",\"api_key\":\"$FABRIC_API_KEY\",\"audience\":\"fabric-control\"}")
-export CONTROL_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" \
-  | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
-export ACCOUNT_ID=$(printf '%s' "$TOKEN_RESPONSE" \
-  | python -c 'import json,sys; print(json.load(sys.stdin)["account_id"])')
-```
-
-For a newly self-hosted control plane, create the first account and API key from its pod before running the exchange above:
-
-```bash
-kubectl exec -n fabric-control deploy/cp-fabric-control-plane -- \
-  python -m app.cli bootstrap-account \
-    --slug acme --email ops@example.com --name "Acme"
-```
-
-The command prints the account ID and API key once. A customer-owned cluster uses `byoi`; `managed` enrollment is reserved for Fabric's system account.
-
-Create a token, immediately place it in a Kubernetes Secret, and avoid passing the raw credential through Helm values or command history:
-
-```bash
-TOKEN_RESPONSE=$(curl -fsS -X POST \
-  "$CONTROL_URL/v1/accounts/$ACCOUNT_ID/stamp-enrollment-tokens" \
-  -H "Authorization: Bearer $CONTROL_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"allowed_mode":"byoi","expires_in_minutes":60}')
-ENROLLMENT_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" \
-  | python -c 'import json,sys; print(json.load(sys.stdin)["enrollment_token"])')
-
-kubectl create namespace fabric-stamp
-kubectl -n fabric-stamp create secret generic stamp-enrollment \
-  --from-literal=enrollment-token="$ENROLLMENT_TOKEN"
-unset ENROLLMENT_TOKEN TOKEN_RESPONSE
-```
-
-Install the chart against an existing OpenAI-compatible model host:
-
-```bash
-helm upgrade --install stamp deploy/helm/fabric-stamp \
-  --namespace fabric-stamp \
-  --set controlPlane.url="$CONTROL_URL" \
-  --set controlPlane.jwtIssuer="$CONTROL_URL" \
-  --set enrollment.existingSecret=stamp-enrollment \
-  --set enrollment.existingSecretKey=enrollment-token \
-  --set stamp.name=my-cluster \
-  --set stamp.orchestrator=kubernetes \
-  --set modelHost.url=http://vllm.fabric-stamp.svc:8000 \
-  --wait --timeout 5m
-```
-
-Replace `modelHost.url` with a URL reachable from the stamp. To let Fabric create model-host workloads instead, omit `modelHost.url` and enable the operator:
-
-```bash
-helm upgrade --install stamp deploy/helm/fabric-stamp \
-  --namespace fabric-stamp \
-  --set controlPlane.url="$CONTROL_URL" \
-  --set controlPlane.jwtIssuer="$CONTROL_URL" \
-  --set enrollment.existingSecret=stamp-enrollment \
-  --set enrollment.existingSecretKey=enrollment-token \
-  --set stamp.name=my-cluster \
-  --set stamp.orchestrator=kubernetes \
-  --set operator.enabled=true \
-  --set operator.managedModelHost.image=REGISTRY/fabric/model-host:0.1.0 \
-  --set operator.managedModelHost.modelRef=Qwen/Qwen3.5-2B \
-  --set operator.managedModelHost.servedName=qwen3.5-2b \
-  --wait --timeout 20m
-```
-
-For private registries, configure `imagePullSecrets` for chart containers and cluster-level registry access for operator-created model hosts. Configure `gpu.nodeSelector`, `gpu.tolerations`, and `stamp.region` when placement must target specific GPU nodes or a region.
-
-Verify enrollment before removing the one-time Secret:
-
-```bash
-kubectl -n fabric-stamp rollout status statefulset/stamp-fabric-stamp
-kubectl -n fabric-stamp logs statefulset/stamp-fabric-stamp -c agent
-curl -fsS "$CONTROL_URL/v1/accounts/$ACCOUNT_ID/stamps" \
-  -H "Authorization: Bearer $CONTROL_TOKEN"
-kubectl -n fabric-stamp delete secret stamp-enrollment
-```
-
-The agent log should contain `enrolled`; subsequent restarts load the persisted identity without the Secret. Keep its name in Helm values because chart validation requires a token or Secret reference during upgrades, while the pod's Secret reference is optional:
-
-```bash
-helm upgrade stamp deploy/helm/fabric-stamp \
-  --namespace fabric-stamp --reuse-values \
-  --set enrollment.token='' \
-  --set enrollment.existingSecret=stamp-enrollment
-```
-
-Uninstalling the release does not revoke the server-side stamp and some operational state is retained. Revoke a decommissioned stamp through `DELETE /v1/accounts/{account_id}/stamps/{stamp_id}` and inspect retained identity/usage PVCs before deleting them. See the [production deployment guide](DEPLOYMENT.md) for GPU nodes, registries, operator-managed hosts, Istio/TLS, observability, verification, and lifecycle details; see [Packaging and deployment](docs/context/packaging-deployment.md) for component architecture.
-
----
-
-## Earlier measured results
-
-From an earlier deployed validation snapshot. Full context, including what these numbers do not show, is in the [project review](docs/project-review.md); do not treat them as benchmarks of the current five-node topology.
-
-| Observation | Value |
+| Goal | Guide |
 |---|---|
-| Weights load from node-local NVMe | 4.25 GiB in 3.3 s |
-| Cold start to first healthy response | ~510 s, mostly graph compilation |
-| Single-stream decode | ~16 ms per token (~63 tokens/s) |
-| Time to first token (p95) | 1.6 s |
-| Concurrency cap | 30 parallel requests → 5 served, 25 refused `429` with `Retry-After` |
-| GPU profile detected | `Tesla T4`, compute capability 7.5, 16384 MiB |
+| A complete single-tenant install with Helm | [Single-tenant installation](docs/single-tenant-installation.md) |
+| Run components yourself, or enroll a cluster as a stamp | [Getting started](docs/getting-started.md) |
+| Put one URL in front of every stamp | [Edge gateway](docs/edge-gateway.md) |
+| Expose a stamp's gateway over HTTPS | [Stamp endpoints](docs/stamp-native-endpoint.md) |
+| Roll a release out to existing stamps | [Release runbook](docs/demo-runbook.md) |
 
-### The decode kernel
-
-A fused single-token gated-delta kernel replacing the one vLLM calls, doing QKV unpacking,
-normalisation, gate derivation, the recurrence, and state scatter in one launch.
-
-| Measured inside a CUDA graph, T4, launch-model shapes | vLLM | Fabric | |
-|---|---|---|---|
-| 1 sequence | 20.37 µs | 11.30 µs | **1.81x** |
-| 4 sequences | 33.59 µs | 26.77 µs | 1.06x |
-| 16 and 32 sequences | — | — | parity |
-
-Output and next recurrent state are **bit-identical** to vLLM's kernel at every batch size
-tested.
-
-**What is not claimed:** that the platform serves tokens faster. This operation is roughly 2%
-of a token's cost, so eliminating it entirely would move end-to-end throughput by about that
-much, and no end-to-end advantage was demonstrated. Parity at higher batch is what the
-arithmetic requires: the step rewrites the whole recurrent state each token, about 2 MB at
-these shapes, so both implementations meet the same bandwidth limit.
-
----
-
-## Verification
-
-```
-Go (agent, operator, collector)     204 tests
-Control plane (SQLite)              233 tests
-Control plane (PostgreSQL)          247 tests, as a role without BYPASSRLS
-Data plane                          406 tests
-Runtime (kernels, harness)           77 tests on CPU; 23 more need a GPU
-Serving (vLLM integration)           45 tests without vLLM; 5 more need it
-Console                              13 test files, lint, typecheck, image build
-Helm charts                          lint, production rendering, upgrade checks
-Cluster                              end-to-end on a throwaway cluster
-```
-
-Everything above except the GPU, vLLM and cluster runs is executed by
-[CI](.depot/workflows/ci.yaml) on every pull request.
-
-The control-plane suite runs against both engines because row-level security is a no-op on
-SQLite: only the PostgreSQL run proves isolation is enforced.
-
----
+Release images are published by CI to `public.ecr.aws/hexelstudio/fabric/<component>:git-<sha>`.
 
 ## Repository layout
 
-| Path | Contents | Status |
-|---|---|---|
-| [`control-plane/`](control-plane/) | FastAPI control plane, schema, migrations | Implemented |
-| [`data-plane/`](data-plane/) | Inference gateway: verification, routing, limits, metrics | Implemented |
-| [`agent/`](agent/) | Go agent, operator, usage collector | Implemented |
-| [`runtime/`](runtime/) | Triton kernels, dispatch, benchmark harness, artifacts | One kernel, measured |
-| [`serving/`](serving/) | vLLM integration and kernel registration | Registered in a live host |
-| [`deploy/`](deploy/) | Images, Helm charts, observability, cluster scripts | Implemented |
-| [`docs/`](docs/) | Architecture, design, ADRs, project review | Living context |
-| [`v1/`](v1/) | Next.js console: live deployment state, themes, model comparison, architecture | Implemented |
-| [`utils/transformers/`](utils/transformers/) | Vendored model reference | Not a runtime integration |
+| Path | Contents |
+|---|---|
+| [`control-plane/`](control-plane/) | FastAPI control plane: accounts, credentials, deployments, placement, audit |
+| [`data-plane/`](data-plane/) | Stamp gateway and edge gateway: auth, routing, limits, agents, hosted tools |
+| [`agent/`](agent/) | Go agent, operator and usage collector that run in each stamp |
+| [`sandbox/`](sandbox/) | Isolated code-execution service for the code interpreter |
+| [`v1/`](v1/) | Next.js console |
+| [`runtime/`](runtime/) | Triton kernels, dispatch, launch tuning and benchmark harness |
+| [`serving/`](serving/) | vLLM integration and kernel registration |
+| [`deploy/`](deploy/) | Container images, Helm charts, observability |
+| [`examples/`](examples/) | Python and curl clients |
+| [`docs/`](docs/) | Guides, design, architecture decision records |
+| [`paper/`](paper/) | Technical papers and their figure pipeline |
 
----
+## Development
+
+```bash
+make check      # every test and lint suite CI runs
+make help       # all targets
+```
+
+CI runs on every pull request: the control plane on SQLite and on PostgreSQL as a role without
+`BYPASSRLS`, the data plane, sandbox, runtime and serving suites on CPU, the Go agent, the
+console (lint, typecheck, tests, image build), Helm chart checks, and the end-to-end platform
+loops. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Project status
+
+The platform runs in production on NVIDIA T4 GPUs, with A10 and RTX PRO 6000 stamps being
+added. GPU node provisioning and DNS remain outside Fabric. Hosted tools, the edge gateway and
+the agent features are new and validated with automated tests and local end-to-end demos; the
+kernel is measured at the operation level only. Measured numbers, and what they do not claim,
+are in [Measured results](docs/measured-results.md); planned work is in the
+[roadmap](docs/context/roadmap.md).
 
 ## Documentation
 
-Architecture diagrams (Mermaid, plain text and draw.io): [docs/architecture](docs/architecture/README.md).
+**Using Fabric** —
+[Examples](examples/README.md) ·
+[Responses API](docs/openai-responses.md) ·
+[Messages API](docs/anthropic-messages.md) ·
+[OpenAI Agents SDK](docs/openai-agents-sdk.md) ·
+[Agent runs](docs/agent-runs.md) ·
+[Tool loop](docs/agent-tool-loop.md) ·
+[Hosted tools](docs/hosted-tools.md) ·
+[File search](docs/file-search.md) ·
+[MCP connectors](docs/mcp-connectors.md) ·
+[Model cascade](docs/model-cascade.md)
 
-Start with the [project review](docs/project-review.md) or the
-[context index](docs/context/README.md).
-
-**Design and state**
-[Current state](docs/context/current-state.md) ·
-[System design](docs/context/system-design.md) ·
-[Architecture requirements](docs/context/architecture-requirements.md) ·
-[Product requirements](docs/context/product-requirements.md)
-
-**Services**
-[Control plane](docs/context/control-plane-service.md) ·
-[Control-plane data and API](docs/context/control-plane-data-api-design.md) ·
-[Data plane](docs/context/data-plane-service.md) ·
-[Agent and collector](docs/context/cluster-agent-service.md) ·
-[Operator and deployment](docs/context/operator-deployment.md)
-
-**Runtime and research**
-[Runtime design](docs/context/runtime-design.md) ·
-[Benchmark plan](docs/context/benchmark-research-plan.md) ·
-[T4 packed decode validation](docs/runtime-performance-validation.md)
-
-**Operations**
-[Single-tenant Helm installation](docs/single-tenant-installation.md) ·
-[Native Kubernetes stamp endpoints](docs/stamp-native-endpoint.md) ·
-[Packaging and deployment](docs/context/packaging-deployment.md) ·
-[Cluster connection and performance checks](docs/cluster-performance-validation.md) ·
-[Qwen3.5 startup diagnosis](docs/model-startup-diagnosis.md) ·
-[Observability and SLOs](docs/context/observability-slos.md) ·
+**Operating Fabric** —
+[Single-tenant installation](docs/single-tenant-installation.md) ·
+[Getting started](docs/getting-started.md) ·
+[Deployment record](docs/deployment.md) ·
+[Edge gateway](docs/edge-gateway.md) ·
+[Console](docs/console-agents.md) ·
+[Console demo](docs/console-demo.md) ·
+[Kernel tuning](docs/kernel-tuning-t4-a10.md) ·
+[Observability](docs/context/observability-slos.md) ·
 [Security and identity](docs/context/security-identity.md)
 
-**Direction**
-[Direction](docs/platform-direction.md) ·
-[Roadmap](docs/context/roadmap.md) ·
-[Risks and open questions](docs/context/risks-open-questions.md) ·
-[Architecture decision records](docs/context/adrs/README.md)
+**Design** —
+[Architecture](docs/architecture/README.md) ·
+[Project review](docs/project-review.md) ·
+[System design](docs/context/system-design.md) ·
+[Current state](docs/context/current-state.md) ·
+[Decision records](docs/context/adrs/README.md) ·
+[Air-gapped design](docs/airgapped-onprem-design.md) ·
+[Context index](docs/context/README.md)
 
----
+**Research** —
+[Measured results](docs/measured-results.md) ·
+[Model optimization](docs/model-optimization.md) ·
+[Papers](paper/README.md)
 
-## Documentation policy
+Code is the source of truth: documentation describes what is implemented, planned work is
+labelled as planned, and performance claims stay tied to reproducible artifacts on named
+hardware.
 
-Code is the source of truth. Documentation describes what is implemented; planned behaviour is
-labelled as planned. Benchmark claims stay tied to reproducible artifacts and exact hardware,
-and durable architecture decisions are recorded as ADRs. Project documentation lives under
-[`docs/`](docs/); this file is an index and quick start.
+## Contributing and security
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities
+privately as described in [SECURITY.md](SECURITY.md).

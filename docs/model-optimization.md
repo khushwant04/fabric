@@ -149,7 +149,7 @@ Measure: graph memory reservation, startup time, p50/p95/p99 TPOT, cache capacit
 
 > **Now unblocked.** `max_model_len`, `max_num_seqs`, `gpu_memory_utilization`, and
 > `execution` are per-deployment control-plane fields as of the change recorded in
-> [`DEPLOYMENT.md`](DEPLOYMENT.md) §16, so these experiments no longer need a chart edit
+> [`deployment.md`](deployment.md) §16, so these experiments no longer need a chart edit
 > and a stamp-wide restart. `dtype` remains stamp-wide by design.
 
 Candidate search ranges:
@@ -401,7 +401,7 @@ Contributions:
 
 **Safe Workload-Adaptive GPU Kernel Substitution for Managed Recurrent-LLM Inference**
 
-Already specified in `TECHNICAL-PAPER.md`. Narrower and more kernel-focused; likely lower end-to-end effect but strong safety/reproducibility story.
+Already specified in [`paper/kernel-substitution-direction.md`](../paper/kernel-substitution-direction.md). Narrower and more kernel-focused; likely lower end-to-end effect but strong safety/reproducibility story.
 
 ### Follow-on architecture paper
 
@@ -454,6 +454,6 @@ A negative result is retained and published. It prevents the same unsafe profile
 
 ## 12. Detailed adaptive-inference design
 
-The complete router, capability cascade, adaptive-thinking, AMEC profile, prefix-locality, SLO-admission, safe online policy, kernel portfolio, experimental methodology, API examples, equations, and paper framing are specified in [`docs/adaptive-inference-research.md`](docs/adaptive-inference-research.md).
+The complete router, capability cascade, adaptive-thinking, AMEC profile, prefix-locality, SLO-admission, safe online policy, kernel portfolio, experimental methodology, API examples, equations, and paper framing are specified in [`docs/adaptive-inference-research.md`](adaptive-inference-research.md).
 
 This document remains the model-level opportunity analysis. The linked design is the proposed cross-layer system built from those opportunities.

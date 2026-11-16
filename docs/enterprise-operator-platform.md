@@ -467,8 +467,8 @@ Steps 1–4 and the deployment half of step 6 are implemented in `v1` (Auth0 ser
 ## 12. Research/product relationship
 
 - [`adaptive-inference-research.md`](adaptive-inference-research.md): adaptive router, AMEC, capability cascade, thinking, kernel portfolio and research evaluation.
-- [`../MODEL-OPTIMIZATION.md`](../MODEL-OPTIMIZATION.md): model-specific architecture and performance opportunities.
-- [`../TECHNICAL-PAPER.md`](../TECHNICAL-PAPER.md): safe workload-adaptive packed-kernel substitution.
-- [`../DEPLOYMENT.md`](../DEPLOYMENT.md): actual deployed environment, verification and cost.
+- [`model-optimization.md`](model-optimization.md): model-specific architecture and performance opportunities.
+- [`paper/kernel-substitution-direction.md`](../paper/kernel-substitution-direction.md): safe workload-adaptive packed-kernel substitution.
+- [`deployment.md`](deployment.md): actual deployed environment, verification and cost.
 
 Research features enter production only through governed model/runtime evidence, canary guards, audit and rollback. Product metrics must never be manufactured to support a paper claim; negative results remain part of the evidence base.
