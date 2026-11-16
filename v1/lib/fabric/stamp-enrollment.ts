@@ -1,7 +1,10 @@
 // Keep setup commands independent of browser state and never persist their token.
-export const STAMP_CHART_REF = "16ab94aa8e18d9984b90011aa33080f62eaa9cdb"
+// One release pins the chart and every image: CI publishes images for each commit on main.
+export const STAMP_RELEASE = "b5bfb1d4404909cea2c2e705471243812eab8b01"
+export const STAMP_IMAGE_REGISTRY = "public.ecr.aws/hexelstudio/fabric"
 export const STAMP_REPOSITORY = "https://github.com/khushwant04/fabric"
-export const K3S_BOOTSTRAP_URL = "https://raw.githubusercontent.com/khushwant04/fabric/bootstrap-k3s-v1/scripts/bootstrap-k3s.sh"
+export const STAMP_BOOTSTRAP_URL = "https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh"
+export const STAMP_MODEL_IMAGE = `${STAMP_IMAGE_REGISTRY}/model-host:git-${STAMP_RELEASE}`
 
 export type StampEnrollmentConfig = {
   controlPlaneUrl: string
@@ -19,6 +22,8 @@ export type StampSetup = {
   gatewayHost: string
   ingressClass: string
   certificateIssuer: string
+  /** Let's Encrypt contact for the public hostname on a k3s VM. */
+  acmeEmail: string
 }
 
 export function httpsControlPlaneUrl(raw: string): string | null {
@@ -49,6 +54,7 @@ function helmString(key: string, value: string): string {
 }
 
 const dnsLabel = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
+const email = /^[^@\s'"]+@[^@\s'"]+\.[^@\s'"]+$/
 const hostname = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/
 
 export function stampSetupError(setup: StampSetup, requireIssuer = true): string | null {
@@ -59,30 +65,45 @@ export function stampSetupError(setup: StampSetup, requireIssuer = true): string
   if (setup.runtimeClass && (!dnsLabel.test(setup.runtimeClass) || setup.runtimeClass.length > 63)) return "Use a valid Kubernetes RuntimeClass name."
   if (!setup.modelImage || /\s|[\x00-\x1f]/.test(setup.modelImage)) return "Enter the vLLM container image for this cluster."
   if (setup.gatewayHost && (!hostname.test(setup.gatewayHost) || setup.gatewayHost.length > 253 || setup.gatewayHost.split(".").some((label) => label.length > 63))) return "Enter the inference gateway DNS hostname without https:// or a path."
-  if (setup.gatewayHost && !setup.certificateIssuer) return "Enter an existing cert-manager ClusterIssuer for the inference gateway."
+  if (setup.gatewayHost && setup.target === "k3s" && !email.test(setup.acmeEmail)) return "Enter a contact email for the Let's Encrypt certificate."
+  if (setup.gatewayHost && setup.target === "kubernetes" && !setup.certificateIssuer) return "Enter an existing cert-manager ClusterIssuer for the inference gateway."
   if (setup.certificateIssuer && (!hostname.test(`${setup.certificateIssuer}.local`) || setup.certificateIssuer.length > 253)) return "Use a valid ClusterIssuer name."
   if (setup.ingressClass && (!dnsLabel.test(setup.ingressClass) || setup.ingressClass.length > 63)) return "Use a valid IngressClass name."
   return null
 }
 
-export function k3sBootstrapCommand(stampName: string, nvidia: boolean): string | null {
-  if (!dnsLabel.test(stampName) || stampName.length > 53) return null
+/** The whole k3s VM setup in one command: k3s, GPU runtime, TLS, enrollment and the stamp. */
+export function stampBootstrapCommand(setup: StampSetup, token: string, nvidia: boolean): string | null {
+  if (setup.target !== "k3s" || stampSetupError(setup) || !token || /[\r\n\x00]/.test(token)) return null
+  const controlPlane = httpsControlPlaneUrl(setup.controlPlaneUrl)!
+  const options = [
+    `--name ${shellQuote(setup.stampName)}`,
+    `--control-plane ${shellQuote(controlPlane)}`,
+    `--token ${shellQuote(token)}`,
+  ]
+  if (setup.jwtIssuer && setup.jwtIssuer.replace(/\/$/, "") !== controlPlane) options.push(`--issuer ${shellQuote(setup.jwtIssuer)}`)
+  if (setup.gatewayHost) options.push(`--host ${shellQuote(setup.gatewayHost)}`, `--email ${shellQuote(setup.acmeEmail)}`)
+  if (!nvidia) options.push("--no-gpu")
+  options.push(`--release ${STAMP_RELEASE}`)
   return [
-    `curl --fail --location --proto '=https' ${shellQuote(K3S_BOOTSTRAP_URL)} \\`,
-    "  --output fabric-bootstrap-k3s.sh && \\",
-    `sudo bash ./fabric-bootstrap-k3s.sh --node-name ${shellQuote(stampName)}${nvidia ? " --nvidia" : ""}`,
+    `curl -fsSL ${shellQuote(STAMP_BOOTSTRAP_URL)} | sudo bash -s -- \\`,
+    options.map((option, index) => `  ${option}${index < options.length - 1 ? " \\" : ""}`).join("\n"),
   ].join("\n")
 }
 
 export function stampHelmCommand(setup: StampSetup, token: string): string | null {
   if (stampSetupError(setup) || !token || /[\r\n\x00]/.test(token)) return null
-  const root = `fabric-${STAMP_CHART_REF}`
+  const root = `fabric-${STAMP_RELEASE}`
+  const tag = `git-${STAMP_RELEASE}`
   const helm = setup.target === "k3s"
     ? "sudo helm --kubeconfig /etc/rancher/k3s/k3s.yaml --kube-context default"
     : `helm --kube-context ${shellQuote(setup.kubeContext.trim())}`
   const options = [
     "--namespace fabric-stamp --create-namespace",
-    `--values ${root}/deploy/releases/singletenant-20261006/stamp-images.yaml`,
+    helmString("image.agent.repository", `${STAMP_IMAGE_REGISTRY}/agent`),
+    helmString("image.agent.tag", tag),
+    helmString("image.dataPlane.repository", `${STAMP_IMAGE_REGISTRY}/data-plane`),
+    helmString("image.dataPlane.tag", tag),
     helmString("stamp.name", setup.stampName),
     helmString("stamp.orchestrator", setup.target),
     helmString("controlPlane.url", httpsControlPlaneUrl(setup.controlPlaneUrl)!),
@@ -106,7 +127,7 @@ export function stampHelmCommand(setup: StampSetup, token: string): string | nul
   options.push("--wait --timeout 15m")
   // && keeps a failed download/extraction from running Helm against a stale directory.
   return [
-    `curl --fail --location --proto '=https' ${shellQuote(`${STAMP_REPOSITORY}/archive/${STAMP_CHART_REF}.tar.gz`)} \\`,
+    `curl --fail --location --proto '=https' ${shellQuote(`${STAMP_REPOSITORY}/archive/${STAMP_RELEASE}.tar.gz`)} \\`,
     `  --output ${root}.tar.gz && \\`,
     `tar -xzf ${root}.tar.gz && \\`,
     `${helm} upgrade --install ${shellQuote(setup.stampName)} ./${root}/deploy/helm/fabric-stamp \\`,

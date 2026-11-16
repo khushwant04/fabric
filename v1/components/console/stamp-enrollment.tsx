@@ -14,10 +14,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import {
-  K3S_BOOTSTRAP_URL,
-  STAMP_CHART_REF,
+  STAMP_BOOTSTRAP_URL,
+  STAMP_MODEL_IMAGE,
+  STAMP_RELEASE,
   STAMP_REPOSITORY,
-  k3sBootstrapCommand,
+  stampBootstrapCommand,
   stampHelmCommand,
   stampSetupError,
   type StampEnrollmentConfig,
@@ -35,7 +36,7 @@ const panels = [
 function CopyCommand({ command, label }: { command: string; label: string }) {
   const [copied, setCopied] = useState("")
   const [error, setError] = useState("")
-  return <div className="w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-border/60 bg-muted/30">
+  return <div className="w-full min-w-0 max-w-full overflow-hidden border border-border/60 bg-muted/30">
     <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
       <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><TerminalIcon className="size-3.5 shrink-0" /><span className="truncate">{label}</span></span>
       <Button type="button" variant="ghost" size="sm" aria-label={`Copy ${label}`} onClick={async () => {
@@ -75,7 +76,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
   const [setup, setSetup] = useState<StampSetup>({
     target: "k3s", stampName: "gpu-stamp", controlPlaneUrl: config.controlPlaneUrl,
     jwtIssuer: config.jwtIssuer, kubeContext: "", runtimeClass: "nvidia",
-    modelImage: "vllm/vllm-openai:v0.26.0", gatewayHost: "", ingressClass: "traefik", certificateIssuer: "",
+    modelImage: STAMP_MODEL_IMAGE, gatewayHost: "", ingressClass: "traefik", certificateIssuer: "", acmeEmail: "",
   })
   const update = (key: keyof StampSetup, value: string) => { setDirty(true); setSetup((previous) => ({ ...previous, [key]: value })) }
   const effectiveSetup = { ...setup, jwtIssuer: state.enrollmentIssuer || setup.jwtIssuer }
@@ -83,8 +84,10 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
   const expiry = Number(expiresInMinutes)
   const expiryError = Number.isInteger(expiry) && expiry >= 5 && expiry <= 1440 ? null : "Choose a token lifetime between 5 minutes and 24 hours."
   const generationError = setupError || expiryError
-  const bootstrap = k3sBootstrapCommand(setup.stampName, nvidia)
-  const helm = state.enrollmentToken ? stampHelmCommand(effectiveSetup, state.enrollmentToken) : null
+  const k3s = setup.target === "k3s"
+  const command = !state.enrollmentToken ? null
+    : k3s ? stampBootstrapCommand(effectiveSetup, state.enrollmentToken, nvidia)
+      : stampHelmCommand(effectiveSetup, state.enrollmentToken)
   const commandError = state.enrollmentToken ? stampSetupError(effectiveSetup) : null
   const selectedPanel = panels.find((item) => item.id === panel)!
   const PanelIcon = selectedPanel.icon
@@ -122,7 +125,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
               const done = item.id === "cluster" ? panel !== "cluster" : item.id === "enrollment" ? !!state.enrollmentToken : false
               return <li key={item.id} className="min-w-0">
                 <button type="button" disabled={pending} aria-current={panel === item.id ? "step" : undefined} onClick={() => setPanel(item.id)} className={cn(
-                  "flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:px-3",
+                  "flex w-full min-w-0 items-center gap-2.5 px-2 py-2 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:px-3",
                   panel === item.id ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}>
                   <span aria-hidden="true" className={cn("hidden size-6 shrink-0 items-center justify-center rounded-none border text-[11px] font-medium tabular-nums sm:flex", panel === item.id ? "border-foreground/20 bg-background text-foreground" : "border-border")}>{done ? <CheckIcon className="size-3.5" /> : index + 1}</span>
@@ -136,7 +139,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
         <FormDrawerBody key={panel} role="region" aria-labelledby={`${id}-panel-title`} className="space-y-5 [overflow-wrap:anywhere] [&_[data-slot=field]]:min-w-0">
           <div className="flex min-w-0 items-center gap-2.5">
             <PanelIcon className="size-4 shrink-0 text-muted-foreground" /><h3 id={`${id}-panel-title`} className="text-sm font-medium">{selectedPanel.title}</h3>
-            {panel === "enrollment" ? <a href={`${STAMP_REPOSITORY}/tree/${STAMP_CHART_REF}/deploy/helm/fabric-stamp`} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">Helm chart<ExternalLinkIcon className="size-3" /></a> : null}
+            {panel === "enrollment" ? <a href={k3s ? STAMP_BOOTSTRAP_URL : `${STAMP_REPOSITORY}/tree/${STAMP_RELEASE}/deploy/helm/fabric-stamp`} target="_blank" rel="noreferrer" className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">{k3s ? "Setup script" : "Helm chart"}<ExternalLinkIcon className="size-3" /></a> : null}
           </div>
 
           {panel === "cluster" ? <>
@@ -150,35 +153,51 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
               <Field><FieldLabel htmlFor={`${id}-name`}>Stamp name</FieldLabel><Input id={`${id}-name`} value={setup.stampName} onChange={(event) => update("stampName", event.target.value)} maxLength={53} disabled={pending} /></Field>
             </div>
             {setup.target === "k3s" ? <>
-              <div className="space-y-3"><h4 className="text-sm font-medium">Create a k3s cluster on your VM</h4><p className="text-xs leading-5 text-muted-foreground">Run this on Ubuntu 22.04 or 24.04. The script installs k3s and Helm, with Traefik and local storage. Existing local k3s installations are reused.</p>
-                <label className="flex items-center gap-2 text-xs"><Checkbox checked={nvidia} disabled={pending} onCheckedChange={(checked) => { setNvidia(checked === true); update("runtimeClass", checked === true ? "nvidia" : "") }} />Enable NVIDIA GPU support</label>
-                {nvidia ? <p className="text-xs leading-5 text-muted-foreground">Install the correct NVIDIA driver first; <code>nvidia-smi</code> must work. This adds container support and measured GPU labels.</p> : null}
+              <div className="space-y-3">
+                <h4 className="text-sm font-medium">One command sets up the whole VM</h4>
+                <p className="text-xs leading-5 text-muted-foreground">After you generate a token, you get a single command. It installs k3s with GPU support, TLS for the public hostname and the Fabric stamp, then waits until the stamp has enrolled. Re-running it later upgrades or repairs the stamp without a new token.</p>
+                <label className="flex items-center gap-2 text-xs"><Checkbox checked={nvidia} disabled={pending} onCheckedChange={(checked) => { setNvidia(checked === true); update("runtimeClass", checked === true ? "nvidia" : "") }} />This VM has NVIDIA GPUs</label>
               </div>
-              {bootstrap ? <CopyCommand command={bootstrap} label="VM setup command" /> : <FieldError>Enter a valid stamp name to see the setup command.</FieldError>}
-              <a href={K3S_BOOTSTRAP_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">View the GitHub script<ExternalLinkIcon className="size-3" /></a>
+              <div className="border border-border/60">
+                <p className="border-b border-border/60 px-3 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">Before you run it</p>
+                <ul className="divide-y divide-border/60 text-xs">
+                  <li className="px-3 py-2">Ubuntu 22.04 or 24.04 on x86_64, with systemd.</li>
+                  {nvidia ? <li className="px-3 py-2">The NVIDIA driver is installed and <code>nvidia-smi</code> works. vLLM 0.26 needs driver R580 or newer.</li> : null}
+                  <li className="px-3 py-2">For public inference: a DNS A record for the stamp hostname pointing at the VM, and inbound ports 80 and 443 open.</li>
+                  <li className="px-3 py-2">Outbound HTTPS to the control plane, GitHub, the image registry and Hugging Face.</li>
+                </ul>
+              </div>
             </> : <Field><FieldLabel htmlFor={`${id}-context`}>Kubectl context</FieldLabel><Input id={`${id}-context`} value={setup.kubeContext} onChange={(event) => update("kubeContext", event.target.value)} placeholder="Context from kubectl config get-contexts" disabled={pending} /><FieldDescription>Run Helm on a machine with this context, cluster-admin access and working GPU support.</FieldDescription></Field>}
           </> : null}
 
           {panel === "enrollment" ? <>
-            <p className="text-sm leading-6 text-muted-foreground">Install the Fabric Helm chart on your cluster. Its operator joins this account and reconciles the models you deploy.</p>
+            <p className="text-sm leading-6 text-muted-foreground">{k3s ? "Run one command on the VM. It prepares the machine, installs the stamp and joins it to this account." : "Install the Fabric Helm chart on your cluster. Its operator joins this account and reconciles the models you deploy."}</p>
             <Field><FieldLabel htmlFor={`${id}-control`}>Control-plane address</FieldLabel><Input id={`${id}-control`} type="url" value={setup.controlPlaneUrl} onChange={(event) => update("controlPlaneUrl", event.target.value)} placeholder="https://control.your-domain.com" disabled={pending} /><FieldDescription>The HTTPS address reachable from your cluster.</FieldDescription></Field>
-            <div className="rounded-xl border border-border/50 px-4 py-3 text-xs"><p className="font-medium">Helm chart</p><p className="mt-1 font-mono text-[11px] text-muted-foreground">deploy/helm/fabric-stamp</p></div>
-            <div className="space-y-2 text-xs text-muted-foreground"><p>Model runtime: <code>{setup.modelImage}</code></p><p className="leading-5">vLLM 0.26 needs an R580 or newer driver. For A10 GRID 570, choose a CUDA 12.8 runtime in Runtime &amp; gateway.</p></div>
+            <div className="border border-border/60 px-4 py-3 text-xs"><p className="font-medium">Release</p><p className="mt-1 font-mono text-[11px] text-muted-foreground">{STAMP_RELEASE.slice(0, 12)} · chart, agent, gateway and model host</p></div>
+            {k3s ? <p className="text-xs leading-5 text-muted-foreground">{setup.gatewayHost ? <>Public endpoint: <code>https://{setup.gatewayHost}</code> with a Let&apos;s Encrypt certificate.</> : <>No public hostname yet: the stamp enrolls, but the edge gateway cannot route to it. Add one in Runtime &amp; gateway.</>}</p> : null}
             {state.enrollmentToken ? <>
-              <Alert><KeyRoundIcon /><AlertTitle>Enrollment command ready</AlertTitle><AlertDescription>Includes your single-use token, valid until {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "its expiry"}. Closing this drawer clears it.</AlertDescription></Alert>
+              <Alert><KeyRoundIcon /><AlertTitle>{k3s ? "Setup command ready" : "Enrollment command ready"}</AlertTitle><AlertDescription>Includes your single-use token, valid until {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "its expiry"}. Closing this drawer clears it.</AlertDescription></Alert>
               {commandError ? <FieldError>{commandError}</FieldError> : null}
-              {helm ? <CopyCommand command={helm} label="Helm enrollment command" /> : null}
-              <p className="text-xs leading-5 text-muted-foreground">Run once for a new stamp. Helm stores the token in its release and enrollment Secret; the agent retains its identity on persistent storage.</p>
+              {command ? <CopyCommand command={command} label={k3s ? "Run on the VM" : "Helm enrollment command"} /> : null}
+              <p className="text-xs leading-5 text-muted-foreground">{k3s ? "Takes a few minutes and finishes when the stamp has enrolled. The first model you deploy also pulls the model-host image once." : "Run once for a new stamp. Helm stores the token in its release and enrollment Secret; the agent retains its identity on persistent storage."}</p>
               {setup.gatewayHost ? <p className="text-xs leading-5 text-muted-foreground">Ready placements report <code>https://{setup.gatewayHost}</code>. Approve this origin in the console gateway configuration for playground access.</p> : <p className="text-xs leading-5 text-muted-foreground">Public inference also needs a gateway hostname and TLS. You can configure these in Runtime &amp; gateway.</p>}
             </> : <>
               <Field><FieldLabel htmlFor={`${id}-expiry`}>Token lifetime (minutes)</FieldLabel><Input id={`${id}-expiry`} type="number" min={5} max={1440} value={expiresInMinutes} onChange={(event) => { setDirty(true); setExpiresInMinutes(event.target.value) }} disabled={pending} /><FieldDescription>Generate after your cluster is ready. Valid for 5 minutes to 24 hours.</FieldDescription></Field>
-              <div className="rounded-xl bg-muted/40 px-4 py-3"><p className="flex items-center gap-2 text-xs font-medium"><TerminalIcon className="size-3.5 text-muted-foreground" />Your Helm command will appear here</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Generate a token to fill the command with your stamp name, cluster settings and account credential.</p></div>
+              <div className="bg-muted/40 px-4 py-3"><p className="flex items-center gap-2 text-xs font-medium"><TerminalIcon className="size-3.5 text-muted-foreground" />{k3s ? "Your setup command will appear here" : "Your Helm command will appear here"}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Generate a token to fill the command with your stamp name, cluster settings and account credential.</p></div>
               {generationError ? <FieldError>{generationError}</FieldError> : null}
             </>}
             {state.error ? <FieldError>{state.error}</FieldError> : null}
           </> : null}
 
-          {panel === "runtime" ? <>
+          {panel === "runtime" && k3s ? <>
+            <p className="text-sm leading-6 text-muted-foreground">Give the stamp a public HTTPS hostname so the edge gateway can route requests to it. The setup command issues its certificate.</p>
+            <Field><FieldLabel htmlFor={`${id}-gateway`}>Stamp hostname</FieldLabel><Input id={`${id}-gateway`} value={setup.gatewayHost} onChange={(event) => update("gatewayHost", event.target.value)} placeholder="gpu-01.stamps.your-domain.com" disabled={pending} /><FieldDescription>Create a DNS A record pointing at the VM&apos;s public IP first. Leave empty to enroll without public inference.</FieldDescription></Field>
+            {setup.gatewayHost ? <Field><FieldLabel htmlFor={`${id}-email`}>Certificate contact email</FieldLabel><Input id={`${id}-email`} type="email" value={setup.acmeEmail} onChange={(event) => update("acmeEmail", event.target.value)} placeholder="ops@your-domain.com" disabled={pending} /><FieldDescription>Let&apos;s Encrypt sends expiry notices here.</FieldDescription></Field> : null}
+            <Field><FieldLabel htmlFor={`${id}-issuer`}>Control-plane JWT issuer</FieldLabel><Input id={`${id}-issuer`} value={effectiveSetup.jwtIssuer} onChange={(event) => update("jwtIssuer", event.target.value)} placeholder="Detected when the token is generated" disabled={pending || !!state.enrollmentIssuer} /></Field>
+            <p className="text-xs leading-5 text-muted-foreground">GPU runtime, model dtype (bf16 on Ampere and newer, fp16 on T4) and the model-host image are chosen by the setup command.</p>
+          </> : null}
+
+          {panel === "runtime" && !k3s ? <>
             <p className="text-sm leading-6 text-muted-foreground">Choose the model runtime and optional public inference gateway for this cluster.</p>
             <Field><FieldLabel htmlFor={`${id}-image`}>vLLM image</FieldLabel><Input id={`${id}-image`} value={setup.modelImage} onChange={(event) => update("modelImage", event.target.value)} disabled={pending} /><FieldDescription>Standard vLLM 0.26 uses CUDA 13 and needs an R580 or newer driver. A10 GRID 570 / CUDA 12.8 can use <code>vllm/vllm-openai:v0.11.0</code> for supported models. Qwen3.5 needs a newer compatible runtime.</FieldDescription></Field>
             <div className="grid min-w-0 gap-4 sm:grid-cols-2">
@@ -205,7 +224,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
         <FormDrawerFooter>
           <div className="mr-auto flex min-w-0 items-center gap-2">
             <Button type="button" variant="ghost" size="icon-sm" className="hidden md:inline-flex" aria-label={expanded ? "Restore drawer width" : "Widen drawer"} aria-pressed={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? <Minimize2Icon /> : <Maximize2Icon />}</Button>
-            <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{panel === "cluster" ? "Prepare your infrastructure" : panel === "runtime" ? "Settings apply to the Helm command" : state.enrollmentToken ? "Keep your enrollment token private" : "Enroll when your cluster is ready"}</span>
+            <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{panel === "cluster" ? "Prepare your infrastructure" : panel === "runtime" ? (k3s ? "Settings apply to the setup command" : "Settings apply to the Helm command") : state.enrollmentToken ? "Keep your enrollment token private" : "Enroll when your cluster is ready"}</span>
           </div>
           <Button type="button" variant="outline" disabled={pending} onClick={() => request()}>Close</Button>
           {/* Distinct keys keep each step button its own DOM node: reusing one node would let
