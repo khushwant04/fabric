@@ -86,8 +86,14 @@ no new token is needed. Other options:
 - `--console`: console origin, for a direct link to the stamp page in the summary
 - `--dtype`: override the automatic choice
 - `--no-gpu`: install without GPU support
+- `--tpu TYPE`: Cloud TPU accelerator type, when the metadata server cannot be read
 - `--release`: install a different release
 - `--dry-run`: print the plan without changing anything
+
+On a single-host Google Cloud TPU VM (for example `v6e-4` or `v5litepod-4`), run the same
+command. It detects the TPU from the GCP metadata server, skips the NVIDIA pieces, advertises the
+chips to Kubernetes, and serves models with the vLLM TPU image. See [Cloud TPU stamps](tpu.md) for
+creating the VM, quota, DNS and caveats.
 
 ## Bootstrap a Kubernetes stamp
 
