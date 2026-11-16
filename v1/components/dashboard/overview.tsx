@@ -13,6 +13,7 @@ import { TruncatedText } from "@/components/console/truncated-text"
 import { Greeting } from "@/components/dashboard/greeting"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
+import { describeAccelerators } from "@/lib/fabric/accelerators"
 import type { DeploymentStampChoice } from "@/lib/fabric/model-catalog"
 import type { AccountUsage, Deployment, Stamp } from "@/lib/fabric/types"
 import { formatNumber, formatRelative } from "@/lib/format"
@@ -78,14 +79,7 @@ function UsageBar({ used, total }: { used: number; total: number }) {
 }
 
 function stampGpus(stamp: Stamp): string | null {
-  const gpus = stamp.capabilities?.gpus
-  if (!Array.isArray(gpus) || !gpus.length) return null
-  return gpus
-    .map((gpu) => {
-      const entry = gpu as { count?: number; product?: string }
-      return `${entry.count ?? 1} × ${entry.product ?? "GPU"}`
-    })
-    .join(", ")
+  return describeAccelerators(stamp.capabilities)
 }
 
 /** Something that needs the operator: a tinted icon, one sentence and a link. */
