@@ -366,9 +366,11 @@ class ResourceSpec(BaseModel):
     gpu_count: int = Field(default=1, ge=1, le=8)
     #: The minimum device the deployment needs, named by class. Interpreted as a memory size
     #: and an arithmetic tier rather than matched as a product, so a strictly better GPU
-    #: satisfies it. Validated against the catalogue at placement rather than here: the
-    #: catalogue grows, and a deployment created before a class was named should not become
-    #: unpatchable.
+    #: satisfies it. Cloud TPU classes (``tpu-v5e``, ``tpu-v6e``, ``tpu-v5p``, ``tpu-v4``)
+    #: are satisfied only by TPU stamps, and GPU classes only by GPU stamps; on a TPU class
+    #: ``gpu_count`` is chips per replica and becomes the tensor-parallel size. Validated
+    #: against the catalogue at placement rather than here: the catalogue grows, and a
+    #: deployment created before a class was named should not become unpatchable.
     gpu_class: str = Field(default="t4", max_length=32)
 
 
@@ -583,11 +585,25 @@ class DeploymentUsageResponse(BaseModel):
 
 
 class GpuCapability(BaseModel):
+    """One class of accelerator on a stamp.
+
+    Named for GPUs because that is all a stamp reported before Cloud TPU support. A TPU
+    entry sets ``accelerator`` to ``"tpu"``; ``count`` is then chips and ``memory_bytes`` HBM
+    per chip, and ``compute_capability`` is absent because it is a CUDA notion. An NVIDIA
+    entry omits the three accelerator fields, which keeps an existing agent's report valid.
+    """
+
     product: str = Field(max_length=100)
     count: int = Field(ge=0, le=1024)
     memory_bytes: int = Field(default=0, ge=0)
     compute_capability: str | None = Field(default=None, max_length=16)
     source: str | None = Field(default=None, max_length=100)
+    accelerator: Literal["gpu", "tpu"] | None = None
+    vendor: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9-]+$")
+    #: The TPU slice type, for example ``v6e-4`` or ``v5litepod-4``.
+    accelerator_type: str | None = Field(
+        default=None, max_length=32, pattern=r"^[a-z0-9][a-z0-9-]*$"
+    )
 
 
 class FabricGpuClaim(BaseModel):

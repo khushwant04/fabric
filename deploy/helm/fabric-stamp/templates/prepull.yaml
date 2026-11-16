@@ -53,7 +53,7 @@ spec:
       initContainers:
         # Pulling is the point: the container itself does nothing.
         - name: pull-model-host
-          image: {{ $host.image }}
+          image: {{ include "fabric-stamp.modelHostImage" . }}
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "true"]
           resources:
@@ -63,7 +63,7 @@ spec:
         # a host started later reads these files instead of downloading them. Failures
         # are logged and ignored: a missing weight is fetched by the host as before.
         - name: warm-weights
-          image: {{ $host.image }}
+          image: {{ include "fabric-stamp.modelHostImage" . }}
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -104,7 +104,7 @@ spec:
         # Keeps the pod, and with it the pulled image, in place: kubelet garbage
         # collection never removes an image a running pod uses.
         - name: hold
-          image: {{ $host.image }}
+          image: {{ include "fabric-stamp.modelHostImage" . }}
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "trap 'exit 0' TERM; while true; do sleep 3600 & wait $!; done"]
           resources:

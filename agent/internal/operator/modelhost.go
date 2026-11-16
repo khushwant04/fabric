@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/khushwant04/fabric/agent/internal/hardware"
 	"github.com/khushwant04/fabric/agent/internal/kube"
 )
 
@@ -92,7 +93,50 @@ type ModelHost struct {
 	// SpreadAcrossNodes keeps hosts on different nodes, so two deployments on one stamp
 	// do not contend for a single device while another node sits idle.
 	SpreadAcrossNodes bool
+	// Accelerator is AcceleratorTPU for a Cloud TPU stamp and empty for NVIDIA GPUs. On a
+	// TPU the host requests google.com/tpu chips instead of nvidia.com/gpu, never uses a
+	// RuntimeClass (there is no NVIDIA runtime), and gets a longer startup budget for XLA
+	// compilation. GPUs then counts chips, and tensor parallelism spans them.
+	Accelerator string
+	// Privileged runs the server container privileged. A TPU VM has no device plugin to
+	// hand the chips to a container, so the TPU runtime opens them directly.
+	Privileged bool
+	// DevicePaths are host device nodes mounted into the container at the same path, for
+	// example /dev/vfio or /dev/accel0.
+	DevicePaths []string
+	// Command replaces the image's entrypoint when the image has none that serves, as the
+	// TPU image does not; empty keeps the entrypoint.
+	Command []string
 }
+
+// AcceleratorTPU selects Cloud TPU rendering for the model host.
+const AcceleratorTPU = "tpu"
+
+// IsTPU reports whether the host runs on TPU chips.
+func (m ModelHost) IsTPU() bool {
+	return m.Accelerator == AcceleratorTPU
+}
+
+// deviceResource is the extended resource the host requests its devices as.
+func (m ModelHost) deviceResource() string {
+	if m.IsTPU() {
+		return hardware.TPUResource
+	}
+	return hardware.GPUResource
+}
+
+// startupThreshold is the startup probe's failure budget at a 10s period. A TPU host
+// compiles every serving shape with XLA before it answers, which takes several minutes on a
+// cold cache and longer for a large model, on top of the weight download.
+func (m ModelHost) startupThreshold() int {
+	if m.IsTPU() {
+		return tpuStartupFailureThreshold
+	}
+	return startupFailureThreshold
+}
+
+// tpuStartupFailureThreshold allows 40 minutes at a 10s period.
+const tpuStartupFailureThreshold = 240
 
 // ParseNodeSelector reads repeated key=value flags into a selector.
 func ParseNodeSelector(entries []string) (map[string]string, error) {
@@ -467,7 +511,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 			"limits": map[string]any{
 				// Resource quantities use the API's string representation so an
 				// unchanged device count does not cause a patch on every poll.
-				"nvidia.com/gpu": strconv.Itoa(host.GPUs),
+				host.deviceResource(): strconv.Itoa(host.GPUs),
 			},
 		},
 		// Readiness gates traffic on the server being able to answer, which for a
@@ -489,7 +533,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 		"startupProbe": map[string]any{
 			"httpGet":          map[string]any{"path": "/health", "port": "http"},
 			"periodSeconds":    10,
-			"failureThreshold": startupFailureThreshold,
+			"failureThreshold": host.startupThreshold(),
 		},
 		"livenessProbe": map[string]any{
 			"httpGet":          map[string]any{"path": "/health", "port": "http"},
@@ -522,7 +566,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 	// Declare the device request even without CPU/memory reservations. Kubernetes
 	// requires extended-resource request == limit; a previous defaulted request
 	// must not survive a change to the desired device count.
-	requests := map[string]any{"nvidia.com/gpu": strconv.Itoa(host.GPUs)}
+	requests := map[string]any{host.deviceResource(): strconv.Itoa(host.GPUs)}
 	if host.HuggingFaceSecret != "" {
 		key := host.HuggingFaceTokenKey
 		if key == "" {
@@ -546,6 +590,9 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 		{"name": "shm", "emptyDir": map[string]any{"medium": "Memory"}},
 		host.cacheVolume(),
 	}
+	if host.IsTPU() {
+		host.addTPUSettings(container, &volumes)
+	}
 
 	podSpec := map[string]any{
 		"containers": []map[string]any{container},
@@ -563,7 +610,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 		}
 		podSpec["imagePullSecrets"] = secrets
 	}
-	if host.RuntimeClassName != "" {
+	if host.RuntimeClassName != "" && !host.IsTPU() {
 		podSpec["runtimeClassName"] = host.RuntimeClassName
 	}
 	if len(host.NodeSelector) > 0 {
@@ -627,6 +674,31 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 			},
 		},
 	}
+}
+
+// addTPUSettings adapts the server container to a Cloud TPU VM: the TPU image's command,
+// privileged access to the chips, the host's device nodes, and XLA's compilation cache on
+// the node's disk next to the weights, so a restart does not recompile from scratch.
+func (m ModelHost) addTPUSettings(container map[string]any, volumes *[]map[string]any) {
+	if len(m.Command) > 0 {
+		container["command"] = append([]string(nil), m.Command...)
+	}
+	if m.Privileged {
+		container["securityContext"] = map[string]any{"privileged": true}
+	}
+	mounts := container["volumeMounts"].([]map[string]any)
+	for index, path := range m.DevicePaths {
+		name := "tpu-device-" + strconv.Itoa(index)
+		*volumes = append(*volumes, map[string]any{
+			"name": name, "hostPath": map[string]any{"path": path},
+		})
+		mounts = append(mounts, map[string]any{"name": name, "mountPath": path})
+	}
+	container["volumeMounts"] = mounts
+	container["env"] = append(container["env"].([]map[string]any),
+		map[string]any{"name": "VLLM_XLA_CACHE_PATH", "value": modelCacheMountPath + "/xla"},
+		map[string]any{"name": "JAX_COMPILATION_CACHE_DIR", "value": modelCacheMountPath + "/jax"},
+	)
 }
 
 func (r *Reconciler) desiredHostService(item ModelDeployment) service {

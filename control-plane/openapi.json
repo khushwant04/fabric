@@ -1876,7 +1876,36 @@
         "type": "object"
       },
       "GpuCapability": {
+        "description": "One class of accelerator on a stamp.\n\nNamed for GPUs because that is all a stamp reported before Cloud TPU support. A TPU\nentry sets ``accelerator`` to ``\"tpu\"``; ``count`` is then chips and ``memory_bytes`` HBM\nper chip, and ``compute_capability`` is absent because it is a CUDA notion. An NVIDIA\nentry omits the three accelerator fields, which keeps an existing agent's report valid.",
         "properties": {
+          "accelerator": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gpu",
+                  "tpu"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accelerator"
+          },
+          "accelerator_type": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^[a-z0-9][a-z0-9-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accelerator Type"
+          },
           "compute_capability": {
             "anyOf": [
               {
@@ -1917,6 +1946,19 @@
               }
             ],
             "title": "Source"
+          },
+          "vendor": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^[a-z0-9-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vendor"
           }
         },
         "required": [

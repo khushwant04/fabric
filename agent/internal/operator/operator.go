@@ -1011,7 +1011,8 @@ func (r *Reconciler) applyHardwareProfileAt(ctx context.Context, now time.Time) 
 
 	for _, profile := range profiles {
 		r.options.Log.Info("gpu profiled",
-			"node", profile.Node, "model", profile.Model,
+			"node", profile.Node, "model", profile.Model, "kind", profile.Kind,
+			"accelerator_type", profile.AcceleratorType,
 			"compute_capability", profile.Capability.String(),
 			"memory_mib", profile.MemoryMiB, "gpus", profile.Count,
 			"source", profile.Source)

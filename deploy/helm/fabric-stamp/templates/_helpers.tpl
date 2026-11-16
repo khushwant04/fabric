@@ -132,6 +132,17 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and (include "fabric-stamp.managesModelHost" .) (not .Values.operator.managedModelHost.serviceAccount.create) (not .Values.operator.managedModelHost.serviceAccount.name) -}}
 {{- fail "managed model hosts need a dedicated serviceAccount.name when serviceAccount.create is false" -}}
 {{- end -}}
+{{- $accelerator := .Values.accelerator | default dict -}}
+{{- if not (has (toString ($accelerator.type | default "nvidia")) (list "nvidia" "tpu")) -}}
+{{- fail "accelerator.type must be nvidia or tpu" -}}
+{{- end -}}
+{{- if include "fabric-stamp.isTPU" . -}}
+{{- range .Values.accelerator.tpu.devices -}}
+{{- if not (hasPrefix "/dev/" (toString .)) -}}
+{{- fail "accelerator.tpu.devices must be paths under /dev, such as /dev/vfio or /dev/accel0" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.controlPlane.url -}}
 {{- fail "controlPlane.url is required: the agent has nowhere to enrol" -}}
 {{- end -}}
@@ -176,6 +187,28 @@ in the rendered configuration is a placeholder: the operator's Service is named 
 deployment ID that does not exist at install time, and the operator overrides the
 upstream once a deployment is actually placed here.
 */}}
+{{/*
+Whether model hosts run on Cloud TPU chips rather than NVIDIA GPUs (docs/tpu.md).
+*/}}
+{{- define "fabric-stamp.isTPU" -}}
+{{- $accelerator := .Values.accelerator | default dict -}}
+{{- if eq (toString $accelerator.type) "tpu" -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The image model hosts run: the vLLM TPU image on a TPU stamp, otherwise
+operator.managedModelHost.image. The host is managed only when that image is set either way.
+*/}}
+{{- define "fabric-stamp.modelHostImage" -}}
+{{- if and (include "fabric-stamp.isTPU" .) .Values.accelerator.tpu.image -}}
+{{- .Values.accelerator.tpu.image -}}
+{{- else -}}
+{{- .Values.operator.managedModelHost.image -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "fabric-stamp.managesModelHost" -}}
 {{- if and .Values.operator.enabled .Values.operator.managedModelHost.image -}}
 true

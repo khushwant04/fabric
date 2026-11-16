@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/console/status-badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { describeAccelerator, isTpuEntry, stampAcceleratorKind } from "@/lib/fabric/accelerators"
 import { getStampEvents, listDeployments, listStamps } from "@/lib/fabric/data"
 import { publicGatewayBase } from "@/lib/fabric/inference-endpoints"
 import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
@@ -31,6 +32,7 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
   const gone = stamp ? isRemoved(stamp) : Boolean(events?.revoked_at)
   const state = stamp ? (gone ? { status: "removed", detail: `Removed ${formatRelative(stamp.revoked_at)}; its credentials are revoked and its agent no longer syncs.` } : stampState(stamp)) : null
   const gpus = Array.isArray(stamp?.capabilities.gpus) ? stamp.capabilities.gpus as Array<Record<string, unknown>> : []
+  const tpu = stampAcceleratorKind(stamp?.capabilities) === "tpu"
   const endpoint = publicGatewayBase(stamp?.capabilities.inference_url)
   // Names for the GPUs the metrics attribute to a deployment (docs/serving-metrics.md).
   const deploymentNames = Object.fromEntries((deploymentResult.status === "fulfilled" ? deploymentResult.value : []).map((deployment) => [deployment.id, deployment.name]))
@@ -50,7 +52,7 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
         <CardHeader><CardTitle>Stamp</CardTitle><CardDescription>As last reported by its agent.</CardDescription></CardHeader>
         <CardContent>
           <dl className="grid gap-4 text-sm">
-            <div><dt className="text-xs text-muted-foreground">GPUs</dt><dd className="mt-1 space-y-1">{gpus.length ? gpus.map((gpu, index) => <div key={index}>{gpuCapacity(gpu.count) ?? "?"} × {typeof gpu.product === "string" ? gpu.product : "Unknown GPU"}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? ` · ${Math.round(gpu.memory_bytes / 1024 ** 3)} GiB` : ""}</div>) : <span className="text-muted-foreground">None reported</span>}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">{tpu ? "TPU chips" : "GPUs"}</dt><dd className="mt-1 space-y-1">{gpus.length ? gpus.map((gpu, index) => isTpuEntry(gpu) ? <div key={index}>{describeAccelerator(gpu)}{typeof gpu.accelerator_type === "string" ? ` · ${gpu.accelerator_type}` : ""}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? ` · ${Math.round(gpu.memory_bytes / 1024 ** 3)} GiB HBM per chip` : ""}</div> : <div key={index}>{gpuCapacity(gpu.count) ?? "?"} × {typeof gpu.product === "string" ? gpu.product : "Unknown GPU"}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? ` · ${Math.round(gpu.memory_bytes / 1024 ** 3)} GiB` : ""}</div>) : <span className="text-muted-foreground">None reported</span>}</dd></div>
             <div><dt className="text-xs text-muted-foreground">Allocatable · requested</dt><dd className="mt-1 tabular-nums">{gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "—"} · {gpuCapacity(stamp.capabilities.requested_gpus) ?? "—"}</dd></div>
             <div><dt className="text-xs text-muted-foreground">Orchestrator · region</dt><dd className="mt-1"><span className="capitalize">{stamp.orchestrator || "Unknown"}</span> · {stamp.region || "no region"}</dd></div>
             <div><dt className="text-xs text-muted-foreground">Last heartbeat</dt><dd className="mt-1">{formatRelative(stamp.last_heartbeat_at)}</dd></div>

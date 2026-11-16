@@ -51,6 +51,15 @@ type GPUGroup struct {
 	MemoryBytes       int64
 	ComputeCapability string
 	Source            string
+	// Kind is KindTPU for TPU chips, empty for GPUs. MemoryBytes is then HBM per chip.
+	Kind string
+	// AcceleratorType is the TPU slice type when every node in the group agrees on one.
+	AcceleratorType string
+}
+
+// IsTPU reports whether the group is TPU chips.
+func (g GPUGroup) IsTPU() bool {
+	return g.Kind == KindTPU
 }
 
 // Capacity is what one stamp can offer, as measured.
@@ -94,6 +103,9 @@ type Capacity struct {
 	// advertise no allocatable nvidia.com/gpu: the device plugin or the container runtime is
 	// missing there. It does not leave the cluster; the agent turns it into a hint.
 	UnequippedGPUNodes int
+	// UnequippedTPUNodes counts ready nodes labelled as TPU nodes that advertise no
+	// allocatable google.com/tpu: the bootstrap's advertisement is missing.
+	UnequippedTPUNodes int
 	// PodClaimsError explains a missing claim measurement, for the caller to log. Held as a
 	// string rather than an error because Measure's error return is reserved for a failure
 	// that makes the whole result unusable.
@@ -129,12 +141,17 @@ type container struct {
 // The limit is read first because Kubernetes requires request and limit to be equal for an
 // extended resource, and a manifest that sets only one of them commonly sets the limit.
 func (c container) gpus() int {
-	if raw, ok := c.Resources.Limits[GPUResource]; ok {
+	return c.devices(GPUResource) + c.devices(TPUResource)
+}
+
+// devices returns how many of one extended resource this container claims.
+func (c container) devices(resource string) int {
+	if raw, ok := c.Resources.Limits[resource]; ok {
 		if count, err := strconv.Atoi(raw); err == nil {
 			return count
 		}
 	}
-	if raw, ok := c.Resources.Requests[GPUResource]; ok {
+	if raw, ok := c.Resources.Requests[resource]; ok {
 		if count, err := strconv.Atoi(raw); err == nil {
 			return count
 		}
@@ -263,7 +280,7 @@ func Measure(ctx context.Context, client Getter, selector map[string]string) (Ca
 
 	capacity := Capacity{
 		Measured: true, Profiles: profiles, GPUs: groupProfiles(profiles),
-		UnequippedGPUNodes: unequipped,
+		UnequippedGPUNodes: unequipped.gpu, UnequippedTPUNodes: unequipped.tpu,
 	}
 	onNodes := make(map[string]bool, len(profiles))
 	for _, profile := range profiles {
@@ -316,6 +333,9 @@ type aggregate struct {
 	capability      ComputeCapability
 	capabilityKnown bool
 	source          string
+	kind            string
+	acceleratorType string
+	typeMixed       bool
 }
 
 func (a *aggregate) add(profile Profile) {
@@ -328,7 +348,13 @@ func (a *aggregate) add(profile Profile) {
 	} else if a.source != source {
 		a.source = "mixed node labels and inferred hardware"
 	}
+	if a.count == 0 {
+		a.acceleratorType = profile.AcceleratorType
+	} else if a.acceleratorType != profile.AcceleratorType {
+		a.typeMixed = true
+	}
 	a.count += profile.Count
+	a.kind = profile.Kind
 
 	if profile.MemoryMiB <= 0 {
 		a.memoryKnown = false
@@ -356,6 +382,9 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 			// Honest rather than invented: nothing described this device, and the control
 			// plane refuses to place against a class it cannot identify.
 			product = "unknown"
+			if profile.IsTPU() {
+				product = "unknown TPU"
+			}
 		}
 		if _, present := byProduct[product]; !present {
 			// Starts trusting and is demoted by any node that cannot be described, rather
@@ -369,7 +398,10 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 	groups := make([]GPUGroup, 0, len(order))
 	for _, product := range order {
 		entry := byProduct[product]
-		group := GPUGroup{Product: product, Count: entry.count, Source: entry.source}
+		group := GPUGroup{Product: product, Count: entry.count, Source: entry.source, Kind: entry.kind}
+		if !entry.typeMixed {
+			group.AcceleratorType = entry.acceleratorType
+		}
 		if entry.memoryKnown {
 			group.MemoryBytes = int64(entry.memoryMiB) * mibToBytes
 		}
@@ -382,4 +414,22 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 	// does not see a capability change on every heartbeat.
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Product < groups[j].Product })
 	return groups
+}
+
+// Accelerator is KindTPU when the stamp's devices are TPU chips, and "" otherwise, which is
+// how an NVIDIA stamp has always read. A stamp with no devices yet is a TPU stamp when only
+// TPU-labelled nodes are missing their advertisement.
+func (c Capacity) Accelerator() string {
+	if len(c.GPUs) == 0 {
+		if c.UnequippedTPUNodes > 0 && c.UnequippedGPUNodes == 0 {
+			return KindTPU
+		}
+		return ""
+	}
+	for _, group := range c.GPUs {
+		if !group.IsTPU() {
+			return ""
+		}
+	}
+	return KindTPU
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Standalone VM setup: this file can be downloaded without cloning Fabric.
-# Installs k3s/Helm and, on request, NVIDIA container support for existing drivers.
+# Installs k3s/Helm and, on request, NVIDIA container support for existing drivers or the
+# Kubernetes advertisement of a Cloud TPU VM's chips.
 set -Eeuo pipefail
 umask 077
 
@@ -11,12 +12,16 @@ KUBECONFIG_PATH=/etc/rancher/k3s/k3s.yaml
 CONTAINERD_CONFIG=/var/lib/rancher/k3s/agent/etc/containerd/config.toml
 NODE_NAME=""
 ENABLE_NVIDIA=0
+TPU_TYPE=""
+TPU_RESOURCE=google.com/tpu
+TPU_ADVERTISER=/usr/local/sbin/fabric-tpu-advertise
+TPU_UNIT=/etc/systemd/system/fabric-tpu-advertise.service
 WORK=""
 TOOLKIT_PACKAGES=(nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1)
 
 usage() {
     cat <<'EOF'
-Usage: sudo bash bootstrap-k3s.sh [--node-name NAME] [--nvidia]
+Usage: sudo bash bootstrap-k3s.sh [--node-name NAME] [--nvidia | --tpu ACCELERATOR_TYPE]
 
 Create a single-server k3s cluster on an Ubuntu 22.04/24.04 VM and install Helm
 when absent. New servers use k3s v1.36.5+k3s1, Traefik, ServiceLB, local-path
@@ -26,6 +31,12 @@ storage, and the default runc runtime. Helm is pinned to v3.19.0.
 runtime discovery, labels measured GPUs, and installs device-plugin v0.17.1.
 Working NVIDIA drivers and nvidia-smi are required beforehand. No GPU drivers,
 Fabric stamp, control plane, or models are installed by this script.
+
+--tpu ACCELERATOR_TYPE (for example v6e-4 or v5litepod-4) prepares a single-host
+Cloud TPU VM: it counts the TPU device nodes (/dev/accel* or /dev/vfio/N), labels
+the node accelerator=tpu with its accelerator type, and advertises the chips as
+the google.com/tpu extended resource, re-applied by fabric-tpu-advertise.service
+whenever k3s starts. No NVIDIA software, RuntimeClass or device plugin is used.
 
 An existing single-node local k3s server is reused without changing its version,
 service settings, or containerd configuration. If NVIDIA support needs a server
@@ -48,6 +59,9 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] && [ -n "$2" ] || die '--node-name requires a value'
             NODE_NAME=$2; shift 2 ;;
         --nvidia) ENABLE_NVIDIA=1; shift ;;
+        --tpu)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || die '--tpu requires the accelerator type, e.g. v6e-4'
+            TPU_TYPE=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -55,6 +69,11 @@ done
 if [ -n "$NODE_NAME" ]; then
     [[ "$NODE_NAME" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] && [ "${#NODE_NAME}" -le 63 ] \
         || die '--node-name must be a lowercase DNS label, at most 63 characters'
+fi
+if [ -n "$TPU_TYPE" ]; then
+    [ "$ENABLE_NVIDIA" -eq 0 ] || die '--nvidia and --tpu are mutually exclusive'
+    [[ "$TPU_TYPE" =~ ^(v4|v5p|v5e|v5litepod|v6e)-[0-9]+$ ]] \
+        || die "--tpu must be a supported accelerator type such as v6e-4, v5litepod-4, v5p-8 or v4-8 (got $TPU_TYPE)"
 fi
 [ "$(id -u)" -eq 0 ] || die 'run with sudo on the VM that will host k3s'
 [ "$(uname -s)" = Linux ] || die 'requires Linux'
@@ -138,6 +157,20 @@ if [ "$ENABLE_NVIDIA" -eq 1 ]; then
     if [ "$TOOLKIT_MISSING" -eq 1 ] && [ "$K3S_ACTIVE" -eq 1 ]; then
         die 'stop k3s yourself before completing the NVIDIA Container Toolkit installation'
     fi
+fi
+
+if [ -n "$TPU_TYPE" ]; then
+    # v4 and v5p accelerator types count TensorCores, two per chip; v5e and v6e count chips.
+    TPU_SIZE=${TPU_TYPE##*-}
+    case "$TPU_TYPE" in v4-*|v5p-*) TPU_EXPECTED=$(( TPU_SIZE / 2 )) ;; *) TPU_EXPECTED=$TPU_SIZE ;; esac
+    [ "$TPU_EXPECTED" -ge 1 ] || TPU_EXPECTED=1
+    TPU_CHIPS=$( { ls -1d /dev/accel[0-9]* 2>/dev/null || true; ls -1 /dev/vfio 2>/dev/null | grep -E '^[0-9]+$' || true; } | awk 'NF {count++} END {print count+0}')
+    [ "$TPU_CHIPS" -gt 0 ] \
+        || die "no TPU device nodes (/dev/accel* or /dev/vfio/N) on this VM; is it a Cloud TPU VM ($TPU_TYPE)?"
+    if [ "$TPU_EXPECTED" -gt "$TPU_CHIPS" ]; then
+        die "$TPU_TYPE has $TPU_EXPECTED chips but this host sees $TPU_CHIPS: multi-host TPU slices are not supported; use a single-host type such as v6e-4 or v5litepod-4"
+    fi
+    log "$TPU_CHIPS TPU chips found for $TPU_TYPE"
 fi
 
 export DEBIAN_FRONTEND=noninteractive
@@ -401,6 +434,59 @@ EOF
         sleep 2
     done
     log "$ALLOCATABLE GPUs are allocatable. Model pods must request nvidia.com/gpu and RuntimeClass nvidia."
+fi
+
+if [ -n "$TPU_TYPE" ]; then
+    LABELS=(accelerator=tpu "fabric.khushwant.dev/tpu-accelerator-type=$TPU_TYPE")
+    EXISTING_ACCELERATOR=$("${KUBECTL[@]}" get node "$LOCAL_NODE" -o jsonpath='{.metadata.labels.accelerator}')
+    [ -z "$EXISTING_ACCELERATOR" ] || [ "$EXISTING_ACCELERATOR" = tpu ] \
+        || die "node $LOCAL_NODE is labelled accelerator=$EXISTING_ACCELERATOR; review it before preparing it as a TPU node"
+    "${KUBECTL[@]}" label node "$LOCAL_NODE" --overwrite "${LABELS[@]}"
+
+    # No device plugin exists for a TPU VM, so the chips are advertised as an extended
+    # resource on the node's status. The kubelet keeps it across restarts, but a node that is
+    # re-registered loses it, so a oneshot unit applies it again every time k3s starts.
+    PATCH="{\"status\":{\"capacity\":{\"$TPU_RESOURCE\":\"$TPU_CHIPS\"}}}"
+    K3S_BIN=$(command -v k3s)
+    [ ! -L "$TPU_ADVERTISER" ] && [ ! -L "$TPU_UNIT" ] || die 'the TPU advertisement files must not be symlinks'
+    cat > "$WORK/fabric-tpu-advertise" <<EOF
+#!/bin/sh
+# Advertises this Cloud TPU VM's chips to k3s. Written by Fabric's bootstrap-k3s.sh --tpu.
+set -eu
+for attempt in \$(seq 1 90); do
+    if $K3S_BIN kubectl --kubeconfig $KUBECONFIG_PATH patch node $LOCAL_NODE --subresource=status --type=merge -p '$PATCH' >/dev/null 2>&1; then
+        exit 0
+    fi
+    sleep 2
+done
+echo "could not advertise $TPU_CHIPS $TPU_RESOURCE on node $LOCAL_NODE" >&2
+exit 1
+EOF
+    install -m 0755 "$WORK/fabric-tpu-advertise" "$TPU_ADVERTISER"
+    cat > "$WORK/fabric-tpu-advertise.service" <<EOF
+[Unit]
+Description=Advertise Cloud TPU chips to k3s (Fabric)
+After=k3s.service
+PartOf=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=$TPU_ADVERTISER
+
+[Install]
+WantedBy=k3s.service
+EOF
+    install -m 0644 "$WORK/fabric-tpu-advertise.service" "$TPU_UNIT"
+    systemctl daemon-reload
+    systemctl enable fabric-tpu-advertise.service
+    "$TPU_ADVERTISER" || die "could not advertise $TPU_RESOURCE on node $LOCAL_NODE; inspect journalctl -u k3s"
+    for attempt in $(seq 1 60); do
+        ALLOCATABLE=$("${KUBECTL[@]}" get node "$LOCAL_NODE" -o jsonpath='{.status.allocatable.google\.com/tpu}')
+        [ "$ALLOCATABLE" = "$TPU_CHIPS" ] && break
+        [ "$attempt" -lt 60 ] || die "allocatable TPU chips are ${ALLOCATABLE:-0}, found $TPU_CHIPS; inspect journalctl -u k3s"
+        sleep 2
+    done
+    log "$ALLOCATABLE TPU chips are allocatable. Model pods must request $TPU_RESOURCE and run privileged with the TPU devices."
 fi
 
 if command -v helm >/dev/null 2>&1; then

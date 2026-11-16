@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useActionState, useCallback, useState, type ReactNode } from "react"
 import { useFormStatus } from "react-dom"
-import { ArrowLeftIcon, BoxIcon, ChevronRightIcon, CpuIcon, PlusIcon, RocketIcon, WrenchIcon } from "lucide-react"
+import { ArrowLeftIcon, BoxIcon, ChevronRightIcon, CpuIcon, PlusIcon, RocketIcon, TriangleAlertIcon, WrenchIcon } from "lucide-react"
 
 import { createDeployment, type ActionState } from "@/app/(console)/actions"
 import { DrawerPanel, DrawerTriggerButton, FormDrawerBody, FormDrawerFooter, useFormDrawer, useGuardedClose } from "@/components/console/form-drawer"
@@ -16,12 +16,13 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { balancingStrategies, capabilityFlags, cascadeTierRange, defaultCapabilities, kernelModes, priorityRange } from "@/lib/fabric/deployment-options"
-import { catalogModel, modelCatalog, stampFitsClass, suggestedDeploymentName, type CatalogModel, type DeploymentStampChoice } from "@/lib/fabric/model-catalog"
+import { gpuClassLabel, isTpuClass, tpuClasses } from "@/lib/fabric/accelerators"
+import { catalogModel, modelCatalog, stampFitsClass, suggestedDeploymentName, tpuCompatible, type CatalogModel, type DeploymentStampChoice } from "@/lib/fabric/model-catalog"
 import { cn } from "@/lib/utils"
 
 const executionModes = [{ value: "default", label: "Cluster default" }, { value: "eager", label: "Eager" }, { value: "cuda_graph", label: "CUDA graphs" }]
 const toolChoiceModes = [{ value: "default", label: "Model default" }, { value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]
-const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100", "rtx-pro-6000"]
+const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100", "rtx-pro-6000", ...tpuClasses]
 
 /** "custom" opens the full form; a catalog id opens the short confirmation. */
 export type ModelSelection = string | null
@@ -72,8 +73,8 @@ export function DeploymentFields({ stamps, disabled = false, onSelectChange, pre
       {withPlacement ? <Field><FieldLabel htmlFor="stampId">Infrastructure</FieldLabel><Select name="stampId" defaultValue="auto" items={[{ value: "auto", label: "Automatic placement" }, ...stamps.map((stamp) => ({ value: stamp.id, label: stamp.label }))]} disabled={disabled} onValueChange={onSelectChange}><SelectTrigger id="stampId" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">Automatic placement</SelectItem>{stamps.map((stamp) => <SelectItem key={stamp.id} value={stamp.id}>{stamp.label}</SelectItem>)}</SelectContent></Select><FieldDescription>{stamps.length ? "Only recently connected clusters appear here. The control plane checks available capacity before assigning the model." : "No active account-owned cluster is visible. Enroll a stamp first, or use entitled managed capacity through automatic placement."}</FieldDescription></Field> : null}
       <div className="grid gap-5 @lg:grid-cols-3">
         <Field><FieldLabel htmlFor="replicas">Replicas</FieldLabel><Input id="replicas" name="replicas" type="number" min={1} max={32} defaultValue={1} required disabled={disabled} /></Field>
-        <Field><FieldLabel htmlFor="gpuCount">GPUs per replica</FieldLabel><Input id="gpuCount" name="gpuCount" type="number" min={1} max={8} defaultValue={1} required disabled={disabled} /><FieldDescription>All GPUs for one replica must fit on one node.</FieldDescription></Field>
-        <Field><FieldLabel htmlFor="gpuClass">Minimum GPU class</FieldLabel><Select name="gpuClass" defaultValue={preset?.gpuClass ?? "t4"} items={gpuClasses.map((value) => ({ value, label: value.toUpperCase() }))} disabled={disabled} onValueChange={onSelectChange}><SelectTrigger id="gpuClass" className="w-full"><SelectValue /></SelectTrigger><SelectContent>{gpuClasses.map((value) => <SelectItem value={value} key={value}>{value.toUpperCase()}</SelectItem>)}</SelectContent></Select></Field>
+        <Field><FieldLabel htmlFor="gpuCount">GPUs per replica</FieldLabel><Input id="gpuCount" name="gpuCount" type="number" min={1} max={8} defaultValue={preset?.gpuCount ?? 1} required disabled={disabled} /><FieldDescription>All GPUs for one replica must fit on one node. On Cloud TPU, chips per replica; the model is sharded across them.</FieldDescription></Field>
+        <Field><FieldLabel htmlFor="gpuClass">Minimum GPU class</FieldLabel><Select name="gpuClass" defaultValue={preset?.gpuClass ?? "t4"} items={gpuClasses.map((value) => ({ value, label: gpuClassLabel(value) }))} disabled={disabled} onValueChange={onSelectChange}><SelectTrigger id="gpuClass" className="w-full"><SelectValue /></SelectTrigger><SelectContent>{gpuClasses.map((value) => <SelectItem value={value} key={value}>{gpuClassLabel(value)}</SelectItem>)}</SelectContent></Select></Field>
       </div>
       <Disclosure title="Serving settings"><div className="grid gap-5 border-t border-border px-4 pt-4 @lg:grid-cols-3">
         <Field><FieldLabel htmlFor="maxModelLen">Context limit</FieldLabel><Input id="maxModelLen" name="maxModelLen" type="number" min={64} max={1048576} placeholder="Cluster default" defaultValue={preset?.contextLength} disabled={disabled} /></Field>
@@ -82,7 +83,7 @@ export function DeploymentFields({ stamps, disabled = false, onSelectChange, pre
         <Field><FieldLabel htmlFor="autoToolChoice">Automatic tool calling</FieldLabel><Select name="autoToolChoice" defaultValue={preset ? preset.toolCalling ? "enabled" : "disabled" : "default"} items={toolChoiceModes} disabled={disabled} onValueChange={onSelectChange}><SelectTrigger id="autoToolChoice" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Model default</SelectItem><SelectItem value="enabled">Enabled</SelectItem><SelectItem value="disabled">Disabled</SelectItem></SelectContent></Select><FieldDescription>Allow the model to select tools supplied in an API request.</FieldDescription></Field>
         <Field className="@lg:col-span-3"><FieldLabel htmlFor="kernelMode">Kernel mode</FieldLabel><Select name="kernelMode" value={kernelMode} items={kernelModes.map(({ value, label }) => ({ value, label }))} disabled={disabled} onValueChange={(value) => { setKernelMode(String(value)); onSelectChange?.() }}><SelectTrigger id="kernelMode" className="w-full @lg:w-1/3"><SelectValue /></SelectTrigger><SelectContent>{kernelModes.map((mode) => <SelectItem key={mode.value} value={mode.value}>{mode.label}</SelectItem>)}</SelectContent></Select><FieldDescription>{kernelModes.find((mode) => mode.value === kernelMode)?.description}</FieldDescription></Field>
         <Field className="@lg:col-span-2"><FieldLabel htmlFor="toolCallParser">Tool parser</FieldLabel><Input id="toolCallParser" name="toolCallParser" placeholder="Model default" defaultValue={preset?.toolCalling ? preset.toolCallParser : undefined} maxLength={64} pattern="[a-z][a-z0-9_-]*" disabled={disabled} autoComplete="off" /><FieldDescription>Known Qwen models select a compatible parser automatically. Use hermes for Qwen3-VL or qwen3_xml for Qwen3.5. Other models need a parser supported by the model-host image.</FieldDescription></Field>
-      </div><p className="px-4 pt-4 pb-4 text-xs text-muted-foreground">The operator selects a supported dtype from the GPU profile. Model memory fit still depends on model size, context, and serving settings.</p></Disclosure>
+      </div><p className="px-4 pt-4 pb-4 text-xs text-muted-foreground">The operator selects a supported dtype from the GPU profile; Cloud TPU always serves bf16, so FP8 checkpoints need a GPU class. Model memory fit still depends on model size, context, and serving settings.</p></Disclosure>
       <Disclosure title="Routing" section="routing"><div className="grid gap-5 border-t border-border p-4">
         <input type="hidden" name="routing" value="1" />
         <Field><FieldLabel htmlFor="strategy">Balancing strategy</FieldLabel><Select name="strategy" value={strategy} items={balancingStrategies.map(({ value, label }) => ({ value, label }))} disabled={disabled} onValueChange={(value) => { setStrategy(String(value)); onSelectChange?.() }}><SelectTrigger id="strategy" className="w-full @lg:w-1/2"><SelectValue /></SelectTrigger><SelectContent>{balancingStrategies.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><FieldDescription>How the gateway spreads requests across this deployment’s replicas. {balancingStrategies.find((option) => option.value === strategy)?.description}</FieldDescription></Field>
@@ -113,8 +114,15 @@ function ModelCardBody({ model }: { model: CatalogModel }) {
       <span className="block text-base font-medium">{model.name}</span>
       <span className="mt-0.5 block text-sm text-muted-foreground">{model.strength}</span>
     </span>
-    <span className="mt-auto flex flex-wrap gap-1.5 pt-1"><Chip icon={<BoxIcon />}>{model.size}</Chip><Chip icon={<CpuIcon />}>{model.gpu}</Chip></span>
+    <span className="mt-auto flex flex-wrap gap-1.5 pt-1"><Chip icon={<BoxIcon />}>{model.size}</Chip><Chip icon={<CpuIcon />}>{model.gpu}</Chip><TpuChip model={model} /></span>
   </>
+}
+
+/** Says whether a model can run on Cloud TPU: TPU entries are bf16, FP8 checkpoints are not. */
+function TpuChip({ model }: { model: CatalogModel }) {
+  if (isTpuClass(model.gpuClass)) return <Chip icon={<CpuIcon />}>Cloud TPU · bf16</Chip>
+  if (!tpuCompatible(model)) return <Chip icon={<TriangleAlertIcon />}>Not TPU-compatible (FP8)</Chip>
+  return null
 }
 
 function CustomCardBody() {
@@ -189,12 +197,13 @@ function ConfirmModel({ model, stamps, selectHref, onSelect, disabled, onFieldCh
   disabled: boolean
   onFieldChange?: () => void
 }) {
-  const fitting = stamps.filter((stamp) => stampFitsClass(stamp, model.gpuClass) !== false)
+  const tpu = isTpuClass(model.gpuClass)
+  const fitting = stamps.filter((stamp) => stampFitsClass(stamp, model.gpuClass, model.gpuCount) !== false)
   const hidden = stamps.length - fitting.length
   const labelFor = (stamp: DeploymentStampChoice) => `${stamp.label.split(" · ")[0]} · ${stamp.gpus ?? "GPUs not reported"}`
   const items = [{ value: "auto", label: "Automatic placement" }, ...fitting.map((stamp) => ({ value: stamp.id, label: labelFor(stamp) }))]
   return <div className="flex flex-col gap-6">
-    <SelectedModel title={model.name} detail={model.strength} chips={<><Chip icon={<BoxIcon />}>{model.modelRef}</Chip><Chip icon={<CpuIcon />}>{model.gpu}</Chip>{model.toolCalling ? <Chip icon={<WrenchIcon />}>Tools · {model.toolCallParser}</Chip> : null}</>} selectHref={selectHref} onSelect={onSelect} disabled={disabled} />
+    <SelectedModel title={model.name} detail={model.strength} chips={<><Chip icon={<BoxIcon />}>{model.modelRef}</Chip><Chip icon={<CpuIcon />}>{model.gpu}</Chip><TpuChip model={model} />{model.toolCalling ? <Chip icon={<WrenchIcon />}>Tools · {model.toolCallParser}</Chip> : null}</>} selectHref={selectHref} onSelect={onSelect} disabled={disabled} />
     <FieldGroup>
       <Field><FieldLabel htmlFor="stampId">Infrastructure</FieldLabel>
         <Select name="stampId" defaultValue="auto" items={items} disabled={disabled} onValueChange={onFieldChange}>
@@ -204,7 +213,9 @@ function ConfirmModel({ model, stamps, selectHref, onSelect, disabled, onFieldCh
             {fitting.map((stamp) => <SelectItem key={stamp.id} value={stamp.id}>{labelFor(stamp)}</SelectItem>)}
           </SelectContent>
         </Select>
-        <FieldDescription>{fitting.length ? `Automatic placement picks a connected stamp with a free ${model.gpuClass.toUpperCase()}-class GPU or better.` : "No connected stamp reports a GPU this model fits on. Automatic placement waits until one does."}{hidden ? ` ${hidden} stamp${hidden === 1 ? " is" : "s are"} hidden: ${hidden === 1 ? "its GPUs are" : "their GPUs are"} too small.` : ""}</FieldDescription>
+        <FieldDescription>{tpu
+          ? fitting.length ? `Automatic placement picks a connected Cloud TPU stamp with ${model.gpuCount} free ${gpuClassLabel(model.gpuClass)}-class chips or better. The first start compiles the model with XLA for several minutes.` : "No connected stamp reports Cloud TPU chips this model fits on. Automatic placement waits until one does."
+          : fitting.length ? `Automatic placement picks a connected stamp with a free ${model.gpuClass.toUpperCase()}-class GPU or better.` : "No connected stamp reports a GPU this model fits on. Automatic placement waits until one does."}{hidden ? ` ${hidden} stamp${hidden === 1 ? " is" : "s are"} hidden: ${tpu ? "they have no Cloud TPU chips this model fits on" : hidden === 1 ? "its GPUs are too small" : "their GPUs are too small"}.` : ""}</FieldDescription>
       </Field>
       <Field><FieldLabel htmlFor="name">Deployment name</FieldLabel><Input id="name" name="name" defaultValue={suggestedDeploymentName(model)} pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" maxLength={200} required disabled={disabled} autoComplete="off" /><FieldDescription>Lowercase letters, numbers and hyphens. Clients call the model as <code className="font-mono text-xs">{model.modelAlias}</code>.</FieldDescription></Field>
     </FieldGroup>
