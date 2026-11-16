@@ -101,6 +101,12 @@ func main() {
 			"node directory used when the cache mode is hostPath")
 		hostRuntimeClass = flag.String("model-host-runtime-class",
 			envOr("FABRIC_OPERATOR_RUNTIME_CLASS", ""), "RuntimeClass for GPU nodes")
+		hostAccelerator = flag.String("model-host-accelerator", "",
+			"device the model host runs on: empty for NVIDIA GPUs, tpu for Cloud TPU chips")
+		hostPrivileged = flag.Bool("model-host-privileged", false,
+			"run the model-host container privileged; Cloud TPU VMs need it to open the chips")
+		hostCommand = flag.String("model-host-command", "",
+			"space-separated command replacing the model-host image entrypoint, e.g. \"vllm serve\"")
 		hostSpread = flag.Bool("model-host-spread-across-nodes", false,
 			"prefer placing model hosts on different nodes")
 
@@ -121,7 +127,9 @@ func main() {
 
 	// Repeatable, so a cluster's GPU labels and taints are expressed as they are rather
 	// than squeezed into one string.
-	var nodeSelectorEntries, tolerationEntries, pullSecretEntries, toolCallParserEntries multiFlag
+	var nodeSelectorEntries, tolerationEntries, pullSecretEntries, toolCallParserEntries, deviceEntries multiFlag
+	flag.Var(&deviceEntries, "model-host-device",
+		"host device path mounted into the model host, e.g. /dev/vfio; repeat for several")
 	flag.Var(&toolCallParserEntries, "model-host-tool-call-parser",
 		"exact model-id=parser tool calling profile; repeat for several models")
 	flag.Var(&pullSecretEntries, "model-host-image-pull-secret", "existing image pull Secret; repeat for several")
@@ -177,6 +185,20 @@ func main() {
 		CacheClaim:           *hostCache,
 		RuntimeClassName:     *hostRuntimeClass,
 		SpreadAcrossNodes:    *hostSpread,
+		Accelerator:          *hostAccelerator,
+		Privileged:           *hostPrivileged,
+		DevicePaths:          deviceEntries,
+		Command:              strings.Fields(*hostCommand),
+	}
+	if host.Accelerator != "" && host.Accelerator != operator.AcceleratorTPU {
+		log.Error("--model-host-accelerator must be empty or tpu", "value", host.Accelerator)
+		os.Exit(1)
+	}
+	for _, path := range host.DevicePaths {
+		if !strings.HasPrefix(path, "/dev/") {
+			log.Error("--model-host-device must be a path under /dev", "value", path)
+			os.Exit(1)
+		}
 	}
 	for _, model := range strings.Split(*hostTextOnlyModels, ",") {
 		if model = strings.TrimSpace(model); model != "" {
@@ -213,7 +235,8 @@ func main() {
 			os.Exit(1)
 		}
 		log.Info("managing the model host",
-			"image", host.Image, "served_name", host.ServedName, "gpus", host.GPUs)
+			"image", host.Image, "served_name", host.ServedName, "gpus", host.GPUs,
+			"accelerator", host.Accelerator)
 	}
 
 	reconciler := operator.New(client, operator.Options{

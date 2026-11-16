@@ -47,7 +47,7 @@ spec:
             {{- end }}
             {{- with .Values.operator.managedModelHost }}
             {{- if .image }}
-            - --model-host-image={{ .image }}
+            - --model-host-image={{ include "fabric-stamp.modelHostImage" $ }}
             {{- with .modelRef }}
             - {{ printf "--model-host-model=%s" . | quote }}
             {{- end }}
@@ -58,7 +58,11 @@ spec:
             - --model-host-max-model-len={{ .maxModelLen }}
             - --model-host-max-num-seqs={{ .maxNumSeqs }}
             - --model-host-gpu-memory-utilization={{ .gpuMemoryUtilization }}
+            {{- if include "fabric-stamp.isTPU" $ }}
+            - --model-host-dtype={{ $.Values.accelerator.tpu.dtype | default "bfloat16" }}
+            {{- else }}
             - --model-host-dtype={{ .dtype }}
+            {{- end }}
             - {{ printf "--model-host-service-account=%s" (include "fabric-stamp.modelHostServiceAccount" $) | quote }}
             {{- range .imagePullSecrets }}
             - {{ printf "--model-host-image-pull-secret=%s" .name | quote }}
@@ -110,8 +114,24 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- if include "fabric-stamp.isTPU" . }}
+            {{- with .Values.accelerator.tpu }}
+            # Cloud TPU: chips as google.com/tpu, no RuntimeClass (there is no NVIDIA runtime).
+            - --model-host-accelerator=tpu
+            {{- if .privileged }}
+            - --model-host-privileged
+            {{- end }}
+            {{- with .command }}
+            - {{ printf "--model-host-command=%s" (join " " .) | quote }}
+            {{- end }}
+            {{- range .devices }}
+            - {{ printf "--model-host-device=%s" . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- else }}
             {{- with .Values.gpu.runtimeClassName }}
             - --model-host-runtime-class={{ . }}
+            {{- end }}
             {{- end }}
             {{- range $key, $value := .Values.gpu.nodeSelector }}
             - --model-host-node-selector={{ $key }}={{ $value }}

@@ -100,6 +100,19 @@ func applyProfile(host ModelHost, profiles []GPUProfile) (ModelHost, []Adjustmen
 		host.DType = "float16"
 	}
 
+	if host.IsTPU() && host.DType != "" && !strings.EqualFold(host.DType, "bfloat16") &&
+		!strings.EqualFold(host.DType, "auto") {
+		// TPUs compute in bfloat16; the TPU backend serves bf16 checkpoints and does not
+		// run float16 or FP8 weights.
+		adjustments = append(adjustments, Adjustment{
+			Setting: "dtype",
+			From:    host.DType,
+			To:      "bfloat16",
+			Reason:  "Cloud TPU serves bfloat16; " + host.DType + " is not supported on TPU",
+		})
+		host.DType = "bfloat16"
+	}
+
 	if adjusted, change := clampMemoryUtilization(host.GPUMemoryUtilization, smallest); change != nil {
 		adjustments = append(adjustments, *change)
 		host.GPUMemoryUtilization = adjusted

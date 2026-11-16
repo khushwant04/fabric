@@ -522,6 +522,36 @@ gpu:
   # device while another node sits idle.
   spreadAcrossNodes: true
 
+# The accelerator model hosts run on (docs/tpu.md).
+#
+#   nvidia  NVIDIA GPUs through the device plugin and gpu.runtimeClassName. Every stamp
+#           before Cloud TPU support; choosing it changes nothing.
+#   tpu     a single-host Cloud TPU VM (v5e, v6e, v5p, v4). Model hosts run the vLLM TPU
+#           image, privileged, with the TPU device nodes, request google.com/tpu chips (the
+#           bootstrap advertises them), use tensor parallelism across the chips they ask for,
+#           and get a longer startup budget for XLA compilation. gpu.runtimeClassName and the
+#           DCGM exporter are not used. Set gpu.nodeSelector to the TPU node's label
+#           (the bootstrap uses accelerator=tpu).
+accelerator:
+  type: nvidia
+  tpu:
+    # The official vLLM TPU image. Pinned: a TPU image tracks vLLM and libtpu together, and
+    # a moving tag would change both under a running stamp. Check the TPU installation page
+    # of the vLLM docs before raising it.
+    image: vllm/vllm-tpu:v0.32.0
+    # The TPU image has no serving entrypoint, so the command is given explicitly; the
+    # operator appends the same flags it passes on GPUs.
+    command: ["vllm", "serve"]
+    # Without a device plugin the TPU runtime opens the chips itself, which needs a
+    # privileged container.
+    privileged: true
+    # Host device nodes mounted into the model host at the same path: /dev/accel0.. on v4
+    # and v5e, /dev/vfio on v5p and v6e. The bootstrap fills this from what it finds. A
+    # privileged container already sees the host's devices, so empty also works.
+    devices: []
+    # TPUs serve bfloat16 checkpoints; float16 and FP8 weights are not supported.
+    dtype: bfloat16
+
 # GPU utilisation and memory for the console's serving metrics (docs/serving-metrics.md).
 # The agent reads an NVIDIA DCGM exporter through its Service's Endpoints. Without one, the
 # console still charts traffic, latency and vLLM's KV-cache use, but no GPU utilisation.
@@ -535,7 +565,7 @@ gpuMetrics:
     service: dcgm-dcgm-exporter
   # Run a small exporter on each GPU node with this stamp, for a cluster that has none (a
   # k3s VM). Uses gpu.nodeSelector, gpu.tolerations and gpu.runtimeClassName, and reads the
-  # devices without requesting nvidia.com/gpu.
+  # devices without requesting nvidia.com/gpu. Never rendered when accelerator.type is tpu.
   dcgmExporter:
     enabled: false
     image:

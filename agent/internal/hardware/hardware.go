@@ -67,6 +67,17 @@ type Profile struct {
 	// deserves less trust than one measured on the device, and a reader should be able to
 	// tell which they are looking at.
 	Source string
+	// Kind is KindTPU for Cloud TPU chips and empty for an NVIDIA GPU. For a TPU, Model is
+	// the chip ("TPU v6e"), MemoryMiB is HBM per chip, Count is chips, and Capability is
+	// unknown because compute capability is a CUDA notion.
+	Kind string `json:",omitempty"`
+	// AcceleratorType is the TPU slice type the node was labelled with, e.g. "v6e-4".
+	AcceleratorType string `json:",omitempty"`
+}
+
+// IsTPU reports whether the profile describes TPU chips.
+func (p Profile) IsTPU() bool {
+	return p.Kind == KindTPU
 }
 
 // SupportsBFloat16 reports whether this hardware can execute bfloat16.
@@ -199,6 +210,12 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 	return profiles, err
 }
 
+// unequippedNodes counts ready nodes that should carry accelerators but advertise none.
+type unequippedNodes struct {
+	gpu int
+	tpu int
+}
+
 // gpuLabelled reports whether a node is labelled as carrying an NVIDIA GPU, whatever it
 // advertises. Such a node with no allocatable nvidia.com/gpu is the signature of a missing
 // device plugin or container runtime: the hardware is there, Kubernetes cannot hand it out.
@@ -211,10 +228,11 @@ func gpuLabelled(labels map[string]string) bool {
 }
 
 // profileNodes also counts ready nodes that should carry GPUs (selected by a GPU node
-// selector, or labelled as GPU nodes) but advertise none.
+// selector, or labelled as GPU nodes) but advertise none, and TPU-labelled nodes that
+// advertise no TPU chips.
 func profileNodes(
 	ctx context.Context, client Getter, selector map[string]string,
-) ([]Profile, int, error) {
+) ([]Profile, unequippedNodes, error) {
 	path := "/api/v1/nodes"
 	if len(selector) > 0 {
 		terms := make([]string, 0, len(selector))
@@ -227,10 +245,10 @@ func profileNodes(
 
 	var nodes nodeList
 	if err := client.Get(ctx, path, &nodes); err != nil {
-		return nil, 0, fmt.Errorf("list gpu nodes: %w", err)
+		return nil, unequippedNodes{}, fmt.Errorf("list gpu nodes: %w", err)
 	}
 
-	unequipped := 0
+	unequipped := unequippedNodes{}
 	profiles := make([]Profile, 0, len(nodes.Items))
 	for _, item := range nodes.Items {
 		ready := false
@@ -247,12 +265,26 @@ func profileNodes(
 			count, _ = strconv.Atoi(raw)
 		}
 		if count == 0 {
+			// A TPU node advertises chips under its own resource and is otherwise
+			// measured like a GPU node.
+			chips := 0
+			if raw, ok := item.Status.Allocatable[TPUResource]; ok {
+				chips, _ = strconv.Atoi(raw)
+			}
+			if chips > 0 {
+				profile := Profile{Node: item.Metadata.Name, Count: chips, Source: "unknown"}
+				describeTPU(&profile, item.Metadata.Labels)
+				profiles = append(profiles, profile)
+				continue
+			}
 			// No allocatable GPU means nothing can be scheduled here, whatever the
 			// machine type claims. A node whose driver or device plugin is missing looks
 			// exactly like this, and it is the reason a GPU pool can exist while
 			// advertising nothing.
-			if len(selector) > 0 || gpuLabelled(item.Metadata.Labels) {
-				unequipped++
+			if tpuLabelled(item.Metadata.Labels) {
+				unequipped.tpu++
+			} else if len(selector) > 0 || gpuLabelled(item.Metadata.Labels) {
+				unequipped.gpu++
 			}
 			continue
 		}

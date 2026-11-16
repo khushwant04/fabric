@@ -71,6 +71,13 @@ type GPU struct {
 	MemoryBytes       int64  `json:"memory_bytes"`
 	ComputeCapability string `json:"compute_capability,omitempty"`
 	Source            string `json:"source,omitempty"`
+	// Accelerator is "tpu" for Cloud TPU chips; omitted for GPUs, so an NVIDIA stamp's
+	// report is unchanged. For a TPU, Count is chips and MemoryBytes is HBM per chip.
+	Accelerator string `json:"accelerator,omitempty"`
+	// Vendor is "google" for TPU chips; omitted for GPUs.
+	Vendor string `json:"vendor,omitempty"`
+	// AcceleratorType is the TPU slice type, e.g. "v6e-4".
+	AcceleratorType string `json:"accelerator_type,omitempty"`
 }
 
 // GPUClaim is the devices one deployment's model hosts are holding on this stamp.
