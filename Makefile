@@ -6,6 +6,8 @@
 #   make demo-agent the same platform, then a multi-step agent run with a budget, a trace
 #                   and the tool-call guard (docs/agent-runs.md); a stub host unless
 #                   FABRIC_E2E_UPSTREAM points at a real one
+#   make demo-agent-loop  one request runs a whole agent on the gateway (POST /v1/agent/runs)
+#   make demo-cascade     model "cascade": small tier first, escalate on cheap checks
 #   make demo-edge  the edge gateway (ADR 0021) in front of two local stamps: routing by
 #                   model, failover, and serving through a control-plane outage
 #   make check      every test and lint suite CI runs (except PostgreSQL)
@@ -29,11 +31,11 @@ OPENAPI_ENV := FABRIC_APP_ENV=test FABRIC_DATABASE_URL=sqlite+aiosqlite:///:memo
 	FABRIC_JWT_ISSUER=https://control.fabric.test \
 	FABRIC_CREDENTIAL_PEPPER=test-pepper-value FABRIC_SYSTEM_ACCOUNT_SLUG=fabric-system
 
-.PHONY: help setup setup-python demo demo-agent demo-edge check check-control-plane check-data-plane check-agent \
+.PHONY: help setup setup-python demo demo-agent demo-agent-loop demo-cascade demo-edge check check-control-plane check-data-plane check-agent \
 	check-runtime check-console test-postgres openapi bench-routing
 
 help:
-	@sed -n '1,18p' Makefile
+	@sed -n '1,20p' Makefile
 
 setup: setup-python
 	cd v1 && npm ci
@@ -57,6 +59,16 @@ demo-agent: setup-python
 # names and regions) and the edge; see docs/edge-gateway.md.
 demo-edge: setup-python
 	bash agent/scripts/edge-demo.sh
+
+# Server-side tool loop (docs/agent-tool-loop.md) and model cascade (docs/model-cascade.md),
+# on the same local platform and stub host machinery as demo-agent.
+demo-agent-loop: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=loop PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+demo-cascade: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=cascade PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
 
 check: check-control-plane check-data-plane check-agent check-runtime check-console
 

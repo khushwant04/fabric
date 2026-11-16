@@ -67,6 +67,8 @@ control plane is down, so inference still never passes through the control plane
 | **Anthropic Messages API** | `POST /v1/messages`, including streaming, tools and images, translated to chat completions at the gateway so routing, limits and metering are unchanged. Works with the official `anthropic` Python SDK; see [Messages setup](docs/anthropic-messages.md) |
 | **Agent runs** | Group an agent loop's calls with `X-Fabric-Run-Id`, cap it with a token/step budget (refused with `429 run_budget_exhausted` before the model is called), read its per-step trace at `GET /v1/runs/{id}` (no prompt text kept), and let the gateway re-ask the model when a tool call does not match its schema. `make demo-agent` runs it without a GPU; see [Agent runs](docs/agent-runs.md) |
 | **Edge gateway** | One inference URL in front of every stamp (AKS, k3s on GCP, any VM). Verifies the token locally, routes by model within the caller's account, prefers healthy, ready and nearby stamps, keeps agent runs on one stamp, fails over on connection errors, and keeps serving from its cached routing table when the control plane is down. `make demo-edge` runs it in front of two local stamps; see [Edge gateway](docs/edge-gateway.md) |
+| **Server-side tool loop** | `POST /v1/agent/runs` runs a whole tool-using agent in one request: the gateway calls the model, executes built-in (`calculator`, `current_time`) and allowlisted HTTP tools in parallel, hands client tools back with `requires_action`, and streams each step as SSE. Every model call is authenticated, limited and metered. `make demo-agent-loop`; see [Agent tool loop](docs/agent-tool-loop.md) |
+| **Model cascade** | `model: "cascade"` answers with the account's smallest deployment and escalates to a larger one only on cheap, explainable checks (truncation, empty answer, bad tool call, schema mismatch), reporting the path in `X-Fabric-Cascade-*` headers. `make demo-cascade`; see [Model cascade](docs/model-cascade.md) |
 | **Context-aware model routing** | Use `model: "auto"` to select an account-owned, healthy deployment by endpoint, modality, context bound, code/reasoning fit, and configured priority—without a request-time control-plane call |
 | **Tenant isolation at the database** | Row-level security `ENABLE` + `FORCE` on every account table, under a role that cannot bypass it. Enforceability is checked at startup |
 | **Two credential paths** | Fabric API keys for machines; OIDC for people, with each account able to register **its own** identity provider |
@@ -346,6 +348,8 @@ SQLite: only the PostgreSQL run proves isolation is enforced.
 ---
 
 ## Documentation
+
+Architecture diagrams (Mermaid, plain text and draw.io): [docs/architecture](docs/architecture/README.md).
 
 Start with the [project review](docs/project-review.md) or the
 [context index](docs/context/README.md).

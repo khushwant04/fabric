@@ -22,6 +22,13 @@
 #       examples/python/scripts/agent_demo.py against this data plane and stop there. With no
 #       real upstream, the stub host is agent/scripts/agent_demo_host.py, which issues tool
 #       calls (one deliberately malformed) instead of a fixed reply.
+#   FABRIC_E2E_AGENT_DEMO=loop agent/scripts/e2e.sh      # `make demo-agent-loop`: run
+#       examples/python/scripts/agent_loop_demo.py (server-side tool loop, POST /v1/agent/runs).
+#   FABRIC_E2E_AGENT_DEMO=cascade agent/scripts/e2e.sh   # `make demo-cascade`: place a second,
+#       larger deployment (capabilities.priority 10 vs -10) and run
+#       examples/python/scripts/cascade_demo.py (model "cascade").
+#   Both use the stub host agent/scripts/agent_loop_demo_host.py unless FABRIC_E2E_UPSTREAM is
+#   set; the larger tier's release is FABRIC_E2E_RELEASE_LARGE (default "<release>-large").
 #
 # Requires the control-plane, data-plane, and agent environments to be installed.
 
@@ -38,6 +45,14 @@ UPSTREAM="${FABRIC_E2E_UPSTREAM:-http://model-host.e2e.test}"
 AGENT_DEMO="${FABRIC_E2E_AGENT_DEMO:-}"
 # The name the upstream itself knows the model by, which is not the customer's alias.
 RELEASE="${FABRIC_E2E_RELEASE:-e2e-release-1}"
+RELEASE_LARGE="${FABRIC_E2E_RELEASE_LARGE:-${RELEASE}-large}"
+case "$AGENT_DEMO" in
+    loop) DEMO_SCRIPT="agent_loop_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
+    cascade) DEMO_SCRIPT="cascade_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
+    *) DEMO_SCRIPT="agent_demo.py"; STUB_HOST="agent_demo_host.py" ;;
+esac
+CASCADE_DEMO=""
+[ "$AGENT_DEMO" = "cascade" ] && CASCADE_DEMO=1
 WORK="$(mktemp -d)"
 SERVER_PID=""
 DATA_PLANE_PID=""
@@ -184,10 +199,25 @@ CONTROL_TOKEN=$(curl -fsS -X POST "$CONTROL_URL/v1/token" -H 'Content-Type: appl
     | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
 info "control token acquired"
 
+FIRST_CAPABILITIES=""
+[ -n "$CASCADE_DEMO" ] && FIRST_CAPABILITIES=',"capabilities":{"priority":-10}'
 DEPLOYMENT=$(api POST "/v1/accounts/$ACCOUNT_ID/deployments" \
-    "{\"name\":\"e2e-deployment\",\"model_alias\":\"e2e-model\",\"spec\":{\"runtime\":{\"release\":\"$RELEASE\"}}}")
+    "{\"name\":\"e2e-deployment\",\"model_alias\":\"e2e-model\",\"spec\":{\"runtime\":{\"release\":\"$RELEASE\"}$FIRST_CAPABILITIES}}")
 DEPLOYMENT_ID=$(echo "$DEPLOYMENT" | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['id'])")
 info "deployment: $DEPLOYMENT_ID"
+
+DEPLOYMENT_IDS="$DEPLOYMENT_ID"
+EXPECTED_MODELS="['e2e-model']"
+if [ -n "$CASCADE_DEMO" ]; then
+    # A cascade needs a ladder: the account's chat deployments ordered by priority ascending
+    # (docs/model-cascade.md). The priority travels control plane -> agent -> deployments.json.
+    LARGE=$(api POST "/v1/accounts/$ACCOUNT_ID/deployments" \
+        "{\"name\":\"e2e-deployment-large\",\"model_alias\":\"e2e-model-large\",\"spec\":{\"runtime\":{\"release\":\"$RELEASE_LARGE\"},\"capabilities\":{\"priority\":10}}}")
+    LARGE_ID=$(echo "$LARGE" | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['id'])")
+    DEPLOYMENT_IDS="$DEPLOYMENT_ID $LARGE_ID"
+    EXPECTED_MODELS="['e2e-model', 'e2e-model-large']"
+    info "cascade tiers: e2e-model (priority -10) < e2e-model-large (priority 10)"
+fi
 
 ENROLL=$(api POST "/v1/accounts/$ACCOUNT_ID/stamp-enrollment-tokens" \
     '{"allowed_mode":"byoi","expires_in_minutes":30}')
@@ -203,6 +233,8 @@ log "4. Agent: build, enroll, reconcile"
 # No Kubernetes cluster runs here, so there are no GPU nodes to measure. Placement admits
 # a deployment only onto capacity a stamp reports (ADR 0013), so declare one device.
 AGENT_CAPACITY="--measure-capacity=false --gpus 1"
+# The cascade demo places two single-GPU deployments.
+[ -n "$CASCADE_DEMO" ] && AGENT_CAPACITY="--measure-capacity=false --gpus 2"
 
 FABRIC_AGENT_ENROLLMENT_TOKEN="$ENROLL_TOKEN" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
@@ -231,9 +263,11 @@ info "no placement yet, so no deployment configured"
 log "5. Place the deployment, reconcile again"
 # --------------------------------------------------------------------------
 
-api POST "/v1/accounts/$ACCOUNT_ID/deployments/$DEPLOYMENT_ID/placements" \
-    "{\"stamp_id\":\"$STAMP_ID\"}" >/dev/null
-info "placed $DEPLOYMENT_ID on $STAMP_ID"
+for placed_id in $DEPLOYMENT_IDS; do
+    api POST "/v1/accounts/$ACCOUNT_ID/deployments/$placed_id/placements" \
+        "{\"stamp_id\":\"$STAMP_ID\"}" >/dev/null
+    info "placed $placed_id on $STAMP_ID"
+done
 
 FABRIC_AGENT_ENROLLMENT_TOKEN="" "$WORK/fabric-agent" \
     --control-plane "$CONTROL_URL" \
@@ -304,7 +338,8 @@ settings = Settings(
 
 # Loaded from the file the Go agent wrote, unmodified.
 registry = DeploymentRegistry.load(deployments)
-assert len(registry) == 1, f"expected one deployment from the agent, got {len(registry)}"
+expected = int(os.environ.get("FABRIC_E2E_EXPECTED_DEPLOYMENTS") or 1)
+assert len(registry) == expected, f"expected {expected} deployments from the agent, got {len(registry)}"
 
 
 def upstream(request: httpx.Request) -> httpx.Response:
@@ -364,7 +399,8 @@ FABRIC_E2E_JWKS="$WORK/jwks.json" \
 FABRIC_E2E_DP_PORT="$DP_PORT" \
 FABRIC_E2E_DP_ADMIN_PORT="$DP_ADMIN_PORT" \
 FABRIC_E2E_REAL_UPSTREAM="${FABRIC_E2E_UPSTREAM:-}" \
-FABRIC_E2E_STUB_HOST="$([ -n "$AGENT_DEMO" ] && echo "$REPO_ROOT/agent/scripts/agent_demo_host.py")" \
+FABRIC_E2E_STUB_HOST="$([ -n "$AGENT_DEMO" ] && echo "$REPO_ROOT/agent/scripts/$STUB_HOST")" \
+FABRIC_E2E_EXPECTED_DEPLOYMENTS="$([ -n "$CASCADE_DEMO" ] && echo 2 || echo 1)" \
 "$DATA_PY" "$WORK/data_plane.py" >"$WORK/data-plane.log" 2>&1 &
 DATA_PLANE_PID=$!
 cd "$REPO_ROOT"
@@ -383,7 +419,7 @@ MODELS=$(curl -fsS "$DP_URL/v1/models" -H "Authorization: Bearer $INFERENCE_TOKE
 echo "$MODELS" | "$CONTROL_PY" -c "
 import json,sys
 names=[row['id'] for row in json.load(sys.stdin)['data']]
-assert names==['e2e-model'], names
+assert names==$EXPECTED_MODELS, names
 print(f'     models visible to the account: {names}')"
 
 REPLY=$(curl -fsS -X POST "$DP_URL/v1/chat/completions" \
@@ -408,17 +444,20 @@ if [ -n "$AGENT_DEMO" ]; then
     if [ -n "${FABRIC_E2E_UPSTREAM:-}" ]; then
         info "model host: $FABRIC_E2E_UPSTREAM (real inference)"
     else
-        info "model host: deterministic tool-calling stub (agent/scripts/agent_demo_host.py)"
+        info "model host: deterministic tool-calling stub (agent/scripts/$STUB_HOST)"
     fi
     FABRIC_CONTROL_URL="$CONTROL_URL" \
     FABRIC_INFERENCE_URL="$DP_URL" \
     FABRIC_API_KEY="$API_KEY" \
     FABRIC_MODEL="e2e-model" \
     uv run --quiet --project "$REPO_ROOT/examples/python" --python "${PYTHON_VERSION:-3.12}" \
-        python "$REPO_ROOT/examples/python/scripts/agent_demo.py" ${FABRIC_AGENT_DEMO_ARGS:-}
+        python "$REPO_ROOT/examples/python/scripts/$DEMO_SCRIPT" ${FABRIC_AGENT_DEMO_ARGS:-}
     METRICS=$(curl -fsS "$DP_URL/metrics")
     info "gateway metrics:"
-    echo "$METRICS" | grep -E '^fabric_dp_(agent_run|tool_guard)' | sed 's/^/     /'
+    # The cascade meters every attempt as an ordinary request on its own deployment.
+    METRIC_PATTERN='^fabric_dp_(agent_run|tool_guard)'
+    [ -n "$CASCADE_DEMO" ] && METRIC_PATTERN='^fabric_dp_requests_total'
+    echo "$METRICS" | grep -E "$METRIC_PATTERN" | sed 's/^/     /' || true
     log "Agent demo complete"
     exit 0
 fi
