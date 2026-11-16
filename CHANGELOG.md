@@ -8,6 +8,17 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- Console **Agents** section (`docs/console-agents.md`): a Runs page (recent agent runs from
+  every approved gateway, status filter, token and step budget meters, refusals and
+  tool-guard repairs, live refresh, a clear message for gateways without agent runs), a run
+  trace page (budgets, totals, step timeline with tool-call validity and guard repairs,
+  delete with confirmation) and an Agent playground (streamed `POST /v1/agent/runs` with
+  deployments, `auto` and `cascade`, builtin and hosted tools, file search with vector stores
+  and citations, client tools and MCP approvals that resume the run, max steps, token budget,
+  inline code-interpreter images, Stop). New BFF route `POST /api/agents/runs`; the
+  inference token stays on the server. The sidebar also links the identity provider page,
+  and the command search lists the new pages. The demo console's stub model host plays a
+  scripted tool-using agent.
 - File search (`docs/file-search.md`): OpenAI-compatible `POST/GET /v1/files`,
   `GET/DELETE /v1/files/{id}`, `POST/GET /v1/vector_stores`, `GET/DELETE
   /v1/vector_stores/{id}`, `POST/GET/DELETE /v1/vector_stores/{id}/files[/{file_id}]` and

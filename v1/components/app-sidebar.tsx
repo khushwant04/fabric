@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import {
+  BotIcon,
   BoxesIcon,
   ChartNoAxesCombinedIcon,
   CpuIcon,
@@ -9,6 +10,8 @@ import {
   LayoutDashboardIcon,
   NetworkIcon,
   FlaskConicalIcon,
+  FingerprintIcon,
+  ListTreeIcon,
   ScrollTextIcon,
   Settings2Icon,
   UserRoundCogIcon,
@@ -62,6 +65,23 @@ const sections: NavSection[] = [
     ],
   },
   {
+    label: "Agents",
+    items: [
+      {
+        title: "Runs",
+        url: "/agents/runs",
+        icon: <ListTreeIcon />,
+        scope: "deployments:read",
+      },
+      {
+        title: "Agent playground",
+        url: "/agents/playground",
+        icon: <BotIcon />,
+        scope: "deployments:read",
+      },
+    ],
+  },
+  {
     label: "Identity & access",
     items: [
       {
@@ -81,6 +101,12 @@ const sections: NavSection[] = [
         url: "/access/api-keys",
         icon: <KeyRoundIcon />,
         scope: "api-keys:read",
+      },
+      {
+        title: "Identity provider",
+        url: "/access/identity-provider",
+        icon: <FingerprintIcon />,
+        scope: "accounts:read",
       },
     ],
   },

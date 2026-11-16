@@ -112,6 +112,10 @@ PROMPTS = [
 log_prefix = "   "
 
 
+def rng_prompt() -> str:
+    return random.choice(PROMPTS)
+
+
 def log(message: str) -> None:
     print(f"{log_prefix}{message}", flush=True)
 
@@ -471,6 +475,53 @@ class Demo:
         log(f"inference: {len(codes)} requests through the data planes, "
             f"{len(failures)} not 200 {sorted(set(failures)) if failures else ''}")
 
+    def seed_agent_runs(self) -> None:
+        """A few agent runs on aks-gpu (the console's gateway) so Agents > Runs has data.
+
+        The stub model host plays a tool-using agent when a request declares tools; its first
+        calculator call is malformed, so the tool-call guard repairs it. Optional demo data:
+        a failure is logged and never fails the seed.
+        """
+        try:
+            self._agent_runs()
+            log("agent runs: 3 runs on aks-gpu (Agents > Runs)")
+        except Exception as exc:  # noqa: BLE001
+            log(f"agent runs: skipped ({exc.__class__.__name__})")
+
+    def _agent_runs(self) -> None:
+        stamp = self.stamps["aks-gpu"]
+        alias = self.deployments["support-assistant"]["alias"]
+        token = self.api_key_token(self.keys["maya-laptop"], "fabric-inference")
+        tools = [
+            {"type": "function", "function": {"name": "calculator", "parameters": {
+                "type": "object", "properties": {"expression": {"type": "string"}},
+                "required": ["expression"]}},
+             "x-fabric-executor": {"type": "builtin", "name": "calculator"}},
+            {"type": "function", "function": {"name": "current_time", "parameters": {
+                "type": "object", "properties": {"timezone": {"type": "string"}}}},
+             "x-fabric-executor": {"type": "builtin", "name": "current_time"}},
+        ]
+        task = [{"role": "user", "content": "Split 86.40 EUR three ways with a 17.5% tip."}]
+        with httpx.Client(timeout=60, verify=self.args.ca) as client:
+            def post(path: str, run_id: str, body: dict, **budget: int) -> int:
+                headers = {"Authorization": f"Bearer {token}", "X-Fabric-Run-Id": run_id}
+                for name, value in budget.items():
+                    headers[f"X-Fabric-Run-Budget-{name.capitalize()}"] = str(value)
+                return client.post(f"{stamp['dp_url']}{path}", headers=headers,
+                                   json=body).status_code
+
+            # Completed within budget, with one tool-guard repair.
+            post("/v1/agent/runs", "trip-planner-7f2c",
+                 {"model": alias, "messages": task, "tools": tools}, tokens=20000, steps=8)
+            # A chat client that keeps going: the step budget refuses its fourth call.
+            for _ in range(4):
+                post("/v1/chat/completions", "nightly-eval-0412",
+                     {"model": alias, "max_tokens": 128,
+                      "messages": [{"role": "user", "content": rng_prompt()}]}, steps=3)
+            # A token budget the task overshoots: the run ends budget_exhausted.
+            post("/v1/agent/runs", "support-ticket-881",
+                 {"model": alias, "messages": task, "tools": tools}, tokens=300)
+
     def collect(self, quiet: bool = False) -> None:
         for stamp in self.stamps.values():
             state = self.work / "stamps" / stamp["name"]
@@ -563,6 +614,7 @@ def main() -> None:
         demo.create_deployments()
         demo.start_data_planes()
         demo.generate_traffic()
+        demo.seed_agent_runs()
         demo.collect()
         demo.finish_rollouts()
         demo.write_state()

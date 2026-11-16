@@ -48,7 +48,7 @@ Next's development indicator appears in the corner.
 | Data plane | **real** | One gateway per stamp, loaded from the file that stamp's agent wrote. Inference listeners use HTTPS. |
 | Collector | **real** | The Go `fabric-collector`. It drains each data plane's usage and forwards it every 30 s. |
 | Identity provider | **mock** | `scripts/demo-console/mock_oidc.py`. A minimal OIDC provider (discovery, JWKS, `/authorize`, `/oauth/token` with code + PKCE and refresh, `/userinfo`, logout). It stands in for Auth0. |
-| Model host | **mock** | `scripts/demo-console/model_host.py`. An OpenAI-compatible stub that streams canned answers and reports token usage the way vLLM does. |
+| Model host | **mock** | `scripts/demo-console/model_host.py`. An OpenAI-compatible stub that streams canned answers and reports token usage the way vLLM does. With `tools` it plays a scripted tool-using agent for the agent playground. |
 
 Two inputs can only come from hardware, so the seeding script sends them over the same
 stamp-authenticated APIs a production stamp uses, with each stamp's own agent credential:
@@ -95,6 +95,11 @@ APIs by the person or machine that would create it.
 - **Traffic:** about 340 chat completions, some streamed, sent through the data planes with
   three different API keys and forwarded by the collector. These fill the Usage page and the
   dashboard counters.
+- **Agent runs:** three runs on aks-gpu for **Agents > Runs**: `trip-planner-7f2c` (a
+  server-side tool loop with one tool-guard repair), `nightly-eval-0412` (stopped by its
+  step budget, one refusal) and `support-ticket-881` (overshoots its token budget). When a
+  request declares tools, the stub model host plays a scripted agent (see
+  [Console: Agents](console-agents.md)).
 - **Audit trail:** every change above is recorded as it happens.
 
 ## How sign-in works without Auth0

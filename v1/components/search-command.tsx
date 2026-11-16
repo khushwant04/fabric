@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
+  BotIcon,
   BoxesIcon,
   ChartNoAxesCombinedIcon,
   CpuIcon,
@@ -10,6 +11,8 @@ import {
   LayoutDashboardIcon,
   NetworkIcon,
   FlaskConicalIcon,
+  FingerprintIcon,
+  ListTreeIcon,
   SearchIcon,
   ScrollTextIcon,
   Settings2Icon,
@@ -37,9 +40,12 @@ const items = [
   { label: "Inference stamps", href: "/stamps", icon: CpuIcon, group: "Infrastructure" },
   { label: "Usage", href: "/usage", icon: ChartNoAxesCombinedIcon, group: "Infrastructure" },
   { label: "Playground", href: "/playground", icon: FlaskConicalIcon, group: "Infrastructure" },
+  { label: "Runs", href: "/agents/runs", icon: ListTreeIcon, group: "Agents" },
+  { label: "Agent playground", href: "/agents/playground", icon: BotIcon, group: "Agents" },
   { label: "Members", href: "/access/members", icon: UsersIcon, group: "Identity & access" },
   { label: "Service principals", href: "/access/service-principals", icon: UserRoundCogIcon, group: "Identity & access" },
   { label: "API keys", href: "/access/api-keys", icon: KeyRoundIcon, group: "Identity & access" },
+  { label: "Identity provider", href: "/access/identity-provider", icon: FingerprintIcon, group: "Identity & access" },
   { label: "Account settings", href: "/settings", icon: Settings2Icon, group: "Administration" },
   { label: "Audit log", href: "/audit", icon: ScrollTextIcon, group: "Administration" },
 ]
@@ -88,7 +94,7 @@ export function SearchCommand({ compact = false }: { compact?: boolean }) {
           <CommandInput placeholder="Search pages and resources..." />
           <CommandList>
             <CommandEmpty>No results found.</CommandEmpty>
-            {["Platform", "Infrastructure", "Identity & access", "Administration"].map((group) => (
+            {["Platform", "Infrastructure", "Agents", "Identity & access", "Administration"].map((group) => (
               <CommandGroup heading={group} key={group}>
                 {items.filter((item) => item.group === group).map((item) => (
                   <CommandItem key={item.href} value={`${item.label} ${group}`} onSelect={() => select(item.href)}>

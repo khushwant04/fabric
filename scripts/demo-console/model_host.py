@@ -54,6 +54,92 @@ def reply_for(prompt: str) -> str:
     return DEFAULT_REPLY
 
 
+PLOT_CODE = (
+    "import numpy as np\nimport matplotlib.pyplot as plt\n\n"
+    "x = np.linspace(0, 20, 400)\ny = np.sin(x) * np.exp(-x / 5)\n"
+    "plt.figure(figsize=(6, 3))\nplt.plot(x, y)\nplt.axhline(0, color='grey', linewidth=0.5)\n"
+    "plt.title('sin(x) * exp(-x / 5)')\nplt.tight_layout()\nplt.savefig('curve.png')\n"
+    "print('zero crossings near', [round(v, 2) for v in x[1:][np.diff(np.sign(y)) != 0]])"
+)
+
+
+def _call(name: str, arguments: dict) -> dict:
+    return {"id": f"call_{uuid.uuid4().hex[:10]}", "type": "function",
+            "function": {"name": name, "arguments": json.dumps(arguments)}}
+
+
+def agent_turn(body: dict) -> tuple[str | None, list[dict]]:
+    """A scripted tool-using agent for the console's agent playground (no real model).
+
+    It calls the declared tools in a fixed order, one turn at a time: calculator and
+    current_time together (the calculator call is malformed once, so the gateway's
+    tool-call guard visibly repairs it), then code_interpreter, file_search and any other
+    declared tool (client or MCP tools), and finally answers from the tool results.
+    """
+    declared = [t.get("function", {}).get("name") for t in body.get("tools") or []]
+    messages = body.get("messages") or []
+    called: dict[str, str] = {}
+    results: dict[str, str] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            called[call["id"]] = call["function"]["name"]
+        if message.get("role") == "tool":
+            results[called.get(message.get("tool_call_id"), "")] = str(message.get("content"))
+    done = set(called.values())
+    guard = any(str(m.get("content") or "").startswith("[fabric tool-guard]") for m in messages
+                if m.get("role") == "user")
+
+    first = [name for name in ("calculator", "current_time")
+             if name in declared and name not in done]
+    if first:
+        calls = []
+        if "calculator" in first:
+            key = "expression" if guard else "expr"  # the wrong key until the guard corrects it
+            arguments = {key: "86.40 * 1.175 / 3"}
+            calls.append(_call("calculator", arguments))
+        if "current_time" in first:
+            calls.append(_call("current_time", {"timezone": "Asia/Tokyo"}))
+        return None, calls
+    if "code_interpreter" in declared and "code_interpreter" not in done:
+        return None, [_call("code_interpreter", {"code": PLOT_CODE})]
+    if "file_search" in declared and "file_search" not in done:
+        return None, [_call("file_search", {"query": "refund policy for damaged orders"})]
+    builtin = ("calculator", "current_time", "code_interpreter", "file_search", "web_fetch",
+               "web_search")
+    others = [n for n in declared if n and n not in done and n not in builtin]
+    if others:
+        return None, [_call(others[0], {"order_id": "A-1042"})]
+
+    lines = ["Here is what I found:\n"]
+    if "calculator" in results:
+        try:
+            share = json.loads(results["calculator"])["result"]
+            lines.append(f"- **Bill split:** 86.40 EUR plus a 17.5% tip is "
+                         f"{86.40 * 1.175:.2f} EUR, so each of the three of you pays "
+                         f"**{float(share):.2f} EUR**.")
+        except (ValueError, KeyError, TypeError):
+            lines.append("- The calculator could not evaluate the bill.")
+    if "current_time" in results:
+        try:
+            now = json.loads(results["current_time"])
+            stamp = f"{now['weekday']}, {now['iso8601'][11:16]} ({now['timezone']})"
+            lines.append(f"- **Tokyo time:** {stamp}")
+        except (ValueError, KeyError, TypeError):
+            lines.append("- The time in Tokyo could not be read.")
+    if "code_interpreter" in results:
+        lines.append("- **Plot:** the curve is attached above. It crosses zero every π, near "
+                     "3.14, 6.28, 9.42, 12.57, 15.71 and 18.85, with a shrinking amplitude.")
+    if "file_search" in results:
+        lines.append("- **Policy:** damaged orders are refunded in full within 14 days "
+                     "[refund-policy.md#0].")
+    for name, content in results.items():
+        if name not in ("calculator", "current_time", "code_interpreter", "file_search", ""):
+            lines.append(f"- **{name}:** {content[:160]}")
+    if len(lines) == 1:
+        lines = [reply_for(prompt_of(body))]
+    return "\n".join(lines), []
+
+
 def count_tokens(text: str) -> int:
     # Roughly what a BPE tokenizer gives for English prose.
     return max(1, int(len(text.split()) * 1.3))
@@ -105,6 +191,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "not found"})
         chat = self.path.endswith("chat/completions")
         prompt = prompt_of(body)
+        if chat and body.get("tools") and not body.get("stream"):
+            # The agent playground's server-side tool loop: a little think time per turn so
+            # the console's live timeline has something to show.
+            time.sleep(1.2)
+            content, calls = agent_turn(body)
+            message: dict = {"role": "assistant", "content": content}
+            if calls:
+                message["tool_calls"] = calls
+            completion = content or json.dumps([c["function"] for c in calls])
+            usage = {"prompt_tokens": count_tokens(prompt) + 40 * len(body["tools"]),
+                     "completion_tokens": count_tokens(completion)}
+            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+            return self._json(200, {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:24]}", "object": "chat.completion",
+                "created": int(time.time()), "model": str(body.get("model", "model")),
+                "choices": [{"index": 0, "message": message,
+                             "finish_reason": "tool_calls" if calls else "stop"}],
+                "usage": usage,
+            })
         text = reply_for(prompt)
         model = str(body.get("model", "model"))
         if "0.8" in model:

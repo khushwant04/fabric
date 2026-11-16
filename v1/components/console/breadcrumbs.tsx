@@ -26,9 +26,12 @@ const labels: Record<string, string> = {
   "service-principals": "Service principals",
   "api-keys": "API keys",
   settings: "Account settings",
+  agents: "Agents",
+  runs: "Runs",
 }
 
-function labelFor(segment: string) {
+function labelFor(segment: string, previous?: string) {
+  if (previous === "runs") return "Run trace"
   if (labels[segment]) return labels[segment]
   if (/^[0-9a-f-]{12,}$/i.test(segment) || segment.startsWith("dep_")) {
     return "Details"
@@ -52,14 +55,14 @@ export function ConsoleBreadcrumbs() {
               <BreadcrumbItem>
                 {isLast ? (
                   <BreadcrumbPage className="font-medium">
-                    {labelFor(segment)}
+                    {labelFor(segment, segments[index - 1])}
                   </BreadcrumbPage>
                 ) : (
                   <BreadcrumbLink
                     render={<Link href={href} />}
                     className="text-muted-foreground"
                   >
-                    {labelFor(segment)}
+                    {labelFor(segment, segments[index - 1])}
                   </BreadcrumbLink>
                 )}
               </BreadcrumbItem>
