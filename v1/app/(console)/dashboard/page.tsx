@@ -1,7 +1,8 @@
 import { DashboardOverview } from "@/components/dashboard/overview"
-import { getAccountUsage, getDeploymentStatuses, listDeployments, listPlacements, listStamps } from "@/lib/fabric/data"
+import { getAccountUsage, getDeploymentStatuses, listApiKeys, listDeployments, listPlacements, listStamps } from "@/lib/fabric/data"
 import { consoleUsesEdge, edgeGatewayUrl } from "@/lib/fabric/playground-data"
-import { deploymentStampOptions, deploymentState, gpuCapacity, stampState } from "@/lib/fabric/resource-state"
+import { deploymentState, gpuCapacity, stampState } from "@/lib/fabric/resource-state"
+import { deploymentStampChoices } from "@/lib/fabric/model-catalog"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
 
 function timestamp(value: string | null) {
@@ -13,10 +14,12 @@ export default async function DashboardPage() {
   const context = await getConsoleContext()
   const canReadDeployments = hasScope(context, "deployments:read")
   const canReadStamps = hasScope(context, "stamps:read")
-  const [deploymentResult, stampResult, usageResult] = await Promise.allSettled([
+  const [deploymentResult, stampResult, usageResult, keyResult] = await Promise.allSettled([
     canReadDeployments ? listDeployments() : Promise.resolve(null),
     canReadStamps ? listStamps() : Promise.resolve(null),
     canReadDeployments ? getAccountUsage() : Promise.resolve(null),
+    // Only to suggest a first key on the home page; a failure just hides the suggestion.
+    hasScope(context, "api-keys:read") ? listApiKeys() : Promise.resolve(null),
   ])
   const deploymentData = deploymentResult.status === "fulfilled" ? deploymentResult.value : null
   const stampData = stampResult.status === "fulfilled" ? stampResult.value : null
@@ -51,12 +54,17 @@ export default async function DashboardPage() {
   const recent = [...observed].sort((left, right) => timestamp(right.deployment.updated_at) - timestamp(left.deployment.updated_at))
   const canCreate = hasScope(context, "deployments:write")
   const edgeUrl = edgeGatewayUrl()
+  const keys = keyResult.status === "fulfilled" ? keyResult.value : null
+  const user = context.me.user
+  const firstName = user.display_name ? user.display_name.trim().split(/\s+/)[0] : null
 
   return <DashboardOverview
     checkedAt={checkedAt}
     error={error}
+    firstName={firstName}
+    hasApiKey={keys === null ? null : keys.some((key) => !key.revoked_at)}
     canCreate={canCreate}
-    stampOptions={deploymentStampOptions(stamps)}
+    stampOptions={deploymentStampChoices(stamps)}
     infrastructureUnavailable={stampResult.status === "rejected"}
     deployments={deploymentData === null ? null : { total: deployments.length, ready, attention, phases, recent: recent.slice(0, 5) }}
     stamps={stampData === null ? null : { total: stamps.length, active: activeStamps.length, rows: stampRows.slice(0, 3) }}

@@ -92,13 +92,13 @@ function StageTimeline({ stages }: { stages: Stage[] }) {
     {stages.map((stage, index) => <li key={stage.key} className="flex items-center gap-1" aria-current={stage.state === "current" ? "step" : undefined}>
       {index ? <span aria-hidden="true" className={cn("mx-1 h-px w-4", stage.state === "pending" ? "bg-border" : "bg-foreground/40")} /> : null}
       <span className={cn(
-        "inline-flex items-center gap-1.5 border px-1.5 py-0.5",
+        "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5",
         stage.state === "done" && "border-border text-muted-foreground",
         stage.state === "current" && "border-foreground font-medium text-foreground",
         stage.state === "failed" && "border-destructive font-medium text-destructive",
         stage.state === "pending" && "border-dashed border-border text-muted-foreground/60",
       )}>
-        {stage.state === "done" ? <CheckIcon className="size-3" aria-hidden="true" /> : stage.state === "failed" ? <XIcon className="size-3" aria-hidden="true" /> : stage.state === "current" ? <span aria-hidden="true" className="size-1.5 bg-info motion-safe:animate-pulse" /> : null}
+        {stage.state === "done" ? <CheckIcon className="size-3" aria-hidden="true" /> : stage.state === "failed" ? <XIcon className="size-3" aria-hidden="true" /> : stage.state === "current" ? <span aria-hidden="true" className="size-1.5 rounded-full bg-info motion-safe:animate-pulse" /> : null}
         {stage.label}
         <span className="sr-only"> ({stage.state})</span>
       </span>
@@ -156,7 +156,7 @@ function LogPane({ host }: { host: HostSnapshot }) {
       {!following ? <Button type="button" variant="outline" size="xs" onClick={jump}><ArrowDownIcon />Jump to latest</Button> : null}
     </div>
     <div className="px-4 pb-4">
-      {host.log_tail ? <pre ref={pane} onScroll={onScroll} tabIndex={0} aria-label={`Log of ${host.pod_name}`} className="h-80 overflow-auto border bg-muted/40 p-3 font-mono text-[11px] leading-5 whitespace-pre-wrap break-all">{host.log_tail}</pre> : <div className="grid h-24 place-items-center border border-dashed text-xs text-muted-foreground">{host.log_error ? `No log: ${host.log_error}.` : "No log output yet."}</div>}
+      {host.log_tail ? <pre ref={pane} onScroll={onScroll} tabIndex={0} aria-label={`Log of ${host.pod_name}`} className="h-80 overflow-auto rounded-xl border bg-muted/40 p-3 font-mono text-[11px] leading-5 whitespace-pre-wrap break-all">{host.log_tail}</pre> : <div className="grid h-24 place-items-center rounded-xl border border-dashed text-xs text-muted-foreground">{host.log_error ? `No log: ${host.log_error}.` : "No log output yet."}</div>}
     </div>
   </div>
 }

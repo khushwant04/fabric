@@ -49,59 +49,62 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-brand: var(--brand);
+  --color-brand-tint: var(--brand-tint);
+  --color-brand-foreground: var(--brand-foreground);
+  /* One scale from the base radius (0.75rem): controls lg, menus xl, cards 2xl. */
+  --radius-xs: calc(var(--radius) * 0.34);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.67);
+  --radius-lg: calc(var(--radius) * 0.84);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.34);
+  --radius-3xl: calc(var(--radius) * 1.67);
+  --radius-4xl: calc(var(--radius) * 2);
 }
 
 :root {
   color-scheme: light;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* Warm neutrals: paper-white surfaces, stone grays, a near-black ink for primary
+     actions. Fabric's one saturated colour, "loom violet", is kept for badges and icon
+     tints (--brand, --brand-tint, --brand-foreground). */
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.2 0.006 60);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.2 0.006 60);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  /* Square corners everywhere: every radius token resolves to zero, including the Hexel
-     design system's named radii that hexel.css declares. */
-  --radius: 0;
-  --radius-inline: 0;
-  --radius-control: 0;
-  --radius-surface: 0;
-  --radius-panel: 0;
-  --radius-card: 0;
-  --radius-composer: 0;
-  --radius-pill: 0;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.2 0.006 60);
+  --primary: oklch(0.22 0.006 56);
+  --primary-foreground: oklch(0.985 0.002 75);
+  --secondary: oklch(0.965 0.004 75);
+  --secondary-foreground: oklch(0.22 0.006 56);
+  --muted: oklch(0.966 0.004 75);
+  --muted-foreground: oklch(0.52 0.009 65);
+  --accent: oklch(0.955 0.005 75);
+  --accent-foreground: oklch(0.22 0.006 56);
+  --destructive: oklch(0.56 0.2 27);
+  --border: oklch(0.918 0.005 75);
+  --input: oklch(0.89 0.006 75);
+  --ring: oklch(0.6 0.01 65);
+  --brand: oklch(0.55 0.21 285);
+  --brand-tint: oklch(0.955 0.03 290);
+  --brand-foreground: oklch(0.45 0.2 285);
+  --chart-1: oklch(0.55 0.21 285);
+  --chart-2: oklch(0.7 0.13 200);
+  --chart-3: oklch(0.72 0.15 150);
+  --chart-4: oklch(0.78 0.14 80);
+  --chart-5: oklch(0.62 0.18 25);
+  /* Rounded again: controls 0.5rem, the base radius 0.75rem, cards 1rem, pills full. */
+  --radius: 0.75rem;
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.2 0.006 60);
+  --sidebar-primary: oklch(0.22 0.006 56);
+  --sidebar-primary-foreground: oklch(0.985 0.002 75);
+  --sidebar-accent: oklch(0.955 0.005 75);
+  --sidebar-accent-foreground: oklch(0.2 0.006 60);
+  --sidebar-border: oklch(0.928 0.005 75);
+  --sidebar-ring: oklch(0.6 0.01 65);
 }
 
 @layer base {
@@ -117,59 +120,12 @@
   }
 }
 
-/* Adapted from console-ui: a shared topbar above navigation and an inset panel. */
-.fabric-layout {
-  --console-header-height: 4rem;
-  display: flex;
-  height: 100svh;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--sidebar);
-}
-
-.fabric-topbar {
-  display: flex;
-  height: var(--console-header-height);
-  flex-shrink: 0;
-  align-items: center;
-  gap: 1.5rem;
-  padding-inline: 1.5rem;
-}
-
-.fabric-brand { width: 13rem; flex-shrink: 0; }
-.fabric-sidebar-wrapper { min-height: 0; flex: 1; overflow: hidden; }
-[data-slot="sidebar-wrapper"].fabric-sidebar-wrapper { min-height: 0; }
-.fabric-sidebar { top: var(--console-header-height); height: calc(100svh - var(--console-header-height)); padding-top: 0; }
-.fabric-inset {
-  min-width: 0;
-  overflow: hidden;
-  background: var(--background);
-  border: 1px solid var(--sidebar-border);
-}
-.fabric-content-header {
-  display: flex;
-  min-height: 3rem;
-  flex-shrink: 0;
-  align-items: center;
-  gap: .5rem;
-  border-bottom: 1px solid var(--border);
-  padding: .25rem .75rem;
-}
+/* The console shell: one white sidebar beside a white main area whose page content scrolls
+   on its own, so the sidebar stays put. */
+.fabric-layout { height: 100svh; min-height: 0; overflow: hidden; }
+[data-slot="sidebar-wrapper"].fabric-layout { min-height: 0; }
+.fabric-inset { min-width: 0; min-height: 0; overflow: hidden; background: var(--background); }
 .fabric-page-content { scrollbar-gutter: stable; }
-
-@media (min-width: 768px) {
-  .fabric-inset { margin-top: 0; border-radius: 0; }
-}
-@media (max-width: 1023px) {
-  .fabric-layout { --console-header-height: 3.5rem; }
-  .fabric-topbar { gap: .75rem; padding-inline: 1rem; }
-  .fabric-brand { width: auto; }
-}
-@media (max-width: 767px) {
-  .fabric-topbar { gap: .5rem; }
-  .fabric-inset { margin: 0 .5rem .5rem; border-radius: 0; }
-}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;
@@ -205,7 +161,7 @@
 
 ::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
-  border-radius: 0;
+  border-radius: 999px;
   background-color: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
@@ -280,35 +236,38 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.175 0.004 60);
+  --foreground: oklch(0.96 0.003 75);
+  --card: oklch(0.205 0.005 60);
+  --card-foreground: oklch(0.96 0.003 75);
+  --popover: oklch(0.215 0.005 60);
+  --popover-foreground: oklch(0.96 0.003 75);
+  --primary: oklch(0.95 0.004 75);
+  --primary-foreground: oklch(0.2 0.006 60);
+  --secondary: oklch(0.26 0.005 60);
+  --secondary-foreground: oklch(0.96 0.003 75);
+  --muted: oklch(0.245 0.005 60);
+  --muted-foreground: oklch(0.7 0.008 70);
+  --accent: oklch(0.27 0.006 60);
+  --accent-foreground: oklch(0.96 0.003 75);
+  --destructive: oklch(0.68 0.19 24);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.6 0.01 65);
+  --brand: oklch(0.72 0.16 288);
+  --brand-tint: oklch(0.3 0.07 288);
+  --brand-foreground: oklch(0.82 0.11 288);
+  --chart-1: oklch(0.72 0.16 288);
+  --chart-2: oklch(0.75 0.12 200);
+  --chart-3: oklch(0.76 0.14 150);
+  --chart-4: oklch(0.8 0.13 80);
+  --chart-5: oklch(0.7 0.17 25);
+  --sidebar: oklch(0.175 0.004 60);
+  --sidebar-foreground: oklch(0.96 0.003 75);
+  --sidebar-primary: oklch(0.95 0.004 75);
+  --sidebar-primary-foreground: oklch(0.2 0.006 60);
+  --sidebar-accent: oklch(0.255 0.006 60);
+  --sidebar-accent-foreground: oklch(0.96 0.003 75);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.6 0.01 65);
 }

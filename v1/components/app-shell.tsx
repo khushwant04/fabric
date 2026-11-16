@@ -1,11 +1,10 @@
 "use client"
 
 import type { ReactNode } from "react"
+import Link from "next/link"
 
 import { AppSidebar } from "@/components/app-sidebar"
-import { ConsoleBreadcrumbs } from "@/components/console/breadcrumbs"
-import { AppHeader } from "@/components/app-header"
-import { Separator } from "@/components/ui/separator"
+import { FabricMark } from "@/components/fabric-mark"
 import {
   SidebarInset,
   SidebarProvider,
@@ -13,6 +12,9 @@ import {
 } from "@/components/ui/sidebar"
 import type { ConsoleContext } from "@/lib/fabric/types"
 
+// One white sidebar beside a white main area. There is no top bar: the sidebar holds the
+// brand, search, navigation and the account menu. Below the mobile breakpoint a slim bar
+// with the menu button takes its place.
 export function AppShell({
   children,
   context,
@@ -21,29 +23,27 @@ export function AppShell({
   context: ConsoleContext
 }) {
   return (
-    <div className="fabric-layout"><AppHeader context={context} /><SidebarProvider
-      className="fabric-sidebar-wrapper"
+    <SidebarProvider
+      className="fabric-layout"
       style={
         {
-          "--sidebar-width": "16rem",
-          "--sidebar-width-icon": "3.25rem",
+          "--sidebar-width": "17.5rem",
+          "--sidebar-width-icon": "3.75rem",
         } as React.CSSProperties
       }
     >
       <AppSidebar context={context} />
-      <SidebarInset className="fabric-inset md:peer-data-[variant=inset]:mt-0 md:peer-data-[variant=inset]:rounded-2xl" aria-label="Console content">
-        <header className="fabric-content-header" aria-label="Content header">
-          <SidebarTrigger className="-ml-1 size-7" />
-          <Separator
-            orientation="vertical"
-            className="mr-1 data-vertical:h-4 data-vertical:self-auto"
-          />
-          <ConsoleBreadcrumbs />
+      <SidebarInset className="fabric-inset" aria-label="Console content">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 md:hidden" aria-label="Mobile header">
+          <SidebarTrigger className="-ml-1" />
+          <Link href="/dashboard" aria-label="Fabric home" className="flex items-center gap-2 rounded-lg text-[17px] font-semibold tracking-[-0.03em] outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <FabricMark />Fabric
+          </Link>
         </header>
         <div className="fabric-page-content min-h-0 flex-1 overflow-auto">
           {children}
         </div>
       </SidebarInset>
-    </SidebarProvider></div>
+    </SidebarProvider>
   )
 }

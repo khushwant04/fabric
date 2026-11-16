@@ -14,7 +14,7 @@ function StatGroup({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="stat-group"
       className={cn(
-        "grid grid-cols-1 gap-px overflow-hidden rounded-none bg-border ring-1 ring-border sm:grid-cols-2 lg:grid-cols-4",
+        "grid grid-cols-1 gap-px overflow-hidden rounded-[var(--radius-surface)] bg-border ring-1 ring-border sm:grid-cols-2 lg:grid-cols-4",
         className
       )}
       {...props}

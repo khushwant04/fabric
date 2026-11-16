@@ -87,9 +87,9 @@ if (want("02-onboarding-account-switcher")) await capture(page, "02-onboarding-a
 await page.locator(`form:has(input[name="accountId"][value="${state.account_id}"]) button[type="submit"]`).click()
 await page.waitForURL((url) => url.pathname.startsWith("/dashboard"), { timeout: 120000 })
 
-// The header's account switcher, naming both accounts from /v1/me.
+// The sidebar's account menu, naming both accounts from /v1/me.
 await visit("02b-account-switcher-menu", "/dashboard", async (current) => {
-  await current.getByRole("button", { name: "Switch account" }).click()
+  await current.getByRole("button", { name: "Open account menu" }).click()
   await current.getByRole("menu").waitFor()
 })
 
@@ -117,15 +117,23 @@ await visit("07-deployment-detail-failed-status", `/deployments/${state.deployme
   await current.getByRole("tab", { name: "Status" }).click()
 })
 await visit("08-deployment-new", "/deployments/new")
-// The create drawer, then its Routing section filled in for an agent workload.
+await visit("08a-deployment-new-confirm", "/deployments/new?model=qwen3.5-9b")
+// The create drawer: the model picker, a catalog model's confirmation step, then the
+// custom form with its Routing section filled in for an agent workload.
 async function openCreateDrawer(current) {
   await current.getByRole("button", { name: "Create deployment" }).first().click()
   await current.getByRole("dialog").waitFor()
 }
 await visit("drawers/create-deployment", "/deployments", openCreateDrawer)
+await visit("drawers/create-deployment-confirm", "/deployments", async (current) => {
+  await openCreateDrawer(current)
+  await current.getByRole("dialog").getByRole("button", { name: /Qwen3\.5 9B/ }).click()
+  await current.getByRole("textbox", { name: "Deployment name", exact: true }).waitFor()
+})
 await visit("08b-deployment-drawer-routing", "/deployments", async (current) => {
   await openCreateDrawer(current)
   const dialog = current.getByRole("dialog")
+  await dialog.getByRole("button", { name: /^Custom model/ }).click()
   await dialog.getByRole("textbox", { name: "Model repository", exact: true }).fill("Qwen/Qwen3.5-4B")
   await dialog.getByRole("textbox", { name: "Deployment name", exact: true }).fill("agent-planner")
   await dialog.getByRole("textbox", { name: "API model name", exact: true }).fill("qwen3.5-4b-agent")
@@ -195,11 +203,27 @@ await visit("24-command-palette", "/dashboard", async (current) => {
 })
 
 // --- dark theme -------------------------------------------------------------------------
-if (want("04-dashboard-dark")) {
+// The home page, then the main pages and a drawer again in dark (dark/).
+const darkShots = [
+  ["04-dashboard-dark", "/dashboard"],
+  ["dark/deployments", "/deployments"],
+  ["dark/deployment-detail", `/deployments/${deploymentId}`],
+  ["dark/stamps", "/stamps"],
+  ["dark/usage", "/usage"],
+  ["dark/agents-runs", "/agents/runs"],
+  ["dark/settings", "/settings"],
+  ["dark/create-deployment", "/deployments", openCreateDrawer],
+  ["dark/command-palette", "/dashboard", async (current) => {
+    await current.keyboard.press("Control+k")
+    await current.getByRole("dialog").waitFor()
+    await current.waitForTimeout(300)
+  }],
+  ["dark/onboarding", "/onboarding?switch=true"],
+]
+if (darkShots.some(([name]) => want(name))) {
   await page.evaluate(() => localStorage.setItem("fabric-theme", "dark"))
   await page.emulateMedia({ colorScheme: "dark" })
-  await page.goto(`${base}/dashboard`, { waitUntil: "domcontentloaded" })
-  await capture(page, "04-dashboard-dark")
+  for (const [name, route, action] of darkShots) await visit(name, route, action)
   await page.evaluate(() => localStorage.setItem("fabric-theme", "light"))
   await page.emulateMedia({ colorScheme: "light" })
 }

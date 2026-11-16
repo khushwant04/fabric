@@ -4,7 +4,6 @@ import type { ReactNode } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 
-import { GlidingHighlight, useGlidingHighlight } from "@/components/ui/gliding-highlight"
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -20,6 +19,8 @@ export type NavItem = {
   url: string
   icon: ReactNode
   scope?: string
+  /** A short pill after the title, e.g. "New". */
+  badge?: string
 }
 
 export type NavSection = { label?: string; items: NavItem[] }
@@ -34,14 +35,9 @@ export function NavMain({
   const pathname = usePathname()
   const router = useRouter()
   const { isMobile, setOpenMobile } = useSidebar()
-  const { containerRef, highlightRef } = useGlidingHighlight<HTMLElement>({
-    itemSelector: "[data-sidebar=menu-button]",
-    hoverMode: "nearest",
-  })
 
   return (
-    <nav ref={containerRef} className="relative isolate" aria-label="Fabric navigation">
-      <GlidingHighlight ref={highlightRef} className="bg-sidebar-accent" />
+    <nav className="flex flex-col gap-3" aria-label="Fabric navigation">
       {sections.map((section, sectionIndex) => {
         const items = section.items.filter(
           (item) => !item.scope || scopes.includes(item.scope)
@@ -49,12 +45,9 @@ export function NavMain({
         if (!items.length) return null
 
         return (
-          <SidebarGroup
-            key={section.label ?? sectionIndex}
-            className="z-10 gap-1 px-2 pt-0 pb-4 group-data-[collapsible=icon]/sidebar:px-1.5"
-          >
+          <SidebarGroup key={section.label ?? sectionIndex} className="gap-0.5 p-0">
             {section.label ? (
-              <SidebarGroupLabel className="h-7 px-2 text-[11px] font-medium text-sidebar-foreground/55 group-data-[collapsible=icon]:opacity-0">
+              <SidebarGroupLabel className="h-8 px-3 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                 {section.label}
               </SidebarGroupLabel>
             ) : null}
@@ -72,7 +65,7 @@ export function NavMain({
                         render={<Link href={item.url} prefetch={false} />}
                         isActive={isActive}
                         tooltip={item.title}
-                        className="h-9 gap-3 rounded-xl px-2.5 text-[13px] font-normal text-sidebar-foreground/90 transition-colors duration-100 ease-out data-active:bg-sidebar-accent data-active:font-medium [&_svg]:size-[17px] [&_svg]:text-sidebar-foreground/60 [&_svg]:transition-colors [&_svg]:duration-100 hover:[&_svg]:text-sidebar-accent-foreground data-active:[&_svg]:text-sidebar-accent-foreground group-data-[collapsible=icon]/sidebar:size-9!"
+                        className="h-9 gap-3 rounded-lg px-3 text-[15px] font-normal text-sidebar-foreground/85 transition-colors duration-100 ease-out hover:bg-sidebar-accent/70 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center"
                         onClick={() => { if (isMobile) setOpenMobile(false) }}
                         // Warm only the destination the user is about to open.
                         onMouseEnter={() => { if (!isActive) router.prefetch(item.url) }}
@@ -81,6 +74,7 @@ export function NavMain({
                       >
                         {item.icon}
                         <span className="truncate">{item.title}</span>
+                        {item.badge ? <span className="ml-auto rounded-full bg-brand-tint px-1.5 py-px text-[10px] font-semibold tracking-wide text-brand-foreground uppercase">{item.badge}</span> : null}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   )

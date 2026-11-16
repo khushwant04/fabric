@@ -46,11 +46,11 @@ export function DrawerPanel({ open, onRequestClose, onOpenChangeComplete, size =
   const mobile = useIsMobile()
   const Title = mobile ? DrawerTitle : SheetTitle
   const Description = mobile ? DrawerDescription : SheetDescription
-  const header = <div data-slot="form-drawer-header" className="flex min-w-0 shrink-0 items-start gap-3 border-b border-border/60 px-5 pt-4 pb-4 sm:px-6 sm:pt-5">
-    {Icon ? <span aria-hidden="true" className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-none bg-muted text-muted-foreground"><Icon className="size-4" /></span> : null}
+  const header = <div data-slot="form-drawer-header" className="flex min-w-0 shrink-0 items-start gap-3.5 border-b border-border px-5 pt-5 pb-5 sm:px-7 sm:pt-6">
+    {Icon ? <span aria-hidden="true" className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-brand-foreground"><Icon className="size-4" /></span> : null}
     <div className="min-w-0 flex-1">
-      <Title className="text-[15px] leading-6 font-medium tracking-[-0.01em]">{title}</Title>
-      {description ? <Description className="mt-0.5 text-[13px] leading-5 text-pretty">{description}</Description> : null}
+      <Title className="text-lg leading-7 font-medium tracking-[-0.01em]">{title}</Title>
+      {description ? <Description className="mt-0.5 text-sm leading-5 text-pretty text-muted-foreground">{description}</Description> : null}
     </div>
     <Button type="button" variant="ghost" size="icon-sm" className="-mt-0.5 -mr-1.5" aria-label="Close" disabled={!closable} onClick={() => onRequestClose()}><XIcon /></Button>
   </div>
@@ -69,7 +69,7 @@ export function DrawerPanel({ open, onRequestClose, onOpenChangeComplete, size =
       showCloseButton={false}
       finalFocus={finalFocus}
       data-form-drawer={size}
-      className={cn("w-full gap-0 border-border/60 bg-popover p-0 shadow-dialog outline-none data-[side=right]:w-full motion-reduce:transition-none", FORM_DRAWER_WIDTHS[size])}
+      className={cn("w-full gap-0 border-border bg-popover p-0 shadow-[0_0_48px_rgb(0_0_0/0.12)] outline-none data-[side=right]:w-full sm:m-2 sm:h-[calc(100%-1rem)] sm:rounded-2xl sm:border motion-reduce:transition-none", FORM_DRAWER_WIDTHS[size])}
     >
       {header}
       {children}
@@ -79,13 +79,13 @@ export function DrawerPanel({ open, onRequestClose, onOpenChangeComplete, size =
 
 /** The scrollable middle of a drawer. */
 export function FormDrawerBody({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="form-drawer-body" className={cn("min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-5 py-5 sm:px-6", className)} {...props} />
+  return <div data-slot="form-drawer-body" className={cn("min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-5 py-6 sm:px-7", className)} {...props} />
 }
 
 /** The footer stays pinned to the bottom of the drawer while the body scrolls. */
 export function FormDrawerFooter({ className, error, children, ...props }: ComponentProps<"div"> & { error?: ReactNode }) {
-  return <div data-slot="form-drawer-footer" className={cn("shrink-0 border-t border-border/60 bg-popover px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6", className)} {...props}>
-    {error ? <p role="alert" className="mb-3 flex items-start gap-2 rounded-xl bg-destructive/8 px-3 py-2 text-[13px] leading-5 text-destructive"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{error}</span></p> : null}
+  return <div data-slot="form-drawer-footer" className={cn("shrink-0 border-t border-border bg-popover px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:rounded-b-2xl sm:px-7", className)} {...props}>
+    {error ? <p role="alert" className="mb-3 flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-[13px] leading-5 text-destructive"><CircleAlertIcon className="mt-0.5 size-4 shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{error}</span></p> : null}
     <div className="flex min-w-0 items-center justify-end gap-2">{children}</div>
   </div>
 }
@@ -104,7 +104,7 @@ export function DiscardChangesDialog({ open, onKeepEditing, onDiscard, copy = de
       </AlertDialogHeader>
       <AlertDialogFooter>
         <AlertDialogCancel>Keep editing</AlertDialogCancel>
-        <AlertDialogAction variant="destructive" onClick={onDiscard}>Discard</AlertDialogAction>
+        <AlertDialogAction variant="destructive-solid" onClick={onDiscard}>Discard</AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>

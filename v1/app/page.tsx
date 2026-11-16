@@ -1,12 +1,18 @@
 import { redirect } from "next/navigation"
 import { ArrowRightIcon, BoxesIcon, CpuIcon, KeyRoundIcon, ShieldCheckIcon } from "lucide-react"
 
+import { IconTile } from "@/components/console/section"
+import { FabricLogo } from "@/components/fabric-mark"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { isAuth0Configured } from "@/lib/auth0"
 import { getAuthSession } from "@/lib/fabric/session"
+
+const highlights = [
+  { icon: BoxesIcon, title: "Deployments", description: "Declare a model once; Fabric places and serves it." },
+  { icon: CpuIcon, title: "Inference stamps", description: "Your GPU clusters, connected by an agent." },
+  { icon: KeyRoundIcon, title: "Access", description: "Scoped keys, members and your own identity provider." },
+]
 
 export default async function Home({ searchParams }: PageProps<"/">) {
   const query = await searchParams
@@ -16,26 +22,35 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const configurationRequired = query.configuration === "required" || !isAuth0Configured
 
   return (
-    <main className="grid min-h-svh bg-muted/30 lg:grid-cols-[1.1fr_0.9fr]">
-      <section className="hidden border-r bg-background p-12 lg:flex lg:flex-col lg:justify-between">
-        <div className="flex items-center gap-2 text-sm font-semibold"><span className="flex size-7 items-center justify-center rounded-md border shadow-xs">F</span> Fabric</div>
-        <div className="max-w-xl space-y-7">
-          <div className="space-y-3"><p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Operator console</p><h1 className="text-4xl font-semibold tracking-tight">One control surface for your inference fleet.</h1><p className="max-w-lg text-base leading-7 text-muted-foreground">Deploy models, connect GPU infrastructure, inspect operational usage, and manage access from one governed workspace.</p></div>
-          <div className="grid grid-cols-3 gap-3">
-            {[{ icon: BoxesIcon, label: "Deployments" }, { icon: CpuIcon, label: "Stamps" }, { icon: KeyRoundIcon, label: "Access" }].map((item) => <Card size="sm" key={item.label}><CardContent className="gap-2"><item.icon className="size-4 text-muted-foreground" /><span className="text-xs font-medium">{item.label}</span></CardContent></Card>)}
+    <main className="grid min-h-svh bg-background lg:grid-cols-[1.05fr_0.95fr]">
+      <section className="hidden flex-col justify-between border-r border-border bg-muted/50 p-12 lg:flex">
+        <FabricLogo />
+        <div className="flex max-w-xl flex-col gap-10">
+          <div className="flex flex-col gap-4">
+            <span className="w-fit rounded-full bg-brand-tint px-2.5 py-1 text-xs font-medium text-brand-foreground">Operator console</span>
+            <h1 className="text-[40px] leading-[1.1] font-medium tracking-[-0.03em] text-balance">One control surface for your inference fleet.</h1>
+            <p className="max-w-lg text-base leading-7 text-muted-foreground">Deploy models, connect GPU infrastructure, inspect operational usage and manage access from one governed workspace.</p>
+          </div>
+          <ul className="flex flex-col gap-4">
+            {highlights.map((item) => <li key={item.title} className="flex items-start gap-4">
+              <IconTile><item.icon /></IconTile>
+              <span><span className="block text-[15px] font-medium">{item.title}</span><span className="block text-sm text-muted-foreground">{item.description}</span></span>
+            </li>)}
+          </ul>
+        </div>
+        <p className="text-sm text-muted-foreground">Control-plane credentials stay server-side.</p>
+      </section>
+      <section className="flex flex-col items-center justify-center gap-8 p-6 sm:p-10">
+        <FabricLogo className="lg:hidden" />
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-8 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
+          <IconTile tone="neutral" className="mb-6 size-10"><ShieldCheckIcon /></IconTile>
+          <h2 className="text-2xl leading-8 font-medium tracking-[-0.02em]">Sign in to Fabric</h2>
+          <p className="mt-1.5 text-sm text-muted-foreground">Authenticate with your organization to open the operator console.</p>
+          <div className="mt-7 flex flex-col gap-5">
+            {configurationRequired ? <Alert><ShieldCheckIcon /><AlertTitle>Configuration required</AlertTitle><AlertDescription>Configure organization sign-in and the Fabric control plane to access this console.</AlertDescription></Alert> : <Button size="lg" nativeButton={false} render={<a href="/auth/login?returnTo=/onboarding" />} className="w-full">Continue with SSO <ArrowRightIcon /></Button>}
+            <p className="border-t border-border pt-5 text-center text-xs leading-5 text-muted-foreground">Access is restricted to authorized Fabric operators. Authentication events may be audited.</p>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">Control-plane credentials stay server-side.</p>
-      </section>
-      <section className="flex items-center justify-center p-6 sm:p-10">
-        <Card className="w-full max-w-md">
-          <CardHeader><div className="mb-4 flex size-10 items-center justify-center rounded-lg border bg-muted"><ShieldCheckIcon className="size-5" /></div><CardTitle className="text-xl">Sign in to Fabric</CardTitle><CardDescription>Authenticate with your organization to access the operator console.</CardDescription></CardHeader>
-          <CardContent className="gap-5">
-            {configurationRequired ? <Alert><ShieldCheckIcon /><AlertTitle>Configuration required</AlertTitle><AlertDescription>Configure organization sign-in and the Fabric control plane to access this console.</AlertDescription></Alert> : <Button size="lg" render={<a href="/auth/login?returnTo=/onboarding" />} className="w-full">Continue with SSO <ArrowRightIcon /></Button>}
-            <Separator />
-            <p className="text-center text-xs leading-5 text-muted-foreground">Access is restricted to authorized Fabric operators. Authentication events may be audited.</p>
-          </CardContent>
-        </Card>
       </section>
     </main>
   )

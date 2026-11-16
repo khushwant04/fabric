@@ -53,6 +53,6 @@ export function LiveRefresh({ checkedAt, error, intervalMs = 8000 }: {
   const failure = requestError || error
   return <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground" aria-live="polite">
     <span>{failure ? <span className="text-destructive">{failure} Displayed data may be outdated.</span> : <>Last checked <time dateTime={checkedAt}>{checkedAt.slice(11, 19)} UTC</time> · auto refresh every {Math.max(5, Math.min(intervalMs / 1000, 30))}s</>}</span>
-    <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => { void control.current?.run(true) }}><RefreshCwIcon className={pending ? "animate-spin" : ""} />{pending ? "Refreshing…" : "Refresh"}</Button>
+    <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => { void control.current?.run(true) }}><RefreshCwIcon className={pending ? "animate-spin" : ""} />{pending ? "Refreshing…" : "Refresh"}</Button>
   </div>
 }

@@ -26,7 +26,7 @@ export function DeleteRunDialog({ runId }: { runId: string }) {
       <form action={action}>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-          <Button type="submit" variant="destructive" disabled={pending}>{pending ? <Spinner /> : <Trash2Icon />}{pending ? "Deleting…" : "Delete run"}</Button>
+          <Button type="submit" variant="destructive-solid" disabled={pending}>{pending ? <Spinner /> : <Trash2Icon />}{pending ? "Deleting…" : "Delete run"}</Button>
         </AlertDialogFooter>
       </form>
     </AlertDialogContent>
