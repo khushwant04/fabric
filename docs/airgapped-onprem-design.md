@@ -1,6 +1,6 @@
 # Air-gapped on-premises installation with node join
 
-**Status:** Planned. Nothing in this document is implemented unless a section says
+**Status:** Planned, and on hold while agent features take priority. Nothing in this document is implemented unless a section says
 "exists today" and cites the file. Decision record: [ADR 0020](context/adrs/0020-air-gapped-on-prem-installation-with-node-join.md).
 **Date:** 2026-11-16
 
@@ -139,7 +139,7 @@ Key choices:
 | `fabric-node` installer binary | Static Go binary, linux/amd64. |
 | k3s binary + `k3s-airgap-images-amd64.tar.zst` | Pinned version, same as `scripts/bootstrap-k3s.sh` (`K3S_VERSION`). |
 | Helm binary | Pinned, same as the bootstrap script. |
-| NVIDIA Container Toolkit packages | `.deb` set for Ubuntu 22.04 and 24.04 (and `.rpm` for RHEL 9 if supported), matching `TOOLKIT_PACKAGES` in `scripts/bootstrap-k3s.sh`. |
+| NVIDIA Container Toolkit packages | `.deb` set for Ubuntu 22.04 and 24.04 (Ubuntu only; see open question 1), matching `TOOLKIT_PACKAGES` in `scripts/bootstrap-k3s.sh`. |
 | NVIDIA device plugin image | Pinned (bootstrap script installs v0.17.1). |
 | Fabric images | control plane, console, agent, operator, data plane, collector, model host (vLLM with Fabric kernels registered), by digest. |
 | Third-party images | PostgreSQL, IdP (Dex or Keycloak), registry, Prometheus, Grafana, local-path provisioner. |
@@ -235,7 +235,7 @@ What Fabric does instead:
 
 | Check | Rule |
 |---|---|
-| OS | Ubuntu 22.04/24.04 (RHEL 9 later). x86_64. |
+| OS | Ubuntu 22.04/24.04 only. x86_64. |
 | Privileges | Root. |
 | Bundle | Signature and hashes valid; bundle version supported. |
 | Driver | `nvidia-smi` succeeds on GPU nodes; driver version ≥ bundle minimum. |
@@ -531,10 +531,11 @@ site; 4–5 make it supportable.
 
 ## 23. Open questions
 
-1. **Operating systems.** Ubuntu 22.04/24.04 only, or also RHEL 9 / Rocky? Each OS adds
-   a toolkit package set and a test matrix.
-2. **Driver add-on.** Do target sites manage drivers themselves, or do they expect
-   Fabric to ship one pinned driver?
+1. **Operating systems.** *Resolved (2026-11-16): Ubuntu 22.04/24.04 only.* RHEL/Rocky
+   package sets and test matrices are out of scope.
+2. **Driver add-on.** *Resolved (2026-11-16): sites install and manage their own NVIDIA
+   drivers.* The optional driver add-on bundle in section 7 is dropped; preflight checks
+   remain mandatory.
 3. **Directory.** Active Directory via LDAP, an existing OIDC IdP on site, or local
    users only?
 4. **Licensing model.** Per GPU, per node, or per site? What should happen at expiry
