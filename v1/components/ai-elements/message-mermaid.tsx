@@ -173,7 +173,7 @@ export function MessageMermaidBlock({ chart, incomplete }: { chart: string; inco
         : diagram && current ? <DiagramViewport key={diagram.svg} diagram={diagram} showControls={enabled && config?.panZoom !== false} />
         : <div role="status" className={styles.loading}>{incomplete ? "Waiting for diagram…" : "Rendering diagram…"}</div>}
     </MessageRenderCard>
-    <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent finalFocus={expandRef} className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-[16px] p-0 sm:max-w-[min(1200px,calc(100%-2rem))]">
+    <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent finalFocus={expandRef} className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-none p-0 sm:max-w-[min(1200px,calc(100%-2rem))]">
       <div className="shrink-0 border-b border-border/40 px-4 py-4 pr-12"><DialogTitle className="text-sm">Diagram</DialogTitle><DialogDescription className="sr-only">Expanded diagram. Zoom or scroll to view its details.</DialogDescription></div>
       {diagram && current && <DiagramViewport key={diagram.svg} diagram={diagram} expanded showControls={enabled && config?.panZoom !== false} />}
     </DialogContent></Dialog>

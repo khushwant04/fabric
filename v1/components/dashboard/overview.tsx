@@ -1,20 +1,17 @@
 import Link from "next/link"
-import { ActivityIcon, BoxesIcon, FlaskConicalIcon, KeyRoundIcon } from "lucide-react"
+import type { ReactNode } from "react"
+import { ActivityIcon, ArrowRightIcon, CheckIcon, CpuIcon, FlaskConicalIcon, KeyRoundIcon, ServerIcon } from "lucide-react"
 
 import { CreateDeploymentDrawer } from "@/components/console/deployment-form"
-import { EdgeGatewayPanel } from "@/components/console/edge-gateway"
+import { GatewayUrl } from "@/components/console/edge-gateway"
 import { LiveRefresh } from "@/components/console/live-refresh"
 import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { StatusBadge, statusTone } from "@/components/console/status-badge"
 import { TruncatedText } from "@/components/console/truncated-text"
-import { PanelLink, PanelLinkRow } from "@/components/dashboard/surfaces"
-import { BarList } from "@/components/hexel/bar-list"
-import { Meter } from "@/components/hexel/meter"
-import { Panel, PanelAction, PanelContent, PanelFooter, PanelHeader, PanelRow, PanelTitle } from "@/components/hexel/panel"
-import { StatGroup, StatTile } from "@/components/hexel/stat-tile"
 import { Status } from "@/components/hexel/status"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/hexel/table"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import type { DeploymentStampOption } from "@/lib/fabric/resource-state"
 import type { AccountUsage, Deployment, Stamp } from "@/lib/fabric/types"
 import { formatNumber, formatRelative } from "@/lib/format"
@@ -39,48 +36,163 @@ export type DashboardOverviewProps = {
   edge?: { url: string; usedByConsole: boolean } | null
 }
 
-// The console's Overview, laid out as the Hexel Studio console sample: headline numbers in
-// one StatGroup, then Panels (a tray carrying the title, a raised card the content).
+const toneFill: Record<string, string> = {
+  good: "bg-status-good",
+  warning: "bg-status-warning",
+  serious: "bg-status-serious",
+  critical: "bg-status-critical",
+  info: "bg-info",
+  neutral: "bg-muted-foreground/50",
+}
+
+/** A square section with a hairline border and a compact label bar. */
+function Section({ title, action, className, children }: { title: string; action?: ReactNode; className?: string; children: ReactNode }) {
+  return <section className={cn("flex min-w-0 flex-col border border-border bg-card", className)}>
+    <header className="flex h-10 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+      <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>
+      {action}
+    </header>
+    {children}
+  </section>
+}
+
+function SectionLink({ href, children }: { href: string; children: ReactNode }) {
+  return <Link href={href} className="inline-flex items-center gap-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:underline">
+    {children}<ArrowRightIcon className="size-3" />
+  </Link>
+}
+
+function Metric({ label, value, detail, children }: { label: string; value: ReactNode; detail: ReactNode; children?: ReactNode }) {
+  return <div className="flex min-w-0 flex-col gap-2 bg-card p-4">
+    <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</span>
+    <span className="font-heading text-3xl font-semibold tracking-tight tabular-nums">{value}</span>
+    {children}
+    <span className="truncate text-xs text-muted-foreground">{detail}</span>
+  </div>
+}
+
+/** Serving phases as one segmented bar, so the mix reads at a glance. */
+function PhaseBar({ phases }: { phases: Array<[string, number]> }) {
+  const total = phases.reduce((sum, [, count]) => sum + count, 0)
+  if (!total) return <div className="h-1.5 bg-muted" />
+  return <div className="flex h-1.5 gap-px bg-muted" role="img" aria-label={phases.map(([phase, count]) => `${count} ${phase.replaceAll("_", " ")}`).join(", ")}>
+    {phases.map(([phase, count]) => <span key={phase} className={toneFill[statusTone(phase)] ?? toneFill.neutral} style={{ width: `${(count / total) * 100}%` }} />)}
+  </div>
+}
+
+function UsageBar({ used, total }: { used: number; total: number }) {
+  const percent = total ? Math.min(100, Math.round((used / total) * 100)) : 0
+  return <div className="h-1.5 bg-muted" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={used} aria-label="GPUs requested">
+    <div className="h-full bg-foreground" style={{ width: `${percent}%` }} />
+  </div>
+}
+
+function stampGpus(stamp: Stamp): string | null {
+  const gpus = stamp.capabilities?.gpus
+  if (!Array.isArray(gpus) || !gpus.length) return null
+  return gpus
+    .map((gpu) => {
+      const entry = gpu as { count?: number; product?: string }
+      return `${entry.count ?? 1} × ${entry.product ?? "GPU"}`
+    })
+    .join(", ")
+}
+
+function Step({ done, index, title, children }: { done: boolean; index: number; title: string; children: ReactNode }) {
+  return <li className="flex gap-4 border-b border-border px-4 py-4 last:border-b-0">
+    <span className={cn("flex size-6 shrink-0 items-center justify-center border text-xs tabular-nums", done ? "border-foreground bg-foreground text-background" : "border-border text-muted-foreground")}>
+      {done ? <CheckIcon className="size-3.5" /> : index}
+    </span>
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <span className={cn("text-sm font-medium", done && "text-muted-foreground line-through decoration-1")}>{title}</span>
+      {children}
+    </div>
+  </li>
+}
+
+function Shortcut({ href, icon, title, description }: { href: string; icon: ReactNode; title: string; description: string }) {
+  return <Link href={href} className="group flex min-w-0 items-start gap-3 bg-card p-4 outline-none hover:bg-muted/60 focus-visible:bg-muted/60">
+    <span className="flex size-8 shrink-0 items-center justify-center border border-border text-muted-foreground [&_svg]:size-4">{icon}</span>
+    <span className="min-w-0 flex-1">
+      <span className="flex items-center gap-1 text-sm font-medium">{title}<ArrowRightIcon className="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" /></span>
+      <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span>
+    </span>
+  </Link>
+}
+
+// The console's home: a status strip, four headline metrics, then deployments beside the
+// stamps that serve them. With no deployments yet, a short checklist takes the table's place.
 export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, infrastructureUnavailable, deployments, stamps, capacity, usage, edge = null }: DashboardOverviewProps) {
   const ready = deployments?.ready ?? 0
   const attention = deployments?.attention ?? 0
   const recent = deployments?.recent ?? []
   const phases = deployments?.phases ?? []
   const stampRows = stamps?.rows ?? []
-  const unavailable = "Unavailable"
+  const unavailable = "—"
+  const empty = deployments !== null && deployments.total === 0
+  const createButton = canCreate ? <CreateDeploymentDrawer stamps={stampOptions} infrastructureUnavailable={infrastructureUnavailable} /> : null
+
+  const health = deployments === null
+    ? <Status>Deployment data unavailable</Status>
+    : attention
+      ? <Link href="/deployments" className="outline-none hover:underline focus-visible:underline"><Status tone="warning">{attention} deployment{attention === 1 ? "" : "s"} need{attention === 1 ? "s" : ""} review</Status></Link>
+      : deployments.total
+        ? <Status tone={ready === deployments.total ? "good" : "info"}>{ready === deployments.total ? "All deployments serving" : `${ready} of ${deployments.total} serving`}</Status>
+        : <Status>No deployments yet</Status>
+
   return <PageContainer>
     <PageHeader
       title="Overview"
-      description="Deployment health, GPU capacity and inference usage in one place."
+      description="Deployments, GPU capacity and inference traffic for this account."
       actions={<>
-        <Button nativeButton={false} variant="outline" render={<Link href="/playground" />}><FlaskConicalIcon />Open playground</Button>
-        {canCreate ? <CreateDeploymentDrawer stamps={stampOptions} infrastructureUnavailable={infrastructureUnavailable} /> : null}
+        <Button nativeButton={false} variant="outline" render={<Link href="/playground" />}><FlaskConicalIcon />Playground</Button>
+        {createButton}
       </>}
     />
 
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <Status tone={deployments === null ? "neutral" : ready === deployments.total && ready > 0 ? "good" : "neutral"}>
-          {deployments === null ? "Deployment data unavailable" : `${ready} of ${deployments.total} deployments observed ready`}
-        </Status>
-        {attention ? <Link href="/deployments" className="rounded-md outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"><Status tone="warning">{attention} need{attention === 1 ? "s" : ""} review</Status></Link> : null}
+    <div className="grid gap-px border border-border bg-border lg:grid-cols-[auto_minmax(0,1fr)_auto]">
+      <div className="flex items-center gap-4 bg-card px-4 py-3 text-sm">{health}</div>
+      <div className="flex min-w-0 items-center gap-3 bg-card px-4 py-2">
+        {edge
+          ? <><span className="shrink-0 text-xs font-medium tracking-wide text-muted-foreground uppercase">Endpoint</span><GatewayUrl url={edge.url} compact /></>
+          : <span className="text-sm text-muted-foreground">No edge gateway configured; each stamp serves its own URL.</span>}
       </div>
-      <LiveRefresh checkedAt={checkedAt} error={error} />
+      <div className="flex items-center bg-card px-4 py-3"><LiveRefresh checkedAt={checkedAt} error={error} /></div>
     </div>
 
-    <StatGroup>
-      <StatTile label="Deployments" value={deployments === null ? unavailable : deployments.total} period={deployments === null ? "Could not be checked" : `${ready} observed ready`} />
-      <StatTile label="Active stamps" value={stamps === null ? unavailable : stamps.active} period={stamps === null ? "Could not be checked" : `of ${stamps.total} registered`} />
-      <StatTile label="Inference requests" value={usage ? formatNumber(usage.events) : unavailable} period={usage ? usage.last_occurred_at ? `Last ${formatRelative(usage.last_occurred_at)}` : "No usage reported yet" : "Could not be checked"} />
-      <StatTile label="Tokens processed" value={usage ? formatNumber(usage.input_tokens + usage.output_tokens) : unavailable} period={usage ? `${formatNumber(usage.input_tokens)} in · ${formatNumber(usage.output_tokens)} out` : "Could not be checked"} />
-    </StatGroup>
-
-    {edge ? <EdgeGatewayPanel url={edge.url} usedByConsole={edge.usedByConsole} /> : null}
+    <div className="grid gap-px border border-border bg-border sm:grid-cols-2 xl:grid-cols-4">
+      <Metric label="Deployments" value={deployments === null ? unavailable : deployments.total} detail={deployments === null ? "Could not be checked" : `${ready} serving · ${attention} need review`}>
+        <PhaseBar phases={phases} />
+      </Metric>
+      <Metric label="GPUs requested" value={capacity ? <>{capacity.used}<span className="text-muted-foreground">/{capacity.total}</span></> : unavailable} detail={capacity ? `${capacity.total ? Math.round(capacity.used / capacity.total * 100) : 0}% of account-owned capacity` : "Not every active stamp has reported GPUs"}>
+        {capacity ? <UsageBar used={capacity.used} total={capacity.total} /> : <div className="h-1.5 bg-muted" />}
+      </Metric>
+      <Metric label="Requests" value={usage ? formatNumber(usage.events) : unavailable} detail={usage ? usage.last_occurred_at ? `Last request ${formatRelative(usage.last_occurred_at)}` : "No usage reported yet" : "Could not be checked"} />
+      <Metric label="Tokens" value={usage ? formatNumber(usage.input_tokens + usage.output_tokens) : unavailable} detail={usage ? `${formatNumber(usage.input_tokens)} in · ${formatNumber(usage.output_tokens)} out` : "Could not be checked"} />
+    </div>
 
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-      <Panel>
-        <PanelHeader><PanelTitle>Recent deployments</PanelTitle><PanelAction><PanelLink href="/deployments">View all</PanelLink></PanelAction></PanelHeader>
-        <PanelContent>
+      {empty
+        ? <Section title="Get started">
+          <ol>
+            <Step index={1} done={(stamps?.active ?? 0) > 0} title="Connect a GPU stamp">
+              <span className="text-xs text-muted-foreground">{(stamps?.active ?? 0) > 0 ? `${stamps?.active} active stamp${stamps?.active === 1 ? "" : "s"} reporting heartbeats.` : "Enroll a Kubernetes cluster with GPUs from Inference stamps."}</span>
+            </Step>
+            <Step index={2} done={false} title="Deploy a model">
+              <span className="text-xs text-muted-foreground">Pick a model; Fabric places it on a stamp with room for it.</span>
+              {createButton ? <div>{createButton}</div> : null}
+            </Step>
+            <Step index={3} done={false} title="Create an API key">
+              <span className="text-xs text-muted-foreground">Keys are exchanged for short-lived inference tokens, so the key never reaches a gateway.</span>
+              <div><Button nativeButton={false} variant="outline" size="sm" render={<Link href="/access/api-keys" />}><KeyRoundIcon />API keys</Button></div>
+            </Step>
+            <Step index={4} done={false} title="Call the endpoint">
+              <span className="text-xs text-muted-foreground">Any OpenAI or Anthropic SDK works; set the base URL and the model name.</span>
+              <code className="block overflow-x-auto border border-border bg-muted/50 px-3 py-2 font-mono text-xs whitespace-pre">{`curl ${edge?.url ?? "https://<inference-url>/v1"}/chat/completions \\\n  -H "Authorization: Bearer $TOKEN" \\\n  -d '{"model":"<model>","messages":[{"role":"user","content":"hi"}]}'`}</code>
+            </Step>
+          </ol>
+        </Section>
+        : <Section title="Deployments" action={<SectionLink href="/deployments">All deployments</SectionLink>}>
           {recent.length ? <Table>
             <TableHeader><TableRow><TableHead>Deployment</TableHead><TableHead>Status</TableHead><TableHead className="hidden md:table-cell">Capacity</TableHead><TableHead align="right">Updated</TableHead></TableRow></TableHeader>
             <TableBody>{recent.map(({ deployment, state }) => <TableRow key={deployment.id}>
@@ -89,51 +201,30 @@ export function DashboardOverview({ checkedAt, error, canCreate, stampOptions, i
               <TableCell className="hidden text-muted-foreground md:table-cell">{deployment.desired_spec.replicas} replica{deployment.desired_spec.replicas === 1 ? "" : "s"} · {deployment.desired_spec.resources.gpu_class.toUpperCase()}</TableCell>
               <TableCell align="right" className="text-muted-foreground">{formatRelative(deployment.updated_at)}</TableCell>
             </TableRow>)}</TableBody>
-          </Table> : <PanelRow className="flex-col gap-1 py-10 text-center">
-            <BoxesIcon className="mb-2 size-5 text-muted-foreground" />
-            <span className="font-medium">{deployments === null ? "Deployment data is unavailable" : "Your first deployment starts here"}</span>
-            <span className="text-[13px] text-muted-foreground">{deployments === null ? "Refresh to check your account deployments again." : "Choose a model and let Fabric find compatible capacity."}</span>
-          </PanelRow>}
-        </PanelContent>
-      </Panel>
+          </Table> : <p className="px-4 py-10 text-center text-sm text-muted-foreground">Deployment data is unavailable. Refresh to check again.</p>}
+        </Section>}
 
-      <Panel>
-        <PanelHeader><PanelTitle>Deployment health</PanelTitle></PanelHeader>
-        <PanelContent className="p-4">
-          {phases.length
-            ? <BarList items={phases.map(([phase, count]) => ({ key: phase, label: <Status tone={statusTone(phase)} className="capitalize">{phase.replaceAll("_", " ")}</Status>, value: count }))} />
-            : <p className="py-6 text-center text-sm text-muted-foreground">{deployments === null ? "Deployment health is unavailable." : "Create a deployment to see its serving state."}</p>}
-        </PanelContent>
-        <PanelFooter>Observed serving state, from model-host reports at the current placement generation.</PanelFooter>
-      </Panel>
+      <Section title="Stamps" action={<SectionLink href="/stamps">Manage</SectionLink>}>
+        {stampRows.length ? <ul>
+          {stampRows.map(({ stamp, state }) => {
+            const gpus = stampGpus(stamp)
+            return <li key={stamp.id} className="flex items-start gap-3 border-b border-border px-4 py-3 last:border-b-0">
+              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center border border-border text-muted-foreground"><ServerIcon className="size-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{stamp.name}</span><StatusBadge status={state.status} /></span>
+                <span className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground"><CpuIcon className="size-3 shrink-0" />{gpus ?? "No GPUs reported"}</span>
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">{[stamp.region, stamp.orchestrator].filter(Boolean).join(" · ") || "Location unavailable"} · heartbeat {formatRelative(stamp.last_heartbeat_at)}</span>
+              </span>
+            </li>
+          })}
+        </ul> : <p className="px-4 py-10 text-center text-sm text-muted-foreground">{stamps === null ? "Stamp data is unavailable." : "No account-owned stamps are registered."}</p>}
+      </Section>
     </div>
 
-    <div className="grid items-start gap-4 lg:grid-cols-2">
-      <Panel>
-        <PanelHeader><PanelTitle>GPU capacity</PanelTitle><PanelAction><PanelLink href="/stamps">View stamps</PanelLink></PanelAction></PanelHeader>
-        <PanelContent>
-          <PanelRow>
-            {capacity
-              ? <Meter className="flex-1" value={capacity.used} max={capacity.total} label="Requested" detail={`${capacity.used} of ${capacity.total} GPUs · ${capacity.total ? Math.round(capacity.used / capacity.total * 100) : 0}%`} />
-              : <span className="text-[13px] text-muted-foreground">Complete GPU capacity has not been reported by every active stamp.</span>}
-          </PanelRow>
-          {stampRows.length ? stampRows.map(({ stamp, state }) => <PanelRow key={stamp.id}>
-            <span className="min-w-0 flex-1"><span className="block truncate font-medium">{stamp.name}</span><span className="block truncate text-[13px] text-muted-foreground">{stamp.region || "Region unavailable"} · Heartbeat {formatRelative(stamp.last_heartbeat_at)}</span></span>
-            <StatusBadge status={state.status} />
-          </PanelRow>) : <PanelRow className="justify-center text-muted-foreground">{stamps === null ? "Stamp data is unavailable." : "No account-owned stamps are registered."}</PanelRow>}
-        </PanelContent>
-        <PanelFooter>Account-owned stamps only; shared managed capacity is not included.</PanelFooter>
-      </Panel>
-
-      <Panel>
-        <PanelHeader><PanelTitle>Explore your workspace</PanelTitle></PanelHeader>
-        <PanelContent>
-          <PanelLinkRow href="/playground" title="Inference playground" description="Compare two model responses, streaming speed and routing decisions." icon={<FlaskConicalIcon />} />
-          <PanelLinkRow href="/access/api-keys" title="API credentials" description="Create scoped keys for applications and service principals." icon={<KeyRoundIcon />} />
-          <PanelLinkRow href="/usage" title="Usage and activity" description="Review collector-reported request and token totals." icon={<ActivityIcon />} />
-        </PanelContent>
-        <PanelFooter>Usage is collector-reported by each stamp.</PanelFooter>
-      </Panel>
+    <div className="grid gap-px border border-border bg-border md:grid-cols-3">
+      <Shortcut href="/playground" icon={<FlaskConicalIcon />} title="Inference playground" description="Compare models, streaming speed and routing." />
+      <Shortcut href="/access/api-keys" icon={<KeyRoundIcon />} title="API credentials" description="Scoped keys for apps and service principals." />
+      <Shortcut href="/usage" icon={<ActivityIcon />} title="Usage" description="Requests and tokens reported by each stamp." />
     </div>
   </PageContainer>
 }

@@ -268,7 +268,7 @@ export function AgentPlayground({ options, vectorStores, vectorStoreNotice }: { 
   const locked = running || pending !== null
 
   return <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4 sm:px-6 lg:flex-row lg:px-8">
-    <aside aria-label="Run settings" className="flex shrink-0 flex-col gap-5 overflow-y-auto rounded-[22px] border bg-card p-4 lg:w-[320px]">
+    <aside aria-label="Run settings" className="flex shrink-0 flex-col gap-5 overflow-y-auto rounded-none border bg-card p-4 lg:w-[320px]">
       <section className="space-y-2"><SectionTitle icon={BotIcon}>Model</SectionTitle><ModelPicker options={options} selected={selected} disabled={locked} onSelect={setModelId} /></section>
 
       <section className="space-y-1"><SectionTitle icon={WrenchIcon}>Tools</SectionTitle>
@@ -326,7 +326,7 @@ export function AgentPlayground({ options, vectorStores, vectorStoreNotice }: { 
       </section>
     </aside>
 
-    <div className="flex min-h-[640px] min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] border bg-card lg:min-h-0">
+    <div className="flex min-h-[640px] min-w-0 flex-1 flex-col overflow-hidden rounded-none border bg-card lg:min-h-0">
       <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-5 py-2">
         {status ? <Status tone={status.tone} pulse={view?.status === "running" || view?.status === "starting"} className="text-[13px] font-medium">{status.label}</Status> : <span className="text-[13px] font-medium">New run</span>}
         {view?.runId ? <Link href={`/agents/runs/${encodeURIComponent(view.runId)}`} className="inline-flex min-w-0 items-center gap-1 font-mono text-[12px] text-muted-foreground hover:text-foreground hover:underline"><span className="truncate">{view.runId}</span><ExternalLinkIcon className="size-3 shrink-0" /></Link> : null}
@@ -386,8 +386,8 @@ export function AgentPlayground({ options, vectorStores, vectorStoreNotice }: { 
           <Textarea id="agent-task" value={task} onChange={(event) => setTask(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void start() } }}
             placeholder={running ? "The agent is working…" : pending ? "Answer the paused run above, or start a new one" : "Describe a task for the agent…"} maxLength={AGENT_MAX_TASK_CHARS} disabled={running || !options.length} aria-label="Agent task"
             className="max-h-40 min-h-11 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-[14px] shadow-none md:text-[14px] disabled:bg-transparent focus-visible:ring-0 dark:bg-transparent" />
-          {running ? <Button type="button" onClick={() => controller.current?.abort()} className="size-9 rounded-full p-0" aria-label="Stop run"><SquareIcon className="size-3 fill-current" /></Button>
-            : <Button type="submit" disabled={!selected || !task.trim()} className="size-9 rounded-full p-0" aria-label="Run agent"><ArrowUpIcon className="size-4" /></Button>}
+          {running ? <Button type="button" onClick={() => controller.current?.abort()} className="size-9 rounded-none p-0" aria-label="Stop run"><SquareIcon className="size-3 fill-current" /></Button>
+            : <Button type="submit" disabled={!selected || !task.trim()} className="size-9 rounded-none p-0" aria-label="Run agent"><ArrowUpIcon className="size-4" /></Button>}
         </div>
         <p className="mt-2 text-center text-[10px] text-muted-foreground">Enter to run · Shift + Enter for a new line · {selected ? <span className="font-mono">{selected.label}</span> : "no model"} · {tools.filter((tool) => !disabled[tool]).length + (fileSearch ? 1 : 0) + clientTools.length + mcpServers.length} tool sources · {maxSteps} steps{budget.trim() ? ` · ${Number(budget).toLocaleString("en")} token budget` : ""}</p>
       </form>

@@ -47,7 +47,7 @@ export function DrawerPanel({ open, onRequestClose, onOpenChangeComplete, size =
   const Title = mobile ? DrawerTitle : SheetTitle
   const Description = mobile ? DrawerDescription : SheetDescription
   const header = <div data-slot="form-drawer-header" className="flex min-w-0 shrink-0 items-start gap-3 border-b border-border/60 px-5 pt-4 pb-4 sm:px-6 sm:pt-5">
-    {Icon ? <span aria-hidden="true" className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"><Icon className="size-4" /></span> : null}
+    {Icon ? <span aria-hidden="true" className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-none bg-muted text-muted-foreground"><Icon className="size-4" /></span> : null}
     <div className="min-w-0 flex-1">
       <Title className="text-[15px] leading-6 font-medium tracking-[-0.01em]">{title}</Title>
       {description ? <Description className="mt-0.5 text-[13px] leading-5 text-pretty">{description}</Description> : null}

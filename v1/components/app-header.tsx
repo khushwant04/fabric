@@ -51,7 +51,7 @@ export function AppHeader({ context }: { context: ConsoleContext }) {
       <div className="mr-3 hidden w-64 xl:block"><SearchCommand /></div>
       <SearchCommand compact /><ThemeMenu />
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" className="h-9 gap-2 rounded-full px-1.5" aria-label="Open user menu" />}>
+        <DropdownMenuTrigger render={<Button variant="ghost" className="h-9 gap-2 rounded-none px-1.5" aria-label="Open user menu" />}>
           <Avatar className="size-7"><AvatarFallback className="bg-primary text-[11px] text-primary-foreground">{name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar>
           <span className="hidden max-w-28 truncate text-[13px] xl:block">{name}</span><ChevronDownIcon className="hidden size-3.5 text-muted-foreground sm:block" />
         </DropdownMenuTrigger>

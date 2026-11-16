@@ -176,7 +176,7 @@ export const TestResultsProgress = ({
     <div className={cn("space-y-2", className)} {...props}>
       {children ?? (
         <>
-          <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+          <div className="flex h-2 overflow-hidden rounded-none bg-muted">
             <div
               className="bg-green-500 transition-all"
               style={{ width: `${passedPercent}%` }}

@@ -50,7 +50,7 @@ export function RunStepTimeline({ steps, dropped }: { steps: RunStep[]; dropped:
       const tone = stepTone(step)
       return <li key={`${step.index}-${position}`} className="relative pb-6 pl-8 last:pb-0">
         {position < steps.length - 1 ? <span aria-hidden="true" className="absolute top-5 bottom-0 left-[7px] w-px bg-border" /> : null}
-        <span aria-hidden="true" className="absolute top-1.5 left-0 grid size-[15px] place-items-center rounded-full border bg-card"><span className={cn("size-1.5 rounded-full", dots[tone], tone === "info" && "animate-pulse")} /></span>
+        <span aria-hidden="true" className="absolute top-1.5 left-0 grid size-[15px] place-items-center rounded-none border bg-card"><span className={cn("size-1.5 rounded-none", dots[tone], tone === "info" && "animate-pulse")} /></span>
         <div className="rounded-xl border bg-card">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5">
             <span className="text-[13px] font-medium">Step {step.index}</span>
@@ -72,7 +72,7 @@ export function RunStepTimeline({ steps, dropped }: { steps: RunStep[]; dropped:
               <ul className="space-y-0.5 font-mono text-[11px] text-muted-foreground">{step.toolGuard.errors.map((error, index) => <li key={index}>{error}</li>)}</ul>
             </div> : null}
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="inline-flex items-center gap-1.5"><span className={cn("size-1.5 rounded-full", dots[tone])} />{step.status === "in_progress" ? <><RadioIcon className="size-3" />In progress</> : step.outcome === "ok" ? "Completed" : (step.outcome ?? "Unknown").replaceAll("_", " ")}</span>
+              <span className="inline-flex items-center gap-1.5"><span className={cn("size-1.5 rounded-none", dots[tone])} />{step.status === "in_progress" ? <><RadioIcon className="size-3" />In progress</> : step.outcome === "ok" ? "Completed" : (step.outcome ?? "Unknown").replaceAll("_", " ")}</span>
               {step.errorCode ? <code className="rounded bg-destructive/10 px-1.5 py-0.5 text-destructive">{step.errorCode}</code> : null}
               {step.httpStatus && step.httpStatus >= 400 ? <span className="text-muted-foreground">HTTP {step.httpStatus}</span> : null}
               <GuardBadge step={step} />
