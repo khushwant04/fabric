@@ -104,6 +104,8 @@ def test_unsafe_metadata_is_rejected_before_launch(change, match):
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("tile,warps", [(16, 1), (32, 1), (64, 2), (128, 4)])
 def test_fused_grouped_heads_matches_independent_reference(dtype, tile, warps):
+    if dtype == torch.bfloat16 and torch.cuda.get_device_capability() < (8, 0):
+        pytest.skip("BF16 is refused below compute capability 8.0")
     inputs = make_inputs("cuda", dtype=dtype)
     expected = [value.clone() if isinstance(value, torch.Tensor) else value for value in inputs]
     expected_out, expected_state = torch_packed_decode_reference(*expected)

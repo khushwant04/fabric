@@ -37,6 +37,13 @@ import torch
 import triton
 import triton.language as tl
 
+from kernels.launch_config import (
+    KERNEL_PACKED,
+    bf16_unsupported_reason,
+    device_capability,
+    resolve,
+)
+
 #: Above this the softplus is its own argument to within float32 resolution, and the
 #: exp overflows. vLLM uses the same threshold, so switching over at the same point keeps
 #: the two implementations bit-comparable rather than merely close.
@@ -278,7 +285,7 @@ def fused_packed_decode(
     *,
     block_v: int | None = None,
     num_warps: int | None = None,
-    num_stages: int = 3,
+    num_stages: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Run one decode step, writing into ``out`` and ``initial_state`` in place.
 
@@ -287,6 +294,13 @@ def fused_packed_decode(
     exposed because the best shape is a property of the GPU and the batch, not of the
     algorithm, and picking one by reasoning rather than measurement is how a kernel ends
     up slower than the one it replaces.
+
+    When none of the three is passed, the shape comes from
+    :mod:`kernels.launch_config`: environment overrides, then a tuning file, then the
+    per-compute-capability table, then vLLM's own tiling. When some are passed, the rest
+    are derived the way they always were (``num_warps`` from ``block_v``).
+
+    BF16 inputs are refused on compute capability below 8.0, which has no native BF16.
     """
     batch, H, HV, K, V = validate_packed_inputs(
         mixed_qkv,
@@ -308,17 +322,30 @@ def fused_packed_decode(
     if triton.cdiv(K, BK) != 1:
         raise ValueError(f"K={K} needs more than one key block, which this kernel does not split")
 
-    # The default matches vLLM's, so an unconfigured call is a like-for-like comparison
-    # rather than an accidental one.
-    BV = block_v if block_v is not None else min(triton.next_power_of_2(V), 32)
+    capability = device_capability(mixed_qkv.device)
+    refusal = bf16_unsupported_reason(mixed_qkv.dtype, capability)
+    if refusal:
+        raise ValueError(refusal)
+
+    # Host-side, cached per device and batch: safe inside a captured CUDA graph.
+    config = resolve(
+        KERNEL_PACKED,
+        capability,
+        batch,
+        block_v=block_v,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+    BV = config.block_v
     if not isinstance(BV, int) or BV <= 0 or BV & (BV - 1):
         raise ValueError("block_v must be a positive power of two")
     if BV > triton.next_power_of_2(V):
         BV = triton.next_power_of_2(V)
-    warps = num_warps if num_warps is not None else max(1, BV // 32)
+    warps = config.num_warps
     if warps not in (1, 2, 4, 8):
         raise ValueError("num_warps must be 1, 2, 4, or 8")
-    if not isinstance(num_stages, int) or not 1 <= num_stages <= 6:
+    stages = config.num_stages
+    if not isinstance(stages, int) or not 1 <= stages <= 6:
         raise ValueError("num_stages must be between 1 and 6")
 
     grid = (triton.cdiv(V, BV), batch * HV)
@@ -348,6 +375,6 @@ def fused_packed_decode(
         THRESHOLD=SOFTPLUS_THRESHOLD,
         USE_QK_L2NORM=use_qk_l2norm_in_kernel,
         num_warps=warps,
-        num_stages=num_stages,
+        num_stages=stages,
     )
     return out, initial_state

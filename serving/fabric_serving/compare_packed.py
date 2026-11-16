@@ -384,7 +384,13 @@ def compare_interleaved(
 
 def compare_batch(stock, batch: int, shapes: dict[str, int], dtype, args) -> dict[str, Any]:
     """Validate every requested candidate before allowing any timing or recommendation."""
-    candidates = {"fabric": (fused_packed_decode, {})}
+    # Pinned rather than left to the launch table: "fabric" is the like-for-like comparison
+    # at vLLM's own tile and must not change meaning with the GPU it runs on. The launch
+    # table is swept and produced by runtime/harness/tune.py.
+    vllm_tile = min(2 ** (shapes["V"] - 1).bit_length(), 32)
+    candidates = {
+        "fabric": (fused_packed_decode, {"block_v": vllm_tile, "num_warps": 1, "num_stages": 3})
+    }
     if args.sweep:
         for block_v in (16, 32, 64, 128):
             if block_v > 2 ** (shapes["V"] - 1).bit_length():
@@ -393,7 +399,7 @@ def compare_batch(stock, batch: int, shapes: dict[str, int], dtype, args) -> dic
                 if warps * 32 <= block_v * 4:
                     candidates[f"{block_v}/{warps}"] = (
                         fused_packed_decode,
-                        {"block_v": block_v, "num_warps": warps},
+                        {"block_v": block_v, "num_warps": warps, "num_stages": 3},
                     )
     checks = {}
     safe = {}
@@ -410,9 +416,9 @@ def compare_batch(stock, batch: int, shapes: dict[str, int], dtype, args) -> dic
             rtol=args.rtol,
         )
         checks[label]["settings"] = {
-            "block_v": kwargs.get("block_v", min(2 ** (shapes["V"] - 1).bit_length(), 32)),
-            "num_warps": kwargs.get("num_warps", 1),
-            "num_stages": 3,
+            "block_v": kwargs["block_v"],
+            "num_warps": kwargs["num_warps"],
+            "num_stages": kwargs["num_stages"],
             "use_qk_l2norm_in_kernel": True,
         }
         if checks[label]["status"] == "pass":
