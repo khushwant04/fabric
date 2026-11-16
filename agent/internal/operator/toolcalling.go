@@ -12,6 +12,7 @@ var modelToolCallParsers = map[string]string{
 	"Qwen/Qwen2.5-Coder-3B-Instruct": "hermes",
 	"Qwen/Qwen3-VL-4B-Instruct":      "hermes",
 	"Qwen/Qwen3.5-2B":                "qwen3_xml",
+	"Qwen/Qwen3.5-9B":                "qwen3_xml",
 	"Qwen/Qwen3.5-4B":                "qwen3_xml",
 	"Qwen/Qwen3.6-27B":               "qwen3_xml",
 	"Qwen/Qwen3.6-27B-FP8":           "qwen3_xml",
