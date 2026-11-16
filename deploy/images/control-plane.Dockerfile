@@ -3,7 +3,7 @@
 # Build from the repository root:
 #   docker build -f deploy/images/control-plane.Dockerfile -t fabric/control-plane:dev .
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.15-slim-bookworm AS build
 
 WORKDIR /src
 COPY control-plane/pyproject.toml ./
@@ -16,7 +16,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip==24.3.1 && \
     /opt/venv/bin/pip install --no-cache-dir .
 
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 RUN groupadd --gid 65532 nonroot && \
     useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin nonroot
