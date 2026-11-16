@@ -259,7 +259,13 @@ LOCAL_NODE=$(printf '%s\n' "$LOCAL_NAMES" | awk 'NF {print; exit}')
 if [ "$ENABLE_NVIDIA" -eq 1 ]; then
     [ -r "$CONTAINERD_CONFIG" ] && awk '/nvidia-container-runtime/ {found=1} END {exit !found}' "$CONTAINERD_CONFIG" \
         || die 'k3s did not discover NVIDIA; inspect the service PATH and runtime options'
-    "${KUBECTL[@]}" get runtimeclass nvidia >/dev/null || die 'k3s NVIDIA RuntimeClass is missing'
+    # k3s creates the nvidia RuntimeClass from its packaged manifests a few seconds after the
+    # node is Ready, so a fresh server needs a short wait before it exists.
+    for attempt in $(seq 1 60); do
+        "${KUBECTL[@]}" get runtimeclass nvidia >/dev/null 2>&1 && break
+        [ "$attempt" -lt 60 ] || die 'k3s NVIDIA RuntimeClass did not appear within 2 minutes; inspect journalctl -u k3s'
+        sleep 2
+    done
     LABELS=(accelerator=nvidia "nvidia.com/gpu.memory=$GPU_MEMORY" \
         "nvidia.com/gpu.compute.major=$GPU_MAJOR" "nvidia.com/gpu.compute.minor=$GPU_MINOR" \
         "nvidia.com/gpu.count=$GPU_COUNT")

@@ -19,7 +19,7 @@ umask 077
 
 REPOSITORY=https://github.com/khushwant04/fabric
 # Chart and images come from the same commit. CI publishes images for every commit on main.
-DEFAULT_RELEASE=f020738a9fd0b98094000f48a2000a9b18fff654
+DEFAULT_RELEASE=97ef926631f59de6dfd2f3a77a59ee29b8329dd6
 DEFAULT_REGISTRY=public.ecr.aws/hexelstudio/fabric
 CERT_MANAGER_VERSION=v1.17.2
 NAMESPACE=fabric-stamp
@@ -148,8 +148,41 @@ fi
 
 printf '%sFabric stamp %s%s → %s\n' "$BOLD" "$NAME" "$RESET" "$CONTROL_PLANE"
 
-# --------------------------------------------------------------------------- 1. GPU
-step "Checking GPU"
+# --------------------------------------------------------------------------- 1. preflight
+step "Checking prerequisites"
+CP_HOST=${CONTROL_PLANE#https://}; CP_HOST=${CP_HOST%%:*}
+if [ -n "$HOST" ] && [ "$CP_HOST" = "$HOST" ]; then
+    die "--control-plane and --host are the same name ($HOST). --control-plane is the Fabric API this stamp joins (for example https://api.example.com); --host is this stamp's own public name."
+fi
+# A Fabric control plane publishes its token-signing keys; anything else is the wrong URL.
+if JWKS=$(curl --proto '=https' --tlsv1.2 -fsS -m 15 "$CONTROL_PLANE/.well-known/jwks.json" 2>&1) \
+    && printf '%s' "$JWKS" | grep -q '"keys"'; then
+    ok "control plane $CONTROL_PLANE is reachable"
+else
+    die "$CONTROL_PLANE is not a reachable Fabric control plane (no keys at /.well-known/jwks.json). Use the console's control-plane address, for example https://api.example.com. The stamp's own hostname belongs in --host."
+fi
+if [ -n "$TOKEN" ]; then
+    [[ "$TOKEN" =~ ^fab_enroll_[A-Za-z0-9_-]{20,}$ ]] \
+        || die 'the enrollment token should look like fab_enroll_...; copy it again from console -> Inference stamps -> Enroll stamp'
+fi
+if [ -n "$HOST" ]; then
+    RESOLVED=$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR == 1 {print $1}' || true)
+    # GCP and most clouds expose the external address on their metadata service.
+    PUBLIC_IP=$(curl -fsS -m 3 -H 'Metadata-Flavor: Google' \
+        http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null \
+        || curl -fsS -m 3 -H 'Metadata: true' \
+        'http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text' 2>/dev/null \
+        || true)
+    if [ -z "$RESOLVED" ]; then
+        warn "$HOST does not resolve yet. Create a DNS A record for it${PUBLIC_IP:+ pointing at $PUBLIC_IP}; the TLS certificate is issued once it resolves."
+    elif [ -n "$PUBLIC_IP" ] && [ "$RESOLVED" != "$PUBLIC_IP" ]; then
+        warn "$HOST resolves to $RESOLVED, but this machine's public IP is $PUBLIC_IP. Update the DNS A record, or the certificate cannot be issued."
+    else
+        ok "$HOST resolves to ${RESOLVED}${PUBLIC_IP:+ (this machine)}"
+    fi
+    note "inbound TCP 80 and 443 must be open to this machine for the certificate and for inference"
+fi
+
 GPU_REPORT=""
 if [ "$GPU" = auto ]; then
     if command -v nvidia-smi >/dev/null 2>&1; then GPU=on; else GPU=off; fi
@@ -198,7 +231,8 @@ HELM_ARGS=(
 if [ "$GPU" = on ]; then
     # k3s runs GPU containers only under the nvidia RuntimeClass; without it vLLM reports
     # "Failed to infer device type". The bootstrap labels GPU nodes accelerator=nvidia.
-    HELM_ARGS+=(--set-string gpu.runtimeClassName=nvidia --set-string gpu.nodeSelector.accelerator=nvidia)
+    HELM_ARGS+=(--set-string gpu.runtimeClassName=nvidia --set-string gpu.nodeSelector.accelerator=nvidia
+        --set gpuMetrics.dcgmExporter.enabled=true)
 fi
 if [ -n "$PREPULL" ]; then
     HELM_ARGS+=(--set operator.managedModelHost.prepull.enabled=true
@@ -219,7 +253,7 @@ fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '\nDry run: release %s, images %s/*:%s, public endpoint %s\n' \
-        "${RELEASE:0:12}" "$REGISTRY" "$TAG" "${HOST:+https://$HOST}${HOST:-none}"
+        "${RELEASE:0:12}" "$REGISTRY" "$TAG" "$( [ -n "$HOST" ] && printf "https://%s" "$HOST" || printf none )"
     printf 'helm upgrade --install %q <chart:%s/deploy/helm/fabric-stamp>' "$NAME" "${RELEASE:0:12}"
     printf ' %q' "${HELM_ARGS[@]}"
     printf '\n'
@@ -253,7 +287,20 @@ K3S_ARGS=()
 # Name the node only on a fresh install: an existing server keeps its node name.
 systemctl cat k3s.service >/dev/null 2>&1 || K3S_ARGS+=(--node-name "$NAME")
 [ "$GPU" = on ] && K3S_ARGS+=(--nvidia)
-quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"
+if ! quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"; then
+    # A brand-new server needs a few seconds after it reports Ready before its node and the
+    # nvidia RuntimeClass exist; older pinned releases check only once. Wait, then retry.
+    systemctl is-active --quiet k3s || die "k3s did not start; see $LOG_FILE"
+    note "k3s is still settling; waiting before one retry"
+    for _ in $(seq 1 24); do
+        if [ "$GPU" != on ] || k3s kubectl --kubeconfig "$KUBECONFIG_PATH" get runtimeclass nvidia >/dev/null 2>&1; then break; fi
+        sleep 5
+    done
+    # The server now exists and keeps its node name, so the retry passes no --node-name.
+    K3S_ARGS=()
+    [ "$GPU" = on ] && K3S_ARGS+=(--nvidia)
+    quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"
+fi
 KUBECTL=(k3s kubectl --kubeconfig "$KUBECONFIG_PATH")
 HELM=(helm --kubeconfig "$KUBECONFIG_PATH" --kube-context default)
 ok "k3s $("${KUBECTL[@]}" version -o json 2>/dev/null | sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | tail -1) is running"
@@ -291,9 +338,6 @@ fi
 # --------------------------------------------------------------------------- 4. TLS
 step "TLS"
 if [ -n "$HOST" ]; then
-    RESOLVED=$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR == 1 {print $1}' || true)
-    if [ -n "$RESOLVED" ]; then ok "$HOST resolves to $RESOLVED"
-    else warn "$HOST does not resolve yet; the certificate is issued once DNS points here"; fi
     if ! "${KUBECTL[@]}" get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
         quiet "${HELM[@]}" upgrade --install cert-manager cert-manager \
             --repo https://charts.jetstack.io --version "$CERT_MANAGER_VERSION" \
@@ -320,7 +364,7 @@ spec:
 EOF
     ok "Let's Encrypt issuer ready for https://$HOST"
 else
-    warn "skipped: no --host, so the edge gateway cannot route to this stamp"
+    warn "skipped: no --host given. The stamp enrolls, but without a public HTTPS name the edge gateway cannot route requests to it. Re-run with --host NAME --email ADDRESS to add one."
 fi
 
 # --------------------------------------------------------------------------- 5. enrollment
@@ -338,20 +382,66 @@ elif ! "${KUBECTL[@]}" -n "$NAMESPACE" get secret "$SECRET" >/dev/null 2>&1 && [
     die '--token is required for a first install (console -> Inference stamps -> Enroll stamp)'
 fi
 
+# An install interrupted with Ctrl-C leaves the release pending, which blocks every later
+# upgrade. Roll back to the last good revision, or remove a first install that never finished.
+RELEASE_STATUS=$("${HELM[@]}" status "$NAME" --namespace "$NAMESPACE" -o json 2>/dev/null \
+    | sed -n 's/.*"status":"\([a-z-]*\)".*/\1/p' | head -1 || true)
+case "$RELEASE_STATUS" in
+    pending-*|failed)
+        if "${HELM[@]}" history "$NAME" --namespace "$NAMESPACE" 2>/dev/null | grep -qw deployed; then
+            quiet "${HELM[@]}" rollback "$NAME" --namespace "$NAMESPACE" --wait=false
+            ok "recovered an interrupted install (rolled back to the last working revision)"
+        else
+            quiet "${HELM[@]}" uninstall "$NAME" --namespace "$NAMESPACE" --wait
+            INSTALLED=0
+            ok "removed an interrupted first install"
+        fi ;;
+esac
+
+# No --wait: the agent's pod is only ready after it enrolls, so a wrong token or control plane
+# would otherwise hang here for the whole timeout. Enrollment is watched below instead.
 quiet "${HELM[@]}" upgrade --install "$NAME" "$RELEASE_DIR/deploy/helm/fabric-stamp" \
-    "${HELM_ARGS[@]}" --wait --timeout 15m
-ok "stamp chart installed (agent and gateway running)"
+    "${HELM_ARGS[@]}" --timeout 15m
+ok "stamp chart applied; waiting for the agent to enroll (this pulls the agent and gateway images)"
 
 STAMP_ID=""
-for _ in $(seq 1 60); do
-    AGENT_LOG=$("${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --tail=400 2>/dev/null || true)
+STARTED=$(date +%s)
+LAST_NOTE=0
+while :; do
+    AGENT_LOG=$( { "${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --previous --tail=200 2>/dev/null
+                   "${KUBECTL[@]}" -n "$NAMESPACE" logs "statefulset/$NAME-fabric-stamp" -c agent --tail=400 2>/dev/null; } || true)
     if printf '%s' "$AGENT_LOG" | grep -qE '"msg":"(enrolled|using persisted stamp identity)"'; then
-        STAMP_ID=$(printf '%s' "$AGENT_LOG" | grep -oE '"stamp_id":"[0-9a-f-]{36}"' | tail -1 | cut -d'"' -f4)
+        STAMP_ID=$(printf '%s' "$AGENT_LOG" | grep -oE '"stamp_id":"[0-9a-f-]{36}"' | tail -1 | cut -d'"' -f4 || true)
         break
+    fi
+    ENROLL_ERROR=$(printf '%s' "$AGENT_LOG" | grep '"msg":"enrollment failed"' | tail -1 \
+        | sed -n 's/.*"error":"\(.*\)".*/\1/p' | sed 's/fab_[A-Za-z0-9_-]*/fab_…/g' | cut -c1-300 || true)
+    if [ -n "$ENROLL_ERROR" ]; then
+        fail "enrollment failed: $ENROLL_ERROR"
+        case "$ENROLL_ERROR" in
+            *401*|*403*|*nvalid*|*xpired*|*used*|*revoked*)
+                note "The token was rejected: it is single use and expires. Generate a new one in the console" ;
+                note "(Inference stamps -> Enroll stamp) and re-run with --token." ;;
+            *404*|*"no such host"*|*refused*|*timeout*|*certificate*)
+                note "The control plane at $CONTROL_PLANE did not answer as expected. Check --control-plane" ;
+                note "is the console's control-plane address and that this machine can reach it over HTTPS." ;;
+        esac
+        die "fix the cause and run the same command again"
+    fi
+    POD_REASON=$("${KUBECTL[@]}" -n "$NAMESPACE" get pod "$NAME-fabric-stamp-0" \
+        -o jsonpath='{range .status.containerStatuses[*]}{.state.waiting.reason}{" "}{end}' 2>/dev/null | tr -s ' ' || true)
+    case "$POD_REASON" in
+        *ImagePullBackOff*|*ErrImagePull*|*InvalidImageName*)
+            die "the agent image could not be pulled ($POD_REASON). Check outbound HTTPS to the registry; release ${RELEASE:0:12} must have published images." ;;
+    esac
+    ELAPSED=$(( $(date +%s) - STARTED ))
+    [ "$ELAPSED" -lt 900 ] || die "the agent did not enroll within 15 minutes; check: sudo k3s kubectl -n $NAMESPACE logs statefulset/$NAME-fabric-stamp -c agent"
+    if [ $((ELAPSED - LAST_NOTE)) -ge 30 ]; then
+        note "still waiting (${ELAPSED}s)${POD_REASON:+: $POD_REASON}"
+        LAST_NOTE=$ELAPSED
     fi
     sleep 5
 done
-[ -n "$STAMP_ID" ] || die "the agent did not enroll; check: sudo k3s kubectl -n $NAMESPACE logs statefulset/$NAME-fabric-stamp -c agent"
 if [ "$INSTALLED" -eq 1 ]; then ok "agent reused its enrolled identity (stamp $STAMP_ID)"
 else ok "enrolled as stamp $STAMP_ID"; fi
 
