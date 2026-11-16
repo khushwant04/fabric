@@ -50,15 +50,15 @@ export function AccountMenu({ context }: { context: ConsoleContext }) {
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
-          <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Open account menu" className="h-14 gap-3 rounded-xl px-2.5 hover:bg-sidebar-accent/70 data-open:bg-sidebar-accent group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center" />}>
+          <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Open account menu" className="h-14 gap-3 rounded-xl px-2.5 hover:bg-sidebar-accent/70 data-open:bg-sidebar-accent group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:p-0!" />}>
             <Avatar className="size-8 shrink-0">
               <AvatarFallback className="bg-primary text-[13px] font-medium text-primary-foreground">{name.slice(0, 1).toUpperCase()}</AvatarFallback>
             </Avatar>
-            <span className="grid min-w-0 flex-1 text-left leading-tight">
+            <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]/sidebar:hidden">
               <span className="truncate text-sm font-semibold">{name}</span>
               <span className="truncate text-[13px] text-muted-foreground">{context.account.name}</span>
             </span>
-            <ChevronsUpDownIcon className="ml-auto size-4 shrink-0 text-muted-foreground" />
+            <ChevronsUpDownIcon className="ml-auto size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]/sidebar:hidden" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side={isMobile ? "top" : "right"} align="end" sideOffset={10} className="w-72 max-w-[calc(100vw-24px)]">
             <DropdownMenuGroup>

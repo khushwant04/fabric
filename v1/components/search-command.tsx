@@ -88,7 +88,7 @@ export function SearchCommand() {
       <Button
         variant="outline"
         aria-label="Search pages and actions"
-        className="h-9 w-full justify-start gap-2 px-3 text-sm font-normal text-muted-foreground shadow-none group-data-[collapsible=icon]/sidebar:size-9 group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0"
+        className="h-9 w-full justify-start gap-2 px-3 text-sm font-normal text-muted-foreground shadow-none group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10 group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0"
         onClick={() => setOpen(true)}
       >
         <SearchIcon />
