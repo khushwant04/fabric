@@ -42,14 +42,8 @@ uv run --project examples/python python examples/python/scripts/<name>.py --help
 | `cascade_demo.py` | `model: "cascade"`: an easy prompt stays on the small deployment, a truncated and a schema-failing one escalate; prints the `X-Fabric-Cascade-*` headers. See [docs/model-cascade.md](../docs/model-cascade.md). |
 | `control_inspect.py [--deployment ID]` | Read self, account, deployments, per-stamp status, and aggregate usage. |
 | `raw_http_chat.py [prompt]` | Chat through raw `httpx`, without the OpenAI SDK. |
-| `agents_tool.py [city]` | Experimental OpenAI Agents SDK local function tool. |
-
-The Agents example needs its optional dependency:
-
-```bash
-uv sync --project examples/python --extra agents
-uv run --project examples/python python examples/python/scripts/agents_tool.py
-```
+| `openai_agents_demo.py` | OpenAI Agents SDK trip planner: a handoff, three function tools, a structured `TripPlan`, a Fabric run budget via `ModelSettings(extra_headers=...)`, then the `GET /v1/runs/{id}` trace and tool-guard outcome. `make demo-openai-agents` runs it without a GPU. See [docs/openai-agents-sdk.md](../docs/openai-agents-sdk.md). |
+| `agents_tool.py [city]` | Minimal OpenAI Agents SDK local function tool. |
 
 Curl examples require `curl` and `jq`. After exporting the same environment, run (for example) `bash examples/curl/models.sh`, `bash examples/curl/chat.sh`, `bash examples/curl/stream_chat.sh`, `bash examples/curl/completion.sh`, `bash examples/curl/vision.sh`, `bash examples/curl/audio.sh transcriptions`, or `bash examples/curl/control_read.sh [deployment-id]`. They use strict shell mode, safely construct JSON with `jq`, and never display tokens.
 
@@ -61,7 +55,8 @@ Curl examples require `curl` and `jq`. After exporting the same environment, run
 | Chat completions | Supported, including streaming pass-through | `chat.py`, `stream_chat.py` |
 | Legacy completions | Supported | `completion.py` |
 | Audio transcriptions/translations | Supported route; model availability varies | `audio.py`, `audio.sh` |
-| Responses | **Unsupported** (`/v1/responses` is absent) | Do not use |
+| Responses | Stateless only (no `previous_response_id`, `conversation`, `store: true`); needs a supporting model host. See [docs/openai-responses.md](../docs/openai-responses.md) | — |
+| OpenAI Agents SDK | Supported in chat-completions mode; OpenAI-hosted tools and server-side state are not. See [docs/openai-agents-sdk.md](../docs/openai-agents-sdk.md) | `openai_agents_demo.py`, `agents_tool.py` |
 | Embeddings | Unsupported | — |
 | Image generation | Unsupported | — |
 | Assistants | Unsupported | — |
@@ -88,7 +83,7 @@ to its first 200 characters for safe HTTP transport; URL-decode it for display.
 - **Thinking mode:** chat examples pass `chat_template_kwargs.enable_thinking=false` for predictable concise output. This backend-specific option may be ignored or rejected by models that do not implement it; remove `extra_body` if necessary.
 - **Audio:** Fabric exposes transcription and translation routes, but a currently compatible audio model may not exist in a given installation. Audio streaming is not supported. File formats, limits, languages, and translation behavior are model-dependent.
 - **Manual tools:** Fabric forwards chat tool definitions; the selected model must produce compatible tool calls. Execute only explicitly allowlisted local functions, validate arguments, and never execute model-generated code.
-- **Agents:** `agents_tool.py` explicitly uses `AsyncOpenAI`, Fabric's `/v1` base, an inference JWT, and `OpenAIChatCompletionsModel`; tracing is disabled. Compatibility is experimental and model-dependent. It deliberately does not use Responses because Fabric has no `/v1/responses` route.
+- **Agents:** `openai_agents_demo.py` and `agents_tool.py` point the SDK's `AsyncOpenAI` client at Fabric's `/v1` base with an inference JWT, use the chat-completions API, and disable tracing so nothing is exported to OpenAI. Tool calling depends on the model host (vLLM needs `--enable-auto-tool-choice` and a tool-call parser). Responses mode works only statelessly. See [docs/openai-agents-sdk.md](../docs/openai-agents-sdk.md).
 - **Concurrency and 429:** start with low bounded concurrency. `rate_limits.py` honors `Retry-After` when present and otherwise uses jittered exponential delay. Repeated 429s should be surfaced rather than retried forever.
 - **Read-only control APIs:** API-key scopes determine access. Status is per stamp and can be empty or stale. Usage is operational aggregate metering, not billing-grade accounting. The example derives the account from token exchange and performs no mutations.
 
@@ -96,4 +91,4 @@ Typical failures include `401` for invalid/expired tokens or a wrong audience, `
 
 ## Agents SDK sources
 
-The Agents integration follows the official [model configuration documentation](https://openai.github.io/openai-agents-python/models) and [SDK configuration documentation](https://openai.github.io/openai-agents-python/config/). In particular, the explicit chat-completions adapter avoids the SDK's Responses-oriented defaults, and tracing is disabled to prevent external trace export. Web material was rephrased for compliance with licensing restrictions.
+The Agents integration follows the official [model configuration documentation](https://openai.github.io/openai-agents-python/models) and [SDK configuration documentation](https://openai.github.io/openai-agents-python/config/). In particular, the explicit chat-completions API avoids the SDK's Responses-oriented defaults (which assume stored server-side state), and tracing is disabled to prevent external trace export. Web material was rephrased for compliance with licensing restrictions.

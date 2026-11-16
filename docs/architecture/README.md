@@ -10,9 +10,6 @@ control plane.
 - The Mermaid diagram below renders on GitHub.
 - The plain-text diagram below works anywhere, including terminals and code review.
 
-The edge gateway is marked *in progress*: it is being built on this branch and is not yet
-merged.
-
 ## Mermaid
 
 ```mermaid
@@ -23,7 +20,7 @@ flowchart TB
 
     subgraph AKS["Azure AKS — central"]
         direction TB
-        edge["Edge gateway<br/><small>one URL · in progress</small>"]
+        edge["Edge gateway<br/><small>one URL · failover</small>"]
         console["Console<br/><small>Next.js</small>"]
         cp["Control plane<br/><small>tokens · placement · usage · audit</small>"]
         pg[("PostgreSQL<br/><small>row-level security</small>")]
@@ -61,9 +58,6 @@ flowchart TB
     edge -- HTTPS --> gwA & gwB & gwC
     agA & agB & agC -. "enroll · heartbeat · usage" .-> cp
     STAMPS -- metrics --> prom
-
-    classDef wip stroke-dasharray: 6 4,stroke:#6A3FB5;
-    class edge wip;
 ```
 
 ## Plain text
@@ -78,7 +72,7 @@ flowchart TB
 │  Azure AKS — central            ▼                                 ▼             │
 │                       ┌───────────────────┐            ┌───────────────────┐    │
 │                       │   Edge gateway    │            │     Console       │    │   ┌───────────────┐
-│                       │ (in progress)     │            │     Next.js       │────┼──►│ Identity      │
+│                       │ one URL           │            │     Next.js       │────┼──►│ Identity      │
 │                       │ verify token ·    │            └─────────┬─────────┘    │   │ provider      │
 │                       │ pick stamp ·      │                      │ manage       │   │ Auth0 / OIDC  │
 │                       │ failover · run    │ routing    ┌─────────▼─────────┐    │   └───────────────┘
@@ -116,7 +110,7 @@ flowchart TB
 
 | Part | Runs on | Role |
 |---|---|---|
-| Edge gateway | AKS | One inference URL. Verifies the token locally, forwards to a healthy stamp holding the model, keeps run-id affinity, serves from a cached routing table if the control plane is down. *In progress.* |
+| Edge gateway | AKS | One inference URL. Verifies the token locally, forwards to a healthy stamp holding the model, keeps run-id affinity, serves from a cached routing table if the control plane is down. See [edge gateway](../edge-gateway.md). |
 | Console | AKS | Next.js admin UI: deployments, stamps, usage, audit, access, playground. |
 | Control plane | AKS | Accounts, API keys, OIDC, token exchange, deployments, capacity-aware placement, stamp enrollment, usage and audit. |
 | PostgreSQL | AKS | Account data with row-level security forced on every account table. |

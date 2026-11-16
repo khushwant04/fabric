@@ -34,6 +34,9 @@
 #       FABRIC_DEMO_FIRECRAWL_URL set, a second pass restarts the data plane on those backends.
 #   All use the stub host agent/scripts/agent_loop_demo_host.py unless FABRIC_E2E_UPSTREAM is
 #   set; the larger tier's release is FABRIC_E2E_RELEASE_LARGE (default "<release>-large").
+#   FABRIC_E2E_AGENT_DEMO=openai-agents agent/scripts/e2e.sh   # `make demo-openai-agents`: run
+#       examples/python/scripts/openai_agents_demo.py (the OpenAI Agents SDK) with the stub host
+#       agent/scripts/openai_agents_demo_host.py unless FABRIC_E2E_UPSTREAM is set.
 #
 # Requires the control-plane, data-plane, and agent environments to be installed.
 
@@ -55,6 +58,7 @@ case "$AGENT_DEMO" in
     loop) DEMO_SCRIPT="agent_loop_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
     cascade) DEMO_SCRIPT="cascade_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
     hosted) DEMO_SCRIPT="hosted_tools_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
+    openai-agents) DEMO_SCRIPT="openai_agents_demo.py"; STUB_HOST="openai_agents_demo_host.py" ;;
     *) DEMO_SCRIPT="agent_demo.py"; STUB_HOST="agent_demo_host.py" ;;
 esac
 CASCADE_DEMO=""
