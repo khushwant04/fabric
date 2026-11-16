@@ -319,6 +319,19 @@ edge:
     tls:
       enabled: true
       secretName: ""
+  # Expose the edge through an existing Istio ingress gateway (e.g. the AKS Istio addon)
+  # instead of an Ingress. hosts are the public inference hostnames; credentialName is a
+  # TLS Secret in the ingress gateway's namespace.
+  istio:
+    enabled: false
+    hosts: []
+    # Defaults to the top-level istio.gatewaySelector.
+    gatewaySelector: {}
+    tls:
+      credentialName: ""
+    # Istio route timeout for the whole request, streams included; keep it at least
+    # readTimeoutSeconds. Istio's CRD rejects 0s, so the timeout cannot be switched off.
+    timeout: 600s
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: "2", memory: 512Mi}

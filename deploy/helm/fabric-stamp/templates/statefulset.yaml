@@ -153,13 +153,13 @@ spec:
             - name: FABRIC_DP_DEPLOYMENTS_FILE
               value: /etc/fabric/config/deployments.json
             - name: FABRIC_DP_USAGE_BUFFER_SIZE
-              value: {{ .Values.dataPlane.usageBufferSize | quote }}
+              value: {{ .Values.dataPlane.usageBufferSize | int64 | quote }}
             - name: FABRIC_DP_USAGE_SPOOL_PATH
               value: /var/lib/fabric-usage/private/usage.db
             - name: FABRIC_DP_UPSTREAM_TIMEOUT_SECONDS
               value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
             - name: FABRIC_DP_RESPONSES_MAX_BODY_BYTES
-              value: {{ .Values.dataPlane.responses.maxBodyBytes | quote }}
+              value: {{ .Values.dataPlane.responses.maxBodyBytes | int64 | quote }}
             {{- with .Values.dataPlane.fileSearch }}
             {{- if .enabled }}
             # Hosted file search: stamp-local SQLite plus blobs (docs/file-search.md).

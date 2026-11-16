@@ -81,6 +81,19 @@ helm upgrade cp deploy/helm/fabric-control-plane -n fabric-control --reuse-value
 `edge-tls` is the certificate Secret for that host (cert-manager can create it); the chart
 refuses to render without it while edge TLS is on.
 
+On a cluster that uses the AKS Istio add-on instead of an ingress controller, expose the
+edge on the shared Istio gateway instead. The certificate Secret must be in the gateway's
+namespace (`aks-istio-ingress`):
+
+```bash
+  --set edge.istio.enabled=true \
+  --set 'edge.istio.hosts={inference.example.com}' \
+  --set edge.istio.tls.credentialName=edge-tls
+```
+
+`edge.istio.timeout` (default `600s`) limits each whole request, streams included. Istio
+refuses `0s`, so keep it at least `edge.readTimeoutSeconds`.
+
 Add the ingress annotations from the `edge:` section of `values.yaml` (buffering off, read
 timeout ≥ 600 s) and TLS. With `console.inferenceUrl` unset, the console uses the edge URL.
 
