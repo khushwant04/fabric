@@ -30,6 +30,9 @@ dev = [
   "ruff==0.17.3",
   # End-to-end test of /v1/messages with the official client; skipped when absent.
   "anthropic==2.8.0",
+  # Compatibility test running the OpenAI Agents SDK against the gateway; skipped when absent.
+  "openai-agents==0.24.0",
+  "openai==3.16.2",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -8,6 +8,8 @@
 #                   FABRIC_E2E_UPSTREAM points at a real one
 #   make demo-agent-loop  one request runs a whole agent on the gateway (POST /v1/agent/runs)
 #   make demo-cascade     model "cascade": small tier first, escalate on cheap checks
+#   make demo-openai-agents  the OpenAI Agents SDK on Fabric: handoff, tools, run budget,
+#                   tool guard and trace (docs/openai-agents-sdk.md)
 #   make demo-edge  the edge gateway (ADR 0021) in front of two local stamps: routing by
 #                   model, failover, and serving through a control-plane outage
 #   make check      every test and lint suite CI runs (except PostgreSQL)
@@ -21,7 +23,8 @@
 PYTHON_VERSION ?= 3.12
 RUFF := uv run --no-project --with ruff==0.8.4 ruff
 DATA_PLANE_TEST := uv run --python $(PYTHON_VERSION) --with-editable . \
-	--with pytest==8.3.4 --with pytest-asyncio==0.24.0 pytest -q
+	--with pytest==8.3.4 --with pytest-asyncio==0.24.0 \
+	--with openai-agents==0.24.0 --with openai==3.16.2 pytest -q
 TORCH_CPU := UV_INDEX=https://download.pytorch.org/whl/cpu UV_INDEX_STRATEGY=unsafe-best-match
 
 # The settings the control plane needs to import, matching its test configuration.
@@ -31,11 +34,11 @@ OPENAPI_ENV := FABRIC_APP_ENV=test FABRIC_DATABASE_URL=sqlite+aiosqlite:///:memo
 	FABRIC_JWT_ISSUER=https://control.fabric.test \
 	FABRIC_CREDENTIAL_PEPPER=test-pepper-value FABRIC_SYSTEM_ACCOUNT_SLUG=fabric-system
 
-.PHONY: help setup setup-python demo demo-agent demo-agent-loop demo-cascade demo-edge check check-control-plane check-data-plane check-agent \
+.PHONY: help setup setup-python demo demo-agent demo-agent-loop demo-cascade demo-openai-agents demo-edge check check-control-plane check-data-plane check-agent \
 	check-runtime check-console test-postgres openapi bench-routing
 
 help:
-	@sed -n '1,20p' Makefile
+	@sed -n '1,22p' Makefile
 
 setup: setup-python
 	cd v1 && npm ci
@@ -69,6 +72,13 @@ demo-agent-loop: setup-python
 demo-cascade: setup-python
 	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
 	FABRIC_E2E_AGENT_DEMO=cascade PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
+
+# The OpenAI Agents SDK (examples/python/scripts/openai_agents_demo.py) against the same local
+# platform, with the stub host agent/scripts/openai_agents_demo_host.py unless
+# FABRIC_E2E_UPSTREAM points at a real one.
+demo-openai-agents: setup-python
+	uv sync --quiet --project examples/python --python $(PYTHON_VERSION)
+	FABRIC_E2E_AGENT_DEMO=openai-agents PYTHON_VERSION=$(PYTHON_VERSION) bash agent/scripts/e2e.sh
 
 check: check-control-plane check-data-plane check-agent check-runtime check-console
 

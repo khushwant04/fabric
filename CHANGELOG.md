@@ -8,6 +8,19 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- OpenAI Agents SDK support (`docs/openai-agents-sdk.md`): `data-plane/tests/test_openai_agents_sdk.py`
+  runs `openai-agents==0.24.0` (with `openai==3.16.2`, now in the data-plane dev extra and
+  `make check-data-plane`) against the gateway: function-tool loops, run budgets via
+  `ModelSettings(extra_headers=...)` and the `GET /v1/runs/{id}` trace, tool-guard repair hidden
+  from the SDK, `Runner.run_streamed`, Pydantic `output_type`, handoffs, guardrails,
+  `model="cascade"`, and stateless Responses mode; `previous_response_id`,
+  `auto_previous_response_id` and `store=True` are asserted to be refused with
+  `responses_state_unsupported`/`responses_store_unsupported`, and the SDK's trace exporter is
+  asserted never to run. New example `examples/python/scripts/openai_agents_demo.py` (concierge
+  hands off to a trip planner with three tools and a structured `TripPlan`, then prints the run
+  trace and tool-guard outcome) and `make demo-openai-agents` (local platform, stub host
+  `agent/scripts/openai_agents_demo_host.py`, or a real host via `FABRIC_E2E_UPSTREAM`).
+  `openai-agents` is now a regular dependency of `examples/python` (the `agents` extra is gone).
 - Edge gateway (ADR 0021, `docs/edge-gateway.md`): `python -m fabric_data_plane.edge`, one
   inference URL in front of every stamp. It verifies inference tokens locally with the
   stamp's own code; routes `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
