@@ -517,6 +517,9 @@ class DeploymentHostSnapshot(Base):
     log_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     log_previous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     log_error: Mapped[str | None] = mapped_column(String(200))
+    #: Weight download progress the agent measured in the node's model cache, or null when
+    #: it could not measure (docs/model-host-logs.md).
+    weights: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn)
     #: The stamp's clock when it read the pod; ``reported_at`` is the control plane's.
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reported_at: Mapped[dt.datetime] = _created_at()
@@ -540,6 +543,46 @@ class DeploymentHostSnapshot(Base):
             name="uq_deployment_host_snapshots_pod",
         ),
         Index("ix_deployment_host_snapshots_stamp_id", "stamp_id"),
+    )
+
+
+class StampEvent(Base):
+    """One entry in a stamp's registration and activity log.
+
+    The agent records lifecycle moments (enrolled, GPUs measured, GPU runtime checked,
+    credentials rotated, desired state applied, model-host image pulled, errors) and pushes
+    them; the control plane adds its own (the stamp was removed). Only the newest
+    ``stamp_events.MAX_EVENTS_PER_STAMP`` are kept per stamp, so the table is a bounded
+    timeline rather than an audit log. The owning account is the stamp's, never the
+    reporter's claim, and the table has the same forced row-level security as every other
+    account table.
+    """
+
+    __tablename__ = "stamp_events"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    stamp_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    #: The reporter's idempotency key, so a retried upload does not duplicate entries.
+    event_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="agent")
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    hint: Mapped[str | None] = mapped_column(String(500))
+    details: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    occurred_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[dt.datetime] = _created_at()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "stamp_id"],
+            ["inference_stamps.account_id", "inference_stamps.id"],
+            ondelete="CASCADE",
+            name="fk_stamp_events_stamp",
+        ),
+        UniqueConstraint("stamp_id", "event_key", name="uq_stamp_events_stamp_id_event_key"),
+        Index("ix_stamp_events_stamp_id_occurred_at", "stamp_id", "occurred_at"),
     )
 
 

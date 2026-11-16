@@ -112,6 +112,30 @@ type Pod struct {
 	LogPrevious bool `json:"log_previous"`
 	// LogError says why no log is present, for example a container still pulling.
 	LogError string `json:"log_error,omitempty"`
+	// Weights is how much of the model's weights the node's cache holds, while the host is
+	// starting and the agent can see that cache. Absent when unknown.
+	Weights *WeightProgress `json:"weights,omitempty"`
+
+	// node is where the pod runs. Used to decide whether this agent can see that node's
+	// model cache; never reported, because the control plane has no use for node names.
+	node string
+}
+
+// WeightProgress is a measurement of a model's weights in the node's Hugging Face cache.
+// TotalBytes is zero when the expected size is unknown.
+type WeightProgress struct {
+	Repository      string    `json:"repository"`
+	DownloadedBytes int64     `json:"downloaded_bytes"`
+	TotalBytes      int64     `json:"total_bytes"`
+	InProgressFiles int       `json:"in_progress_files"`
+	MeasuredAt      time.Time `json:"measured_at"`
+}
+
+// WeightSource measures weight download progress for a starting host. It returns nil when
+// it cannot tell, for example because the pod runs on a node whose cache this agent does
+// not mount.
+type WeightSource interface {
+	Measure(ctx context.Context, deploymentID, node string) *WeightProgress
 }
 
 // Deployment groups the pods of one deployment.
@@ -154,6 +178,8 @@ type Reporter struct {
 	LogLines int
 	// Now is the clock, replaceable in tests.
 	Now func() time.Time
+	// Weights, when set, measures weight download progress for hosts that are not ready.
+	Weights WeightSource
 }
 
 func (r *Reporter) now() time.Time {
@@ -259,8 +285,11 @@ func (r *Reporter) Collect(ctx context.Context) (Report, error) {
 		if !uuidPattern.MatchString(deploymentID) {
 			continue
 		}
-		byDeployment[deploymentID] = append(byDeployment[deploymentID],
-			r.snapshot(ctx, item, logBudget))
+		snapshot := r.snapshot(ctx, item, logBudget)
+		if r.Weights != nil && !snapshot.Ready && !snapshot.Terminating {
+			snapshot.Weights = r.Weights.Measure(ctx, deploymentID, snapshot.node)
+		}
+		byDeployment[deploymentID] = append(byDeployment[deploymentID], snapshot)
 	}
 
 	report := Report{ObservedAt: r.now().UTC(), Deployments: []Deployment{}}
@@ -284,6 +313,7 @@ func (r *Reporter) snapshot(ctx context.Context, item pod, logBudget int) Pod {
 		StartedAt:   item.Status.StartTime,
 		Conditions:  []Condition{},
 		Events:      []Event{},
+		node:        item.Spec.NodeName,
 	}
 	for _, condition := range item.Status.Conditions {
 		snapshot.Conditions = append(snapshot.Conditions, Condition{
@@ -415,6 +445,8 @@ var (
 		regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
 		regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|secret|password|passwd)["']?\s*[:=]\s*\S`),
 		regexp.MustCompile(`fabric_(agt|tel|key)_[A-Za-z0-9_-]{8,}`),
+		// The prefixes Fabric's credentials actually carry (control-plane credentials.py).
+		regexp.MustCompile(`\bfab_(key|enroll|agent|telem)_[A-Za-z0-9_-]{8,}`),
 		regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 	}
 	uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -506,6 +538,9 @@ type pod struct {
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		DeletionTimestamp *time.Time        `json:"deletionTimestamp"`
 	} `json:"metadata"`
+	Spec struct {
+		NodeName string `json:"nodeName"`
+	} `json:"spec"`
 	Status struct {
 		Phase      string     `json:"phase"`
 		StartTime  *time.Time `json:"startTime"`

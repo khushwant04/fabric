@@ -83,6 +83,14 @@ agent:
   # ready) without kubectl. Applies only when the operator runs the hosts, and grants the
   # agent read on pods, pods/log and events in this namespace. See docs/model-host-logs.md.
   reportHosts: true
+  # Weight download progress for starting hosts, measured in the model cache. With the
+  # hostPath cache, the node's cache directory is mounted read-only into the agent, and
+  # hosts on the agent's own node report progress (every host on a single-node stamp).
+  # Needs agent.reportHosts. See docs/model-host-logs.md.
+  weightProgress: true
+  # The stamp's activity log (enrolled, GPUs measured, GPU runtime, rotations, image
+  # pulls, errors) shown on the console's stamp page.
+  reportActivity: true
   resources:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
@@ -171,12 +179,14 @@ operator:
       # AKS mounts the ephemeral disk at /mnt.
       hostPath: /mnt/fabric/model-cache
       claim: ""
-    # One pod per GPU node pulls the model-host image when the node joins, so a new
-    # deployment does not wait minutes for a multi-gigabyte pull. With models listed and
-    # the hostPath cache, it also downloads those weights into the node's cache. It
-    # requests no GPU. See docs/model-host-prepull.md.
+    # Opt-in. One pod per GPU node pulls the model-host image when the node joins, so a
+    # new deployment does not wait minutes for a multi-gigabyte pull. With models listed
+    # and the hostPath cache, it also downloads those weights into the node's cache. It
+    # requests no GPU. Off by default: the customer picks the model and watches the image
+    # pull and the weight download live in the deployment's Logs tab. See
+    # docs/model-host-prepull.md.
     prepull:
-      enabled: true
+      enabled: false
       # Hugging Face repositories to cache on every GPU node, e.g. Qwen/Qwen3.5-2B.
       models: []
       # The image pull and the pod that keeps the image in place.

@@ -106,7 +106,21 @@ spec:
             # everything else the agent sends (docs/model-host-logs.md).
             - --report-hosts
             {{- end }}
+            {{- if include "fabric-stamp.measuresWeights" . }}
+            # Read-only view of the node's model cache: starting hosts on this node report
+            # how much of their weights has downloaded (docs/model-host-logs.md).
+            - --model-cache-dir=/model-cache/hub
+            {{- end }}
+            {{- if eq (toString .Values.agent.reportActivity) "false" }}
+            - --report-activity=false
+            {{- end }}
           env:
+            {{- if include "fabric-stamp.measuresWeights" . }}
+            - name: FABRIC_AGENT_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- end }}
             # Read from the environment rather than a flag so the token never
             # appears in a process listing.
             - name: FABRIC_AGENT_ENROLLMENT_TOKEN
@@ -131,6 +145,11 @@ spec:
             {{- if .Values.collector.enabled }}
             - name: collector-secret
               mountPath: /etc/fabric/collector
+            {{- end }}
+            {{- if include "fabric-stamp.measuresWeights" . }}
+            - name: model-cache
+              mountPath: /model-cache
+              readOnly: true
             {{- end }}
         # ------------------------------------------------------------------
         # Data plane: verifies tokens locally and proxies to the model host.
@@ -416,6 +435,13 @@ spec:
         {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if include "fabric-stamp.measuresWeights" . }}
+        # The same directory the operator mounts into model hosts, read-only here.
+        - name: model-cache
+          hostPath:
+            path: {{ .Values.operator.managedModelHost.cache.hostPath | default "/mnt/fabric/model-cache" }}
+            type: DirectoryOrCreate
+        {{- end }}
         - name: usage-spool
           {{- if .Values.usageSpool.enabled }}
           persistentVolumeClaim:

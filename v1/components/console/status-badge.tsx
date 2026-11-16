@@ -23,6 +23,7 @@ const tones: Record<string, StatusTone> = {
   error: "critical",
   blocked: "critical",
   revoked: "critical",
+  stamp_removed: "serious",
   inactive: "critical",
   offline: "critical",
 }

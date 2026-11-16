@@ -155,6 +155,10 @@ async def _bump_placements(session: AsyncSession, deployment: Deployment) -> Non
     )
     # Per stamp, because each stamp tracks its own watermark and they are not in step.
     for record in placements:
+        if record.status == "stamp_removed":
+            # A removed stamp reads nothing more, and the marker is what tells the owner
+            # this placement needs moving; an edit must not turn it back into "assigned".
+            continue
         record.desired_generation = await _next_stamp_generation(
             session, record.stamp_id, deployment.generation
         )

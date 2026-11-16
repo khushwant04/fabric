@@ -8,13 +8,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
-export function PlacementDrawer({ deploymentId, stamps, disabled = false }: {
+export function PlacementDrawer({ deploymentId, stamps, disabled = false, label = "Assign infrastructure" }: {
   deploymentId: string
   stamps: { id: string; name: string }[]
   disabled?: boolean
+  /** "Redeploy" when the deployment's stamp was removed. */
+  label?: string
 }) {
   return <FormDrawer<ActionState>
-    trigger={{ label: "Assign infrastructure", icon: RocketIcon, disabled }}
+    trigger={{ label, icon: RocketIcon, disabled }}
     title="Assign infrastructure"
     description="Start the saved model deployment when compatible GPU capacity is available."
     icon={RocketIcon}

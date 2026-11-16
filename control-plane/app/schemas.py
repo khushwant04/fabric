@@ -838,6 +838,24 @@ class HostConditionReport(BaseModel):
     last_transition_time: dt.datetime | None = None
 
 
+class HostWeightProgress(BaseModel):
+    """How much of a model's weights the node's cache holds, as the agent measured it.
+
+    ``total_bytes`` is what the Hugging Face API lists for the weight files the server will
+    load; zero means it is unknown (a gated repository, no network, a local path), and the
+    console then shows the bytes downloaded without a percentage.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository: str = Field(min_length=1, max_length=200)
+    downloaded_bytes: int = Field(default=0, ge=0)
+    total_bytes: int = Field(default=0, ge=0)
+    #: Files still being written (``*.incomplete`` in the cache).
+    in_progress_files: int = Field(default=0, ge=0, le=100_000)
+    measured_at: dt.datetime
+
+
 class HostPodReport(BaseModel):
     """A bounded snapshot of one model-host pod, as the stamp's agent read it."""
 
@@ -858,6 +876,7 @@ class HostPodReport(BaseModel):
     log_truncated: bool = False
     log_previous: bool = False
     log_error: str | None = Field(default=None, max_length=200)
+    weights: HostWeightProgress | None = None
 
 
 class HostDeploymentReport(BaseModel):
@@ -916,6 +935,7 @@ class HostSnapshotResponse(ORMModel):
     log_truncated: bool
     log_previous: bool
     log_error: str | None
+    weights: dict[str, Any] | None = None
     observed_at: dt.datetime
     reported_at: dt.datetime
     #: No report has refreshed this pod recently; the stamp may be disconnected.
@@ -928,6 +948,103 @@ class DeploymentHostsResponse(BaseModel):
     reported_at: dt.datetime | None
     stale_after_seconds: int
     hosts: list[HostSnapshotResponse]
+
+
+# --- stamp activity log ------------------------------------------------------
+
+#: Bounds on one activity upload. The agent batches what accumulated since its last upload.
+MAX_STAMP_EVENTS_PER_REPORT = 50
+STAMP_EVENT_KINDS = (
+    "enrolled",
+    "identity_reused",
+    "gpus_measured",
+    "gpu_runtime",
+    "credentials_rotated",
+    "desired_state_applied",
+    "image_pull_started",
+    "image_pull_finished",
+    "model_host_failed",
+    "ready",
+    "error",
+    "stamp_removed",
+)
+StampEventKind = Literal[
+    "enrolled",
+    "identity_reused",
+    "gpus_measured",
+    "gpu_runtime",
+    "credentials_rotated",
+    "desired_state_applied",
+    "image_pull_started",
+    "image_pull_finished",
+    "model_host_failed",
+    "ready",
+    "error",
+]
+StampEventSeverity = Literal["info", "success", "warning", "error"]
+#: Details are a flat map of scalars, so the activity log cannot become a data channel.
+DetailValue = str | int | float | bool | None
+
+
+class StampEventReport(BaseModel):
+    """One lifecycle event as the stamp's agent recorded it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: The agent's idempotency key: a retried upload with the same key is stored once.
+    id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    kind: StampEventKind
+    severity: StampEventSeverity = "info"
+    message: str = Field(min_length=1, max_length=500)
+    hint: str | None = Field(default=None, max_length=500)
+    details: dict[str, DetailValue] = Field(default_factory=dict, max_length=16)
+    at: dt.datetime
+
+    @field_validator("details")
+    @classmethod
+    def _bounded_details(cls, value: dict[str, DetailValue]) -> dict[str, DetailValue]:
+        for key, item in value.items():
+            if len(key) > 64:
+                raise ValueError("detail keys are at most 64 characters")
+            if isinstance(item, str) and len(item) > 300:
+                raise ValueError("detail values are at most 300 characters")
+        return value
+
+
+class StampEventsReportRequest(BaseModel):
+    """Events recorded since the agent's last upload. Ownership is the stamp's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    events: list[StampEventReport] = Field(max_length=MAX_STAMP_EVENTS_PER_REPORT)
+
+
+class StampEventsReportResponse(BaseModel):
+    stamp_id: uuid.UUID
+    accepted: int
+    duplicates: int
+
+
+class StampEventResponse(ORMModel):
+    id: uuid.UUID
+    stamp_id: uuid.UUID
+    source: str
+    kind: str
+    severity: str
+    message: str
+    hint: str | None
+    details: dict[str, Any]
+    occurred_at: dt.datetime
+    received_at: dt.datetime
+
+
+class StampEventsResponse(BaseModel):
+    stamp_id: uuid.UUID
+    #: The stamp's own view of itself, so the console can show liveness beside the log.
+    stamp_status: str
+    last_heartbeat_at: dt.datetime | None
+    revoked_at: dt.datetime | None
+    events: list[StampEventResponse]
 
 
 # --- edge routing table (ADR 0021) -----------------------------------------

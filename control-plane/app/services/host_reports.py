@@ -132,6 +132,7 @@ async def ingest_host_report(
             row.log_truncated = pod.log_truncated
             row.log_previous = pod.log_previous
             row.log_error = pod.log_error
+            row.weights = pod.weights.model_dump(mode="json") if pod.weights else None
             row.observed_at = observed_at
             row.reported_at = now
             accepted += 1

@@ -90,6 +90,10 @@ type Capacity struct {
 	// which is indistinguishable from an idle cluster, so it is reported to the control
 	// plane rather than only logged here.
 	PodsMeasured bool
+	// UnequippedGPUNodes counts ready nodes that are labelled or selected as GPU nodes but
+	// advertise no allocatable nvidia.com/gpu: the device plugin or the container runtime is
+	// missing there. It does not leave the cluster; the agent turns it into a hint.
+	UnequippedGPUNodes int
 	// PodClaimsError explains a missing claim measurement, for the caller to log. Held as a
 	// string rather than an error because Measure's error return is reserved for a failure
 	// that makes the whole result unusable.
@@ -252,12 +256,15 @@ func (c PodClaims) largest(limit int) []DeploymentClaim {
 // zero claimed GPUs is indistinguishable from an idle cluster and the difference decides
 // placements.
 func Measure(ctx context.Context, client Getter, selector map[string]string) (Capacity, error) {
-	profiles, err := ProfileNodes(ctx, client, selector)
+	profiles, unequipped, err := profileNodes(ctx, client, selector)
 	if err != nil {
 		return Capacity{}, err
 	}
 
-	capacity := Capacity{Measured: true, Profiles: profiles, GPUs: groupProfiles(profiles)}
+	capacity := Capacity{
+		Measured: true, Profiles: profiles, GPUs: groupProfiles(profiles),
+		UnequippedGPUNodes: unequipped,
+	}
 	onNodes := make(map[string]bool, len(profiles))
 	for _, profile := range profiles {
 		capacity.AllocatableGPUs += profile.Count

@@ -68,6 +68,13 @@ page.setDefaultTimeout(60000)
 
 const want = (name) => only.size === 0 || only.has(name)
 
+// Bring the deployment tabs to the top of the scrolling page, so a Logs shot shows the
+// stage timeline and the log rather than the header above them.
+async function showTabs(current) {
+  await current.getByRole("tablist").first().evaluate((element) => element.scrollIntoView({ block: "start" }))
+  await current.waitForTimeout(300)
+}
+
 async function visit(name, route, action, options) {
   if (!want(name)) return
   await page.goto(`${base}${route}`, { waitUntil: "domcontentloaded" })
@@ -104,15 +111,31 @@ await visit("06b-deployment-detail-routing", `/deployments/${deploymentId}`, asy
   await current.getByText("Balancing strategy", { exact: true }).scrollIntoViewIfNeeded()
   await current.evaluate(() => document.querySelector(".fabric-page-content")?.scrollBy(0, 160))
 })
-// Hosts: a deployment still loading its weights, then one whose host is crash-looping.
-await visit("06c-deployment-detail-hosts", `/deployments/${state.deployment_ids["code-review-bot"]}`, async (current) => {
-  await current.getByRole("tab", { name: "Hosts" }).click()
-  await current.getByText("Loading weights", { exact: true }).first().waitFor()
+// Logs: where creating a deployment lands. The first deployment on a fresh machine pulling
+// the model runtime image, one downloading its weights with measured progress, a ready one
+// searched, and one that failed with a diagnosis and hint.
+await visit("06c-deployment-logs-first-pull", `/deployments/${state.deployment_ids["docs-qa"]}?tab=logs`, async (current) => {
+  await current.getByText("First deployment on this machine").first().waitFor()
+  await showTabs(current)
 })
-await visit("07b-deployment-detail-host-crashloop", `/deployments/${state.deployment_ids["long-context-eval"]}`, async (current) => {
-  await current.getByRole("tab", { name: "Hosts" }).click()
-  await current.getByText("CrashLoopBackOff").first().waitFor()
+await visit("06d-deployment-logs-downloading", `/deployments/${state.deployment_ids["code-review-bot"]}?tab=logs`, async (current) => {
+  await current.getByLabel("Weight download progress").first().waitFor()
+  await showTabs(current)
 })
+await visit("06e-deployment-logs-search", `/deployments/${deploymentId}?tab=logs`, async (current) => {
+  await current.getByLabel("Search the log").first().fill("throughput")
+  await current.waitForTimeout(300)
+  await showTabs(current)
+})
+await visit("07b-deployment-logs-failed", `/deployments/${state.deployment_ids["long-context-eval"]}?tab=logs`, async (current) => {
+  await current.getByText("Out of GPU memory").first().waitFor()
+  await showTabs(current)
+})
+if (state.removed_stamp_deployment_id) {
+  await visit("07c-deployment-stamp-removed", `/deployments/${state.removed_stamp_deployment_id}?tab=logs`, async (current) => {
+    await current.getByText("Stamp removed").first().waitFor()
+  })
+}
 await visit("07-deployment-detail-failed-status", `/deployments/${state.deployment_ids["long-context-eval"]}`, async (current) => {
   await current.getByRole("tab", { name: "Status" }).click()
 })
@@ -147,6 +170,18 @@ await visit("08b-deployment-drawer-routing", "/deployments", async (current) => 
   await dialog.locator("details[data-section='routing']").evaluate((element) => element.scrollIntoView({ block: "end" }))
 })
 await visit("09-stamps", "/stamps")
+await visit("09b-stamps-show-removed", "/stamps?removed=1")
+// The registration and activity log right after the one-command bootstrap.
+await visit("09c-stamp-activity", `/stamps/${state.stamps["rtx-pro-6000"]}`, async (current) => {
+  await current.getByTestId("activity-headline").waitFor()
+})
+await visit("09d-stamp-activity-warnings", `/stamps/${state.stamps["vm-gpu"]}`, async (current) => {
+  await current.getByTestId("activity-headline").waitFor()
+})
+await visit("09e-stamp-remove-dialog", "/stamps", async (current) => {
+  await current.getByRole("button", { name: "Remove", exact: true }).first().click()
+  await current.getByRole("dialog").waitFor()
+})
 await visit("10-stamps-enroll-dialog", "/stamps", async (current) => {
   await current.getByRole("button", { name: /enroll|add stamp|connect/i }).first().click()
   await current.getByRole("dialog").waitFor()

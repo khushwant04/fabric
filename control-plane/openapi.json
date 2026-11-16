@@ -1503,6 +1503,16 @@
             "default": false,
             "title": "Terminating",
             "type": "boolean"
+          },
+          "weights": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HostWeightProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1688,6 +1698,18 @@
           "terminating": {
             "title": "Terminating",
             "type": "boolean"
+          },
+          "weights": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weights"
           }
         },
         "required": [
@@ -1711,6 +1733,48 @@
           "reported_at"
         ],
         "title": "HostSnapshotResponse",
+        "type": "object"
+      },
+      "HostWeightProgress": {
+        "additionalProperties": false,
+        "description": "How much of a model's weights the node's cache holds, as the agent measured it.\n\n``total_bytes`` is what the Hugging Face API lists for the weight files the server will\nload; zero means it is unknown (a gated repository, no network, a local path), and the\nconsole then shows the bytes downloaded without a percentage.",
+        "properties": {
+          "downloaded_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Downloaded Bytes",
+            "type": "integer"
+          },
+          "in_progress_files": {
+            "default": 0,
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "In Progress Files",
+            "type": "integer"
+          },
+          "measured_at": {
+            "format": "date-time",
+            "title": "Measured At",
+            "type": "string"
+          },
+          "repository": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Repository",
+            "type": "string"
+          },
+          "total_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repository",
+          "measured_at"
+        ],
+        "title": "HostWeightProgress",
         "type": "object"
       },
       "ManagedCapacityRequest": {
@@ -2825,6 +2889,268 @@
           "telemetry_credential"
         ],
         "title": "StampEnrollResponse",
+        "type": "object"
+      },
+      "StampEventReport": {
+        "additionalProperties": false,
+        "description": "One lifecycle event as the stamp's agent recorded it.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 16,
+            "title": "Details",
+            "type": "object"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "enrolled",
+              "identity_reused",
+              "gpus_measured",
+              "gpu_runtime",
+              "credentials_rotated",
+              "desired_state_applied",
+              "image_pull_started",
+              "image_pull_finished",
+              "model_host_failed",
+              "ready",
+              "error"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "severity": {
+            "default": "info",
+            "enum": [
+              "info",
+              "success",
+              "warning",
+              "error"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "message",
+          "at"
+        ],
+        "title": "StampEventReport",
+        "type": "object"
+      },
+      "StampEventResponse": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "stamp_id",
+          "source",
+          "kind",
+          "severity",
+          "message",
+          "hint",
+          "details",
+          "occurred_at",
+          "received_at"
+        ],
+        "title": "StampEventResponse",
+        "type": "object"
+      },
+      "StampEventsReportRequest": {
+        "additionalProperties": false,
+        "description": "Events recorded since the agent's last upload. Ownership is the stamp's.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/StampEventReport"
+            },
+            "maxItems": 50,
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "StampEventsReportRequest",
+        "type": "object"
+      },
+      "StampEventsReportResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "duplicates": {
+            "title": "Duplicates",
+            "type": "integer"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "accepted",
+          "duplicates"
+        ],
+        "title": "StampEventsReportResponse",
+        "type": "object"
+      },
+      "StampEventsResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/StampEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "stamp_id": {
+            "format": "uuid",
+            "title": "Stamp Id",
+            "type": "string"
+          },
+          "stamp_status": {
+            "title": "Stamp Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stamp_id",
+          "stamp_status",
+          "last_heartbeat_at",
+          "revoked_at",
+          "events"
+        ],
+        "title": "StampEventsResponse",
         "type": "object"
       },
       "StampResponse": {
@@ -5535,6 +5861,74 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/stamps/{stamp_id}/events": {
+      "get": {
+        "description": "Not cached: the console polls this while the stamp page is open.\n\nA removed stamp keeps its log, so the page can still explain what happened to it.",
+        "operationId": "read_stamp_events_v1_accounts__account_id__stamps__stamp_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a stamp's registration and activity log, newest first",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
     "/v1/edge/routing-table": {
       "get": {
         "description": "Deployments placed on live stamps that report a public gateway URL.\n\nDeliberately not account-scoped: the edge serves every account from one URL. The\ntoken must carry ``edge:routing:read`` and belong to a service principal of the Fabric\nsystem account, and the read runs in a scoped elevation that ends with the query.",
@@ -5766,6 +6160,60 @@
           }
         },
         "summary": "Pull assignments newer than the acknowledged generation",
+        "tags": [
+          "stamps"
+        ]
+      }
+    },
+    "/v1/stamps/{stamp_id}/events": {
+      "post": {
+        "description": "Append to this stamp's activity log.\n\nAuthorized like a host report, by the status-write scope every agent credential already\nholds, so existing stamps need no new credential. The entries belong to the stamp's own\naccount; nothing in the body can name another.",
+        "operationId": "report_events_v1_stamps__stamp_id__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "stamp_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stamp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StampEventsReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StampEventsReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report stamp lifecycle events for the activity log",
         "tags": [
           "stamps"
         ]

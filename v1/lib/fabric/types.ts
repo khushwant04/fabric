@@ -238,9 +238,20 @@ export type HostSnapshot = {
   log_truncated: boolean
   log_previous: boolean
   log_error: string | null
+  /** Weight download progress measured in the node's model cache; absent when unknown. */
+  weights?: HostWeights | null
   observed_at: string
   reported_at: string
   stale: boolean
+}
+
+export type HostWeights = {
+  repository: string
+  downloaded_bytes: number
+  /** Zero when the expected size is unknown (gated repository, no network). */
+  total_bytes: number
+  in_progress_files?: number
+  measured_at: string
 }
 
 export type DeploymentHosts = {
@@ -248,4 +259,28 @@ export type DeploymentHosts = {
   reported_at: string | null
   stale_after_seconds: number
   hosts: HostSnapshot[]
+}
+
+// A stamp's registration and activity log (GET /v1/accounts/{id}/stamps/{stamp_id}/events).
+export type StampEventSeverity = "info" | "success" | "warning" | "error"
+
+export type StampEvent = {
+  id: string
+  stamp_id: string
+  source: "agent" | "control_plane" | string
+  kind: string
+  severity: StampEventSeverity | string
+  message: string
+  hint: string | null
+  details: Record<string, unknown>
+  occurred_at: string
+  received_at: string
+}
+
+export type StampEvents = {
+  stamp_id: string
+  stamp_status: string
+  last_heartbeat_at: string | null
+  revoked_at: string | null
+  events: StampEvent[]
 }

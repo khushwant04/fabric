@@ -195,6 +195,26 @@ type Getter interface {
 // to place hosts on by selector, not by name, and the answer changes when a pool is
 // scaled or replaced.
 func ProfileNodes(ctx context.Context, client Getter, selector map[string]string) ([]Profile, error) {
+	profiles, _, err := profileNodes(ctx, client, selector)
+	return profiles, err
+}
+
+// gpuLabelled reports whether a node is labelled as carrying an NVIDIA GPU, whatever it
+// advertises. Such a node with no allocatable nvidia.com/gpu is the signature of a missing
+// device plugin or container runtime: the hardware is there, Kubernetes cannot hand it out.
+func gpuLabelled(labels map[string]string) bool {
+	return labels["nvidia.com/gpu.product"] != "" ||
+		labels["nvidia.com/gpu.present"] == "true" ||
+		labels["accelerator"] == "nvidia" ||
+		labels["cloud.google.com/gke-accelerator"] != "" ||
+		labels["feature.node.kubernetes.io/pci-10de.present"] == "true"
+}
+
+// profileNodes also counts ready nodes that should carry GPUs (selected by a GPU node
+// selector, or labelled as GPU nodes) but advertise none.
+func profileNodes(
+	ctx context.Context, client Getter, selector map[string]string,
+) ([]Profile, int, error) {
 	path := "/api/v1/nodes"
 	if len(selector) > 0 {
 		terms := make([]string, 0, len(selector))
@@ -207,9 +227,10 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 
 	var nodes nodeList
 	if err := client.Get(ctx, path, &nodes); err != nil {
-		return nil, fmt.Errorf("list gpu nodes: %w", err)
+		return nil, 0, fmt.Errorf("list gpu nodes: %w", err)
 	}
 
+	unequipped := 0
 	profiles := make([]Profile, 0, len(nodes.Items))
 	for _, item := range nodes.Items {
 		ready := false
@@ -230,6 +251,9 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 			// machine type claims. A node whose driver or device plugin is missing looks
 			// exactly like this, and it is the reason a GPU pool can exist while
 			// advertising nothing.
+			if len(selector) > 0 || gpuLabelled(item.Metadata.Labels) {
+				unequipped++
+			}
 			continue
 		}
 
@@ -282,7 +306,7 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 	}
 
 	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Node < profiles[j].Node })
-	return profiles, nil
+	return profiles, unequipped, nil
 }
 
 // GPU Feature Discovery emits gpu.compute.major/minor. The older Fabric label pair

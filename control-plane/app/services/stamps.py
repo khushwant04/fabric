@@ -25,7 +25,7 @@ from app.core.credentials import (
 )
 from app.core.errors import BadRequest, Forbidden, NotFound, Unauthorized
 from app.core.installation import require_installation_account
-from app.core.tenancy import declare_system
+from app.core.tenancy import declare_system, elevated
 from app.core.timeutil import is_expired, utc_now
 from app.models import (
     MODE_BYOI,
@@ -46,6 +46,13 @@ from app.schemas import (
     VerificationConfig,
 )
 from app.services.audit import publish_outbox, record_audit
+from app.services.stamp_events import record_control_plane_event
+
+#: Placement status for an assignment whose stamp was removed. The deployment is kept, so
+#: its owner can move it elsewhere or delete it; nothing is deleted on their behalf.
+PLACEMENT_STAMP_REMOVED = "stamp_removed"
+#: Deployment status when every placement it had was on removed stamps.
+DEPLOYMENT_STAMP_REMOVED = "stamp_removed"
 
 
 async def create_enrollment_token(
@@ -311,8 +318,80 @@ async def revoke_stamp(
             aggregate_id=str(stamp.id),
             payload={"mode": stamp.mode},
         )
+        affected = await _mark_placements_stamp_removed(session, stamp_id=stamp.id)
+        await record_control_plane_event(
+            session,
+            stamp=stamp,
+            kind="stamp_removed",
+            severity="warning",
+            message="Stamp removed from the console; its credentials were revoked.",
+            hint=(
+                f"{affected} deployment(s) were placed here; move or delete them."
+                if affected
+                else None
+            ),
+            details={"deployments_affected": affected},
+        )
     await session.flush()
     return stamp
+
+
+async def _mark_placements_stamp_removed(session: AsyncSession, *, stamp_id: uuid.UUID) -> int:
+    """Make every assignment on a removed stamp say so, instead of looking healthy.
+
+    Before this a revoked stamp left its placements ``assigned`` or ``ready`` and the
+    deployment kept its last reported status, so a deployment whose machine was gone still
+    read "ready". The placements are kept, marked ``stamp_removed``, and a deployment with no
+    other live placement is marked ``stamp_removed`` too; deleting a customer's deployment is
+    the customer's decision. Returns how many deployments were placed on the stamp.
+
+    Elevated because a managed stamp's placements belong to customer accounts other than the
+    stamp owner's. The service has already authorized the revocation itself.
+    """
+    async with elevated(session):
+        placements = list(
+            (
+                await session.execute(
+                    select(DeploymentPlacement).where(
+                        DeploymentPlacement.stamp_id == stamp_id,
+                        DeploymentPlacement.status != "terminating",
+                    )
+                )
+            ).scalars()
+        )
+        touched: set[uuid.UUID] = set()
+        for record in placements:
+            record.status = PLACEMENT_STAMP_REMOVED
+            touched.add(record.account_id)
+        await session.flush()
+        for record in placements:
+            deployment = (
+                await session.execute(
+                    select(Deployment).where(
+                        Deployment.id == record.deployment_id,
+                        Deployment.account_id == record.account_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if deployment is None or deployment.deleted_at is not None:
+                continue
+            live = (
+                await session.execute(
+                    select(func.count(DeploymentPlacement.id)).where(
+                        DeploymentPlacement.account_id == record.account_id,
+                        DeploymentPlacement.deployment_id == record.deployment_id,
+                        DeploymentPlacement.status.not_in(
+                            (PLACEMENT_STAMP_REMOVED, "terminating")
+                        ),
+                    )
+                )
+            ).scalar_one()
+            if not live:
+                deployment.status = DEPLOYMENT_STAMP_REMOVED
+        await session.flush()
+        if touched:
+            await invalidate_account_versions(session, touched)
+    return len({(item.account_id, item.deployment_id) for item in placements})
 
 
 async def revoke_enrollment_token(

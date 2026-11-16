@@ -1,10 +1,11 @@
 # Model-host status and logs
 
-An operator watching a new deployment wants to see its model host go from *pulling the
-image* to *container started* to *loading weights* to *ready*, and read the end of the
-server's log when a step fails, without running `kubectl` against the stamp. The
-deployment detail page's **Hosts** tab shows exactly that, for every model-host pod on
-every stamp the deployment is placed on.
+A customer who has just created a deployment wants to watch it come up: queued for
+placement, scheduled, pulling the model runtime image, downloading weights, loading them,
+compiling and warming up, ready. When a step fails they want the reason and what to do,
+without running `kubectl` against the stamp. Creating a deployment in the console opens its
+**Logs** tab, which shows exactly that for every model-host pod on every stamp the deployment
+is placed on.
 
 ## How the data gets there
 
@@ -64,16 +65,60 @@ account table. The read endpoint requires `deployments:read` for the deployment'
 it is not cached and answers `Cache-Control: no-store`. A snapshot no report has refreshed
 for 2 minutes is marked `stale`; after 15 minutes it is no longer returned.
 
-**Console** (`v1/components/console/deployment-hosts.tsx`). The Hosts tab renders one panel
-per pod: a status line, a stage timeline (Scheduled → Pulling image → Image pulled →
-Container started → Loading weights → Ready) derived from container state and events, the
-recent events with warnings in red, and a monospaced log pane that follows new lines until
-you scroll up, with **Jump to latest** to resume. Failures such as `ImagePullBackOff`,
-`CrashLoopBackOff`, `OOMKilled` or `FailedScheduling` mark the stage they happened at in red;
-failing start-up probes are counted beside *Loading weights*. The tab polls the console's own
-route handler (`/api/deployments/{id}/hosts`, which holds the control token server-side)
-every 2.5 s while any host is not ready and every 15 s afterwards, and pauses while the
-browser tab is hidden.
+**Console** (`v1/components/console/deployment-logs.tsx`, logic in
+`v1/lib/fabric/host-status.ts`). The Logs tab renders, per pod:
+
+- A stage timeline: *Queued for placement → Scheduled → Pulling model runtime image →
+  Downloading weights → Loading weights → Compiling / warming up → Ready*. Stages are derived
+  from container state, pod events and vLLM's own start-up lines (`Loading safetensors
+  checkpoint shards`, `Loading weights took`, `torch.compile`, `Capturing CUDA graphs`, ...),
+  so a step whose event aged out of Kubernetes still reads as done.
+- The image pull with elapsed time while it runs, and its size and duration once the kubelet
+  reports `Successfully pulled image ... in 4m34s ... Image size: N bytes`. While the image
+  is pulling, a note explains that the first deployment on a machine downloads the model
+  runtime once; pre-pull is off by default ([model-host-prepull.md](model-host-prepull.md)).
+- Weight download progress (below) as bytes and a bar, or elapsed time when it cannot be
+  measured.
+- Failures in red at the stage they happened, with a diagnosis and a hint: "Failed to infer
+  device type" → GPU runtime missing (re-run the bootstrap), CUDA out of memory → lower
+  `max_model_len`, `ImagePullBackOff`, `FailedScheduling` for want of a GPU, gated Hugging
+  Face repositories, `OOMKilled`, a full disk.
+- A full-height raw log viewer: follows new lines until you scroll up, **Pause** freezes it
+  (showing how many lines arrived meanwhile), search highlights matches, *Warnings & errors*
+  filters lines, and **Download** saves the tail as a file.
+- The pod's Kubernetes events, opened automatically when one is a warning.
+
+Before any pod exists the tab shows *Queued for placement*, naming the stamp it waits on, or
+*Stamp removed* with a **Redeploy** action. The tab polls the console's own route handler
+(`/api/deployments/{id}/hosts`, which holds the control token server-side) every 2.5 s while
+any host is not ready and every 15 s afterwards, and pauses while the browser tab is hidden.
+
+## Weight download progress
+
+vLLM prints nothing useful about its download: the Hugging Face progress bars are
+carriage-return redraws that a container log keeps only in fragments, and their format
+changes with the downloader backend. So the agent measures the result instead of parsing the
+log (`agent/internal/weights`):
+
+- The chart mounts the node's model cache (the same `managedModelHost.cache.hostPath` the
+  operator gives model hosts) **read-only** into the agent and passes `--model-cache-dir`.
+- For a host that is not ready, on the agent's own node (or any node, with a shared
+  ReadWriteMany cache and `--model-cache-shared`), the agent sums the completed weight files
+  under `models--<org>--<name>/snapshots/*/` and the `blobs/*.incomplete` files being written.
+- It compares that with the size of the repository's top-level `*.safetensors` files (or
+  `*.bin` when there are none), which is what vLLM loads, from
+  `GET https://huggingface.co/api/models/<repo>?blobs=true`. The size is fetched once per
+  repository; the agent sends no Hugging Face token.
+- The result travels in the host report as `weights` (`downloaded_bytes`, `total_bytes`,
+  `in_progress_files`).
+
+Why this rather than log parsing: it is byte-accurate, independent of the vLLM version and of
+`hf_transfer`/`hf_xet`, and also shows a warm cache as already complete. It degrades instead
+of guessing: a gated or private repository (the API answers 401) reports bytes without a
+total; a pod on another node of a multi-node hostPath stamp, a local model path, or
+`cache.mode=none` report nothing, and the console shows elapsed time with "progress not
+measurable on this stamp". Turn it off with `agent.weightProgress=false`. A control plane
+older than this field rejects it; the agent notices the 422 and stops sending it.
 
 ## Enabling it
 
@@ -97,6 +142,9 @@ namespace. Without the grant the agent logs the refusal once and keeps serving.
 POST /v1/stamps/{stamp_id}/hosts            agent credential, stamp:status:write
 GET  /v1/accounts/{account_id}/deployments/{deployment_id}/hosts   deployments:read
 ```
+
+The stamp's own activity log (enrolled, GPUs measured, GPU runtime, image pulls, failures) is
+described in [stamp-activity.md](stamp-activity.md).
 
 The request and response schemas are in `control-plane/openapi.json`
 (`HostReportRequest`, `DeploymentHostsResponse`).

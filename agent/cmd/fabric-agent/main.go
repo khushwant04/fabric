@@ -26,6 +26,7 @@ import (
 	"github.com/khushwant04/fabric/agent/internal/hostreport"
 	"github.com/khushwant04/fabric/agent/internal/kube"
 	"github.com/khushwant04/fabric/agent/internal/operator"
+	"github.com/khushwant04/fabric/agent/internal/weights"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -87,6 +88,20 @@ func main() {
 		"how often hosts are reported while any model host is not ready")
 	hostReportSteadyInterval := flag.Duration("host-report-steady-interval",
 		hostreport.DefaultSteadyInterval, "how often hosts are reported once all are ready")
+	reportActivity := flag.Bool("report-activity", os.Getenv("FABRIC_AGENT_REPORT_ACTIVITY") != "false",
+		"push this stamp's lifecycle events (enrolled, GPUs measured, GPU runtime, credential "+
+			"rotation, generations applied, image pulls, errors) to the control plane for the "+
+			"console's activity log")
+	modelCacheDir := flag.String("model-cache-dir", envOr("FABRIC_AGENT_MODEL_CACHE_DIR", ""),
+		"read-only mount of the model hosts' Hugging Face hub cache; with --report-hosts, "+
+			"starting hosts report weight download progress measured there")
+	modelCacheShared := flag.Bool("model-cache-shared", os.Getenv("FABRIC_AGENT_MODEL_CACHE_SHARED") == "true",
+		"the model cache is shared by every node (a ReadWriteMany claim), so hosts on other "+
+			"nodes can be measured too")
+	nodeName := flag.String("node-name", envOr("FABRIC_AGENT_NODE_NAME", ""),
+		"the node this agent runs on; a hostPath model cache is only measured for hosts on it")
+	hfEndpoint := flag.String("hf-endpoint", envOr("HF_ENDPOINT", weights.DefaultEndpoint),
+		"Hugging Face API used to learn a model's total weight size")
 	credentialMaxAge := flag.Duration("credential-max-age",
 		envDuration("FABRIC_AGENT_CREDENTIAL_MAX_AGE", 30*24*time.Hour),
 		"rotate the machine credentials once they are this old; 0 rotates only on request")
@@ -140,6 +155,7 @@ func main() {
 		PollInterval:            *poll,
 		CredentialMaxAge:        *credentialMaxAge,
 		CapacityInterval:        *capacityInterval,
+		ReportActivity:          *reportActivity,
 		Capabilities: controlplane.Capabilities{
 			Orchestrator:    *orchestrator,
 			Region:          *region,
@@ -196,19 +212,33 @@ func main() {
 		)
 	}
 
+	var reporter *hostreport.Reporter
 	if *reportHosts && client != nil {
 		// Namespaced on purpose: model hosts run in the stamp's own namespace, and the
 		// chart grants pods, pods/log and events read there and nowhere else.
-		config.HostReporter = &hostreport.Reporter{
+		reporter = &hostreport.Reporter{
 			Kube:           client,
 			Namespace:      client.Namespace,
 			Log:            log,
 			ActiveInterval: *hostReportInterval,
 			SteadyInterval: *hostReportSteadyInterval,
 		}
+		config.HostReporter = reporter
 	}
 
 	instance := agent.New(config, log)
+
+	if reporter != nil && *modelCacheDir != "" {
+		// Weight download progress is measured in the cache the hosts write to, against the
+		// sizes the Hugging Face API lists (internal/weights).
+		reporter.Weights = &weights.Cache{
+			Dir:        *modelCacheDir,
+			Node:       *nodeName,
+			Shared:     *modelCacheShared,
+			Repository: instance.RepositoryFor,
+			Endpoint:   *hfEndpoint,
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
