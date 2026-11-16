@@ -7,6 +7,18 @@
 {{- if and $edge.ingress.enabled (not $edge.ingress.host) }}
 {{- fail "edge.ingress.host is required when the edge ingress is enabled" -}}
 {{- end }}
+{{- $istioSelector := $edge.istio.gatewaySelector | default .Values.istio.gatewaySelector -}}
+{{- if $edge.istio.enabled }}
+{{- if not $edge.istio.hosts }}
+{{- fail "edge.istio.hosts is required when edge.istio.enabled is set" -}}
+{{- end }}
+{{- if not $edge.istio.tls.credentialName }}
+{{- fail "edge.istio.tls.credentialName is required: the edge carries tokens and is served over HTTPS only" -}}
+{{- end }}
+{{- if not $istioSelector }}
+{{- fail "edge.istio.gatewaySelector (or istio.gatewaySelector) is required when edge.istio.enabled is set" -}}
+{{- end }}
+{{- end }}
 {{- if and $edge.persistence.enabled (gt (int $edge.replicas) 1) (eq $edge.persistence.accessMode "ReadWriteOnce") }}
 {{- fail "edge.persistence with ReadWriteOnce supports one replica; set edge.replicas=1 or an RWX accessMode" -}}
 {{- end }}
@@ -249,5 +261,62 @@ spec:
                 name: {{ $name }}
                 port:
                   number: {{ $edge.service.port }}
+{{- end }}
+{{- if $edge.istio.enabled }}
+---
+# Exposed through an existing Istio ingress gateway, like the control plane's own istio
+# option: a cluster running the Istio addon has no IngressClass to serve an Ingress.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+spec:
+  selector:
+    {{- toYaml $istioSelector | nindent 4 }}
+  servers:
+    # Port names are release-scoped: Istio merges servers from every Gateway bound to the
+    # shared ingress workload, and identical names collide.
+    - port:
+        number: 443
+        name: {{ $name }}-https
+        protocol: HTTPS
+      hosts:
+        {{- toYaml $edge.istio.hosts | nindent 8 }}
+      tls:
+        mode: SIMPLE
+        credentialName: {{ $edge.istio.tls.credentialName }}
+    - port:
+        number: 80
+        name: {{ $name }}-http
+        protocol: HTTP
+      hosts:
+        {{- toYaml $edge.istio.hosts | nindent 8 }}
+      tls:
+        httpsRedirect: true
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+spec:
+  hosts:
+    {{- toYaml $edge.istio.hosts | nindent 4 }}
+  gateways:
+    - {{ $name }}
+  http:
+    - route:
+        - destination:
+            host: {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ $edge.service.port }}
+      # Generations stream for minutes; 0s turns Istio's per-route timeout off and leaves
+      # the edge's own read timeout in charge.
+      timeout: {{ $edge.istio.timeout }}
 {{- end }}
 {{- end }}

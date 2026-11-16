@@ -150,5 +150,36 @@ class EdgeChartTest(unittest.TestCase):
         )
 
 
+    def test_istio_exposure_on_the_shared_gateway(self):
+        items = edge_items({
+            "istio.gatewaySelector.istio": "aks-istio-ingressgateway-external",
+            "edge.istio.enabled": "true",
+            "edge.istio.hosts[0]": "inference.example.com",
+            "edge.istio.tls.credentialName": "edge-tls",
+        })
+        (gateway,) = by_kind(items, "Gateway")
+        self.assertEqual(gateway["spec"]["selector"], {"istio": "aks-istio-ingressgateway-external"})
+        https, http = gateway["spec"]["servers"]
+        self.assertEqual(https["tls"], {"mode": "SIMPLE", "credentialName": "edge-tls"})
+        self.assertEqual(https["hosts"], ["inference.example.com"])
+        self.assertTrue(http["tls"]["httpsRedirect"])
+        self.assertNotEqual(https["port"]["name"], "https")  # release-scoped, never generic
+        (route,) = by_kind(items, "VirtualService")
+        (rule,) = route["spec"]["http"]
+        self.assertEqual(rule["timeout"], "0s")
+        self.assertTrue(rule["route"][0]["destination"]["host"].startswith("fabric-fabric-control-plane-edge."))
+
+    def test_istio_exposure_requires_a_certificate_and_a_host(self):
+        no_cert = render(EDGE_VALUES | {
+            "istio.gatewaySelector.istio": "x",
+            "edge.istio.enabled": "true",
+            "edge.istio.hosts[0]": "inference.example.com",
+        })
+        self.assertNotEqual(no_cert.returncode, 0)
+        self.assertIn("credentialName", no_cert.stderr)
+        no_host = render(EDGE_VALUES | {"edge.istio.enabled": "true", "edge.istio.tls.credentialName": "t"})
+        self.assertNotEqual(no_host.returncode, 0)
+        self.assertIn("edge.istio.hosts", no_host.stderr)
+
 if __name__ == "__main__":
     unittest.main()
