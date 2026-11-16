@@ -1,4 +1,15 @@
-# Fabric paper figures
+# Papers
+
+Technical papers on Fabric, grounded in the repository and the dated evidence register in
+[`data/evidence.json`](data/evidence.json).
+
+| Paper | Topic |
+|---|---|
+| [Between Intent and Tokens](two-clock-governance.md) | Two-clock governance for a managed inference platform: the code-grounded research paper |
+| [Fabric technical paper (LaTeX)](fabric-technical-paper.md) | The original LaTeX manuscript; copy its `latex` block into a `.tex` file to build it |
+| [Kernel substitution direction](kernel-substitution-direction.md) | Proposed research programme: safe, workload-adaptive GPU kernel substitution |
+
+## Figures
 
 The technical paper embeds figures generated from `data/evidence.json`. The data file deliberately separates current live observations, dated repository records, development-only microbenchmarks, and derived cost scenarios.
 

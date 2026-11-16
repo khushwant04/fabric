@@ -233,6 +233,13 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Changed
 
+- Repository root cleaned up: the README is rewritten as a concise overview, its install
+  walkthrough moved to `docs/getting-started.md` and its benchmark tables to
+  `docs/measured-results.md`. `DEPLOYMENT.md` moved to `docs/deployment.md`,
+  `MODEL-OPTIMIZATION.md` to `docs/model-optimization.md`, and the three papers into
+  `paper/` (`two-clock-governance.md`, `fabric-technical-paper.md`,
+  `kernel-substitution-direction.md`), with every link updated.
+
 - Console tables scroll sideways inside their card with edge fades and a visible
   scrollbar, keep sensible minimum widths, and truncate long names, releases and audit
   details with a tooltip showing the full value.

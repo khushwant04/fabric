@@ -752,10 +752,10 @@ Not yet contributed upstream — these changes are local to the deployment check
 
 ## 13. Suggested next steps
 
-1. **Align the product to the operator-only managed-enterprise boundary in [`docs/enterprise-operator-platform.md`](docs/enterprise-operator-platform.md).** The audit there records the implemented, partial, missing, and conflicting capabilities plus a P0/P1/P2 roadmap.
-2. **Build the adaptive-inference foundation described in [`docs/adaptive-inference-research.md`](docs/adaptive-inference-research.md).** Start only after the P0 model/runtime governance and measurement foundations exist.
-3. **Build the protected packed-kernel dispatch and evidence pipeline described in [`TECHNICAL-PAPER.md`](TECHNICAL-PAPER.md).** Treat this as a separate ablation, not the source of all system-level gains.
-4. **Use [`MODEL-OPTIMIZATION.md`](MODEL-OPTIMIZATION.md) as the model-specific opportunity and experiment matrix.**
+1. **Align the product to the operator-only managed-enterprise boundary in [`docs/enterprise-operator-platform.md`](enterprise-operator-platform.md).** The audit there records the implemented, partial, missing, and conflicting capabilities plus a P0/P1/P2 roadmap.
+2. **Build the adaptive-inference foundation described in [`docs/adaptive-inference-research.md`](adaptive-inference-research.md).** Start only after the P0 model/runtime governance and measurement foundations exist.
+3. **Build the protected packed-kernel dispatch and evidence pipeline described in [`paper/kernel-substitution-direction.md`](../paper/kernel-substitution-direction.md).** Treat this as a separate ablation, not the source of all system-level gains.
+4. **Use [`model-optimization.md`](model-optimization.md) as the model-specific opportunity and experiment matrix.**
 5. **Open a PR for these documents and deployment-time code, rotate exposed credentials, and add CI/CD/image provenance.**
 
 Audio-model deployment is explicitly deprioritized. The audio proxy code remains inert and tested; the research programme focuses on recurrent-LLM serving, managed kernel promotion, and SLO/energy/cost evidence.
@@ -967,7 +967,7 @@ The enterprise edition now has an explicit fail-closed production ownership poli
 | Existing placements | Continue serving/status/usage; no automatic destructive migration |
 | Database | No schema migration required |
 
-**Not deployed yet.** The current live stamp `cin-t4-01` is operator-driven at the Kubernetes layer but enrolled centrally as BYOI. Deploying the new control-plane image would stop new placements onto it while preserving the seven current model hosts. Before rollout, migrate the stamp ownership to the protected system account using the controlled sequence in [`docs/enterprise-operator-platform.md`](docs/enterprise-operator-platform.md#81-byoi-versus-managed-only).
+**Not deployed yet.** The current live stamp `cin-t4-01` is operator-driven at the Kubernetes layer but enrolled centrally as BYOI. Deploying the new control-plane image would stop new placements onto it while preserving the seven current model hosts. Before rollout, migrate the stamp ownership to the protected system account using the controlled sequence in [`docs/enterprise-operator-platform.md`](enterprise-operator-platform.md#81-byoi-versus-managed-only).
 
 Validation completed locally: focused control-plane tests **84 passed, 3 skipped**; Ruff clean; production startup true/false/local behavior exercised; BYOI enrollment and placement errors exercised; managed Helm chart rendered 20 resources; each missing operator/image/model/served-name requirement failed closed.
 
