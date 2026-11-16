@@ -167,6 +167,26 @@ class Settings(BaseSettings):
     #: fleet without letting one request stampede a large one.
     backend_max_attempts: int = Field(default=3, ge=1)
 
+    #: Server-side agent tool loop (``POST /v1/agent/runs``, docs/agent-tool-loop.md).
+    #: Comma-separated hostnames an ``http`` tool executor may call. Empty, the default,
+    #: disables HTTP tools entirely; built-in and client tools still work. Loopback,
+    #: link-local and cloud metadata addresses are refused even when listed.
+    agent_tool_allowed_hosts: str = ""
+    #: Hard ceiling on model calls in one run; a request may ask for fewer.
+    agent_max_steps: int = Field(default=16, ge=1, le=100)
+    #: Hard ceiling on tool executions in one run.
+    agent_max_tool_calls: int = Field(default=32, ge=1, le=1000)
+    #: Tool calls from one model turn that execute at once.
+    agent_tool_concurrency: int = Field(default=4, ge=1, le=64)
+    #: Ceiling on an HTTP tool's timeout; a tool may declare a shorter one.
+    agent_tool_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    #: Bytes of an HTTP tool's reply kept; anything beyond is truncated.
+    agent_tool_max_response_bytes: int = Field(default=64 * 1024, ge=256)
+
+    #: ``model: "cascade"`` (docs/model-cascade.md): how many times one request may move
+    #: to a larger tier. Every attempt is metered and charged.
+    cascade_max_escalations: int = Field(default=2, ge=0, le=10)
+
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod
     def _strip(cls, value: str) -> str:

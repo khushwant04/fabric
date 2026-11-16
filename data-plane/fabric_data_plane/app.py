@@ -29,7 +29,8 @@ import httpx
 from fastapi import APIRouter, FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from fabric_data_plane import anthropic_messages
+from fabric_data_plane import agent_loop, anthropic_messages, cascade
+from fabric_data_plane.agent_tools import ToolRunner
 from fabric_data_plane.auth import (
     InferencePrincipal,
     extract_bearer_token,
@@ -1709,7 +1710,24 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
 
     @router.post(CHAT_COMPLETIONS_PATH, summary="Chat completion")
     async def chat_completions(request: Request):
-        return await _proxy(plane, request, CHAT_COMPLETIONS_PATH)
+        # Same order as _proxy (authenticate, then read the body); only ``model: "cascade"``
+        # leaves the ordinary path (docs/model-cascade.md).
+        principal = plane.authenticate(request.headers.get("authorization"))
+        payload = await _read_json(request)
+        if cascade.is_cascade_request(plane.registry, principal.account_id, payload):
+            return await cascade.handle_chat(plane, request, principal, payload, proxy=_proxy)
+        return await _proxy(
+            plane, request, CHAT_COMPLETIONS_PATH, principal=principal, payload=payload
+        )
+
+    # Tests and the demo stack inject a runner with a mock transport and resolver.
+    tool_runner = getattr(plane, "agent_tool_runner", None) or ToolRunner(plane.settings)
+
+    @router.post(agent_loop.AGENT_RUNS_PATH, summary="Run a server-side tool-using agent")
+    async def agent_runs(request: Request):
+        return await agent_loop.handle_run(
+            plane, request, proxy=_proxy, read_json=_read_json, tools=tool_runner
+        )
 
     @router.post(COMPLETIONS_PATH, summary="Text completion")
     async def completions(request: Request):
