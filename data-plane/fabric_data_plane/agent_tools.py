@@ -35,7 +35,7 @@ import operator
 import socket
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -43,6 +43,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from fabric_data_plane.errors import BadRequest
+from fabric_data_plane.hosted_tools import HOSTED_TOOLS, HostedResult, ToolContext, declare
 
 BUILTIN_TOOLS = frozenset({"calculator", "current_time"})
 USER_AGENT = "fabric-agent-tool/1"
@@ -79,10 +80,13 @@ class ToolSpec:
     """One declared tool and how it is executed."""
 
     name: str
-    kind: str  # "builtin" | "http" | "client"
+    kind: str  # "builtin" | "http" | "client" | "hosted"
     builtin: str | None = None
     url: str | None = None
     timeout_seconds: float | None = None
+    #: file_search and mcp (hosted_tools/services.py): an executor bound to one request,
+    #: ``async execute(arguments) -> HostedResult``. Others dispatch on ``builtin``.
+    hosted: Any = field(default=None, compare=False, repr=False)
 
 
 def blocked_address(address: str) -> bool:
@@ -144,7 +148,7 @@ def _parse_http_executor(
 
 
 def parse_tools(
-    tools: Any, allowlist: frozenset[str]
+    tools: Any, allowlist: frozenset[str], hosted: frozenset[str] = frozenset()
 ) -> tuple[list[dict[str, Any]], dict[str, ToolSpec]]:
     """Validate declared tools; return the model-facing tools and the executor table.
 
@@ -170,12 +174,18 @@ def parse_tools(
             spec = ToolSpec(name=name, kind="client")
         elif not isinstance(executor, dict):
             raise BadRequest("invalid_tool", f"tool {name!r}: x-fabric-executor must be an object")
+        elif executor.get("type") == "builtin" and executor.get("name") in HOSTED_TOOLS:
+            # Hosted tools (hosted_tools/): refused here when the stamp has not enabled them.
+            specs[name] = ToolSpec(name=name, kind="hosted", builtin=executor["name"])
+            model_tools.append(declare(name, executor["name"], tool, hosted))
+            continue
         elif executor.get("type") == "builtin":
             builtin = executor.get("name")
             if builtin not in BUILTIN_TOOLS:
                 raise BadRequest(
                     "invalid_tool",
-                    f"tool {name!r}: builtin must be one of {sorted(BUILTIN_TOOLS)}",
+                    f"tool {name!r}: builtin must be one of "
+                    f"{sorted(BUILTIN_TOOLS | HOSTED_TOOLS)}",
                 )
             spec = ToolSpec(name=name, kind="builtin", builtin=builtin)
         elif executor.get("type") == "http":
@@ -318,6 +328,9 @@ class ToolOutcome:
     duration_ms: float
     result_bytes: int
     truncated: bool = False
+    #: Hosted tools: sizes and codes for the trace step, and files for the run response.
+    details: dict[str, Any] = field(default_factory=dict)
+    files: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ToolRunner:
@@ -329,8 +342,14 @@ class ToolRunner:
         *,
         client: httpx.AsyncClient | None = None,
         resolver: Resolver | None = None,
+        hosted: Any = None,
     ) -> None:
         self.settings = settings
+        if hosted is None:
+            from fabric_data_plane.hosted_tools.runner import HostedTools  # noqa: PLC0415
+
+            hosted = HostedTools(settings)
+        self.hosted = hosted
         self.allowlist = allowed_hosts(settings.agent_tool_allowed_hosts)
         # A dedicated client: never the upstream client, which may carry mTLS identity.
         self.client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False)
@@ -394,9 +413,16 @@ class ToolRunner:
         finally:
             await response.aclose()
 
-    async def execute(self, spec: ToolSpec, raw_arguments: Any) -> ToolOutcome:
+    async def release(self, context: ToolContext) -> None:
+        """The run is over; stateful hosted tools drop its session."""
+        await self.hosted.release(context)
+
+    async def execute(
+        self, spec: ToolSpec, raw_arguments: Any, context: ToolContext | None = None
+    ) -> ToolOutcome:
         started = time.perf_counter()
         truncated = False
+        hosted: HostedResult | None = None
         try:
             try:
                 arguments = json.loads(raw_arguments or "{}")
@@ -404,13 +430,20 @@ class ToolRunner:
                 raise ToolError("invalid_arguments", "arguments are not valid JSON") from exc
             if not isinstance(arguments, dict):
                 raise ToolError("invalid_arguments", "arguments must be a JSON object")
-            if spec.kind == "builtin":
+            if spec.hosted is not None:
+                # file_search / mcp (hosted_tools/services.py): an executor bound to this request.
+                hosted = await spec.hosted.execute(arguments)
+                content, truncated = hosted.content, hosted.truncated
+            elif spec.kind == "builtin":
                 content = run_builtin(spec.builtin or "", arguments)
             elif spec.kind == "http":
                 content, truncated = await self._http(spec, arguments)
+            elif spec.kind == "hosted":
+                hosted = await self.hosted.execute(spec.builtin or "", arguments, context)
+                content, truncated = hosted.content, hosted.truncated
             else:
                 raise ToolError("unknown_tool", f"tool {spec.name!r} is not executable here")
-            ok, error = True, None
+            ok, error = (hosted.ok, hosted.error) if hosted else (True, None)
         except ToolError as exc:
             content = json.dumps({"error": exc.code, "message": exc.message})
             ok, error = False, exc.code
@@ -421,4 +454,6 @@ class ToolRunner:
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
             result_bytes=len(content.encode()),
             truncated=truncated,
+            details=hosted.details if hosted else {},
+            files=hosted.files if hosted else [],
         )

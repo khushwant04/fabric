@@ -37,6 +37,7 @@ from fabric_data_plane.auth import (
     extract_bearer_token,
     verify_inference_token,
 )
+from fabric_data_plane.edge import files as file_routing
 from fabric_data_plane.edge.config import EdgeSettings
 from fabric_data_plane.edge.metrics import EdgeMetrics
 from fabric_data_plane.edge.poller import (
@@ -488,6 +489,21 @@ async def handle_model_request(
         if not candidates:
             edge.metrics.request(stamp="none", outcome="no_route")
             raise NotFound("model_not_found", "No such model is available to this account")
+        # file_search reads the account's stores, which live on its file stamp only.
+        if request.url.path == "/v1/agent/runs" and file_routing.references_file_search(
+            payload
+        ):
+            home = file_routing.file_stamp(table, principal.account_id)
+            candidates = [
+                c for c in candidates if home and c.stamp.stamp_id == home.stamp.stamp_id
+            ]
+            if not candidates:
+                edge.metrics.request(stamp="none", outcome="no_route")
+                raise BadRequest(
+                    "file_search_stamp_mismatch",
+                    "This account's vector stores live on a stamp that does not serve this "
+                    "model; use a model deployed on that stamp",
+                )
         key, strict = affinity(request, payload)
         return await forward(
             edge,
@@ -501,6 +517,34 @@ async def handle_model_request(
         )
     except ApiError as exc:
         return _fail(edge, exc, anthropic=anthropic)
+
+
+async def handle_file_request(edge: EdgeGateway, request: Request) -> Response:
+    """``/v1/files*`` and ``/v1/vector_stores*``: always the account's file stamp."""
+    started = time.monotonic()
+    try:
+        principal = await edge.authenticate_async(request.headers.get("authorization"))
+        table = edge.store.table
+        if table is None:
+            raise UpstreamUnavailable("routing_unavailable", "The edge has no routing table yet")
+        home = file_routing.file_stamp(table, principal.account_id)
+        if home is None:
+            edge.metrics.request(stamp="none", outcome="no_route")
+            raise NotFound("file_search_unavailable", "This account has no stamp to hold files")
+        body: bytes | None = None
+        if request.method == "POST":
+            multipart = request.headers.get("content-type", "").startswith("multipart/")
+            limit = (
+                edge.settings.max_file_upload_bytes + 1024 * 1024
+                if multipart
+                else edge.settings.max_json_body_bytes
+            )
+            body = await read_bounded(request, limit, "File" if multipart else "JSON")
+        return await forward(
+            edge, request, principal=principal, candidates=[home], body=body, started=started
+        )
+    except ApiError as exc:
+        return _fail(edge, exc, anthropic=False)
 
 
 async def handle_run_lookup(edge: EdgeGateway, request: Request, run_id: str) -> Response:
@@ -618,6 +662,17 @@ def build_inference_router(edge: EdgeGateway) -> APIRouter:
     @router.post("/v1/audio/{operation}", summary="Audio transcription and translation")
     async def audio(operation: str, request: Request) -> Response:
         return await handle_model_request(edge, request, kind="audio")
+
+    # File search state is stamp-local: every call of an account goes to its file stamp.
+    for prefix in file_routing.FILE_ROUTE_PREFIXES:
+
+        async def file_route(request: Request) -> Response:
+            return await handle_file_request(edge, request)
+
+        router.add_api_route(prefix, file_route, methods=["GET", "POST"])
+        router.add_api_route(
+            prefix + "/{rest:path}", file_route, methods=["GET", "POST", "DELETE"]
+        )
 
     @router.get("/v1/runs", summary="This account's agent runs, gathered from its stamps")
     async def list_runs(request: Request) -> Response:

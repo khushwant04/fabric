@@ -8,6 +8,74 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- File search (`docs/file-search.md`): OpenAI-compatible `POST/GET /v1/files`,
+  `GET/DELETE /v1/files/{id}`, `POST/GET /v1/vector_stores`, `GET/DELETE
+  /v1/vector_stores/{id}`, `POST/GET/DELETE /v1/vector_stores/{id}/files[/{file_id}]` and
+  `POST /v1/vector_stores/{id}/search` on the stamp gateway, tested with the official `openai`
+  SDK. Account-scoped (a foreign id is the same `404` as a missing one); stamp-local SQLite
+  plus blobs under `FABRIC_DP_FILE_SEARCH_STORE_PATH`; text extraction for
+  txt/md/json/csv/html (PDF only with the optional `pdf` extra); overlapping chunking; BM25
+  (FTS5 when available, identical pure-Python fallback, statistics per searched store) and
+  optional hybrid ranking with embeddings called through the metered proxy path
+  (`FABRIC_DP_FILE_SEARCH_EMBEDDING_MODEL`); limits on file size, files and bytes per account,
+  stores per account and chunks per store. A hosted `file_search` tool in
+  `POST /v1/agent/runs` returns passages with citations; its trace holds counts only.
+- MCP connectors (`docs/mcp-connectors.md`): `{"type": "mcp", ...}` tools in
+  `POST /v1/agent/runs`. The gateway is a Streamable HTTP MCP client (initialize, tools/list,
+  tools/call; JSON or SSE replies), exposes allowed tools as `<label>__<tool>`, and executes
+  calls server-side. Separate host allowlist `FABRIC_DP_MCP_ALLOWED_HOSTS` (empty disables),
+  the HTTP tools' SSRF guards on every request, HTTPS unless
+  `FABRIC_DP_MCP_ALLOW_INSECURE_HTTP`, no redirects, time and size caps, and only the declared
+  per-server headers are sent (never the caller's token; never logged or traced).
+  `require_approval: "always"` pauses the run with `pending_approvals`; resume with
+  `approvals: [{"type": "mcp_approval_response", ...}]`. tools/list is cached per run.
+- Edge: `/v1/files*` and `/v1/vector_stores*` go to one deterministic stamp per account
+  (strict rendezvous affinity), and agent runs declaring `file_search` are routed to that
+  stamp (`400 file_search_stamp_mismatch` when it does not serve the model). Setting
+  `FABRIC_EDGE_MAX_FILE_UPLOAD_BYTES`.
+- file_search and MCP calls are traced and counted like the other hosted tools
+  (`executor: "hosted"`, `fabric_dp_hosted_tool_executions_total{tool="file_search"|"mcp"}`),
+  plus `fabric_dp_file_store_operations_total` and `fabric_dp_mcp_requests_total`.
+- Helm (stamp chart): `dataPlane.fileSearch` (enabled, on an `emptyDir` with a NOTES warning
+  unless `persistence.enabled` creates a retained PVC or uses `existingClaim`) and
+  `dataPlane.mcp` (allowlist, off by default); `deploy/scripts/test-file-search-chart.sh`.
+- `make demo-file-search-mcp`: uploads two Markdown documents with the OpenAI SDK, searches
+  them, and runs an agent that cites them and calls a local demo MCP server
+  (`agent/scripts/demo_mcp_server.py`), including an approval-gated tool, with no GPU.
+
+- Hosted agent tools (`docs/hosted-tools.md`) for `POST /v1/agent/runs`, each off by
+  default and refused with `400 hosted_tool_disabled` unless enabled per stamp:
+  `code_interpreter` (backends: the new self-hosted sandbox service `sandbox/` with
+  per-execution subprocesses, rlimits, process-group kill, scrubbed environment,
+  non-dumpable processes, per-run sessions with TTL and size cap, and a shared secret; or
+  E2B microVMs through the pinned async SDK, one sandbox per run), `web_fetch` (allowlist
+  with `*` for public hosts, private/loopback/link-local/metadata refusal, DNS pinning,
+  re-checked redirects, no cookies, stdlib HTML-to-text; or Firecrawl scrape) and
+  `web_search` (SearXNG, a generic HTTP API template, or Firecrawl). Run responses gain
+  `files` (produced images, base64, size-capped); tool steps gain size/outcome fields and
+  never content. Metrics `fabric_dp_hosted_tool_*`. Settings `FABRIC_DP_CODE_INTERPRETER_*`,
+  `FABRIC_DP_E2B_*`, `FABRIC_DP_WEB_*`, `FABRIC_DP_FIRECRAWL_*`.
+- Helm: `hostedTools.*` and `sandbox.*` in the stamp chart (sandbox Deployment, Service,
+  generated shared secret, NetworkPolicy denying all egress and admitting only the
+  gateway, read-only root filesystem, dropped capabilities, seccomp, optional
+  `runtimeClassName`); E2B and Firecrawl keys from existing Secrets.
+  `deploy/images/sandbox.Dockerfile`; the data-plane image installs the `e2b` extra unless
+  built with `--build-arg EXTRAS=`.
+- `make demo-hosted-tools` (no GPU: local sandbox process and SearXNG stub, optional
+  E2B/Firecrawl pass) and `make check-sandbox` (part of `make check` and CI).
+- OpenAI Agents SDK support (`docs/openai-agents-sdk.md`): `data-plane/tests/test_openai_agents_sdk.py`
+  runs `openai-agents==0.24.0` (with `openai==3.16.2`, now in the data-plane dev extra and
+  `make check-data-plane`) against the gateway: function-tool loops, run budgets via
+  `ModelSettings(extra_headers=...)` and the `GET /v1/runs/{id}` trace, tool-guard repair hidden
+  from the SDK, `Runner.run_streamed`, Pydantic `output_type`, handoffs, guardrails,
+  `model="cascade"`, and stateless Responses mode; `previous_response_id`,
+  `auto_previous_response_id` and `store=True` are asserted to be refused with
+  `responses_state_unsupported`/`responses_store_unsupported`, and the SDK's trace exporter is
+  asserted never to run. New example `examples/python/scripts/openai_agents_demo.py` (concierge
+  hands off to a trip planner with three tools and a structured `TripPlan`, then prints the run
+  trace and tool-guard outcome) and `make demo-openai-agents` (local platform, stub host
+  `agent/scripts/openai_agents_demo_host.py`, or a real host via `FABRIC_E2E_UPSTREAM`).
+  `openai-agents` is now a regular dependency of `examples/python` (the `agents` extra is gone).
 - Edge gateway (ADR 0021, `docs/edge-gateway.md`): `python -m fabric_data_plane.edge`, one
   inference URL in front of every stamp. It verifies inference tokens locally with the
   stamp's own code; routes `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,

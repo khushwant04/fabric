@@ -27,8 +27,19 @@
 #   FABRIC_E2E_AGENT_DEMO=cascade agent/scripts/e2e.sh   # `make demo-cascade`: place a second,
 #       larger deployment (capabilities.priority 10 vs -10) and run
 #       examples/python/scripts/cascade_demo.py (model "cascade").
-#   Both use the stub host agent/scripts/agent_loop_demo_host.py unless FABRIC_E2E_UPSTREAM is
+#   FABRIC_E2E_AGENT_DEMO=files agent/scripts/e2e.sh     # `make demo-file-search-mcp`: start the
+#       demo MCP server (agent/scripts/demo_mcp_server.py), enable file search and MCP on the data
+#       plane and run examples/python/scripts/file_search_mcp_demo.py.
+#   FABRIC_E2E_AGENT_DEMO=hosted agent/scripts/e2e.sh    # `make demo-hosted-tools`: start the
+#       code-interpreter sandbox (sandbox/) and a SearXNG-compatible stub as local processes,
+#       enable code_interpreter, web_fetch and web_search on the data plane, and run
+#       examples/python/scripts/hosted_tools_demo.py. With FABRIC_DP_E2B_API_KEY and/or
+#       FABRIC_DEMO_FIRECRAWL_URL set, a second pass restarts the data plane on those backends.
+#   All use the stub host agent/scripts/agent_loop_demo_host.py unless FABRIC_E2E_UPSTREAM is
 #   set; the larger tier's release is FABRIC_E2E_RELEASE_LARGE (default "<release>-large").
+#   FABRIC_E2E_AGENT_DEMO=openai-agents agent/scripts/e2e.sh   # `make demo-openai-agents`: run
+#       examples/python/scripts/openai_agents_demo.py (the OpenAI Agents SDK) with the stub host
+#       agent/scripts/openai_agents_demo_host.py unless FABRIC_E2E_UPSTREAM is set.
 #
 # Requires the control-plane, data-plane, and agent environments to be installed.
 
@@ -49,6 +60,10 @@ RELEASE_LARGE="${FABRIC_E2E_RELEASE_LARGE:-${RELEASE}-large}"
 case "$AGENT_DEMO" in
     loop) DEMO_SCRIPT="agent_loop_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
     cascade) DEMO_SCRIPT="cascade_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
+    files) DEMO_SCRIPT="file_search_mcp_demo.py"; STUB_HOST="agent_loop_demo_host.py"
+        FABRIC_AGENT_DEMO_ARGS="${FABRIC_AGENT_DEMO_ARGS:---yes}" ;;
+    hosted) DEMO_SCRIPT="hosted_tools_demo.py"; STUB_HOST="agent_loop_demo_host.py" ;;
+    openai-agents) DEMO_SCRIPT="openai_agents_demo.py"; STUB_HOST="openai_agents_demo_host.py" ;;
     *) DEMO_SCRIPT="agent_demo.py"; STUB_HOST="agent_demo_host.py" ;;
 esac
 CASCADE_DEMO=""
@@ -56,13 +71,16 @@ CASCADE_DEMO=""
 WORK="$(mktemp -d)"
 SERVER_PID=""
 DATA_PLANE_PID=""
+MCP_PID=""
+SANDBOX_PID=""
+SEARCH_PID=""
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 cleanup() {
-    for pid in "$DATA_PLANE_PID" "$SERVER_PID"; do
+    for pid in "$DATA_PLANE_PID" "$MCP_PID" "$SANDBOX_PID" "$SEARCH_PID" "$SERVER_PID"; do
         [ -n "$pid" ] || continue
         kill "$pid" 2>/dev/null || true
         for _ in $(seq 1 20); do
@@ -304,7 +322,20 @@ INFERENCE_TOKEN=$(curl -fsS -X POST "$CONTROL_URL/v1/token" -H 'Content-Type: ap
     | "$CONTROL_PY" -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
 curl -fsS "$CONTROL_URL/.well-known/jwks.json" > "$WORK/jwks.json"
 
-read -r DP_PORT DP_ADMIN_PORT <<<"$("$CONTROL_PY" -c '
+read -r DP_PORT DP_ADMIN_PORT MCP_PORT <<<"$("$CONTROL_PY" -c '
+import socket
+ports = []
+for _ in range(3):
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    ports.append(s.getsockname()[1])
+    s.close()
+print(*ports)')"
+
+if [ "$AGENT_DEMO" = "hosted" ]; then
+    # The code-interpreter sandbox as a local process (in a cluster: its own locked-down
+    # Deployment, docs/hosted-tools.md), plus a SearXNG-compatible stub for web_search.
+    read -r SANDBOX_PORT SEARCH_PORT <<<"$("$CONTROL_PY" -c '
 import socket
 ports = []
 for _ in range(2):
@@ -313,6 +344,44 @@ for _ in range(2):
     ports.append(s.getsockname()[1])
     s.close()
 print(*ports)')"
+    SANDBOX_TOKEN="$(openssl rand -hex 24)"
+    mkdir -p "$WORK/sandbox"
+    SANDBOX_ROOT_FLAG=""
+    if [ "$(id -u)" = "0" ]; then
+        # The sandbox refuses to run user code as root; a throwaway dev container opts in.
+        SANDBOX_ROOT_FLAG=1
+        info "running as root: FABRIC_SANDBOX_ALLOW_ROOT=1 (never in production)"
+    fi
+    # The service scrubs the environment of every execution itself (sandbox/executor.py).
+    (cd "$REPO_ROOT/sandbox" && env \
+        FABRIC_SANDBOX_TOKEN="$SANDBOX_TOKEN" FABRIC_SANDBOX_HOST=127.0.0.1 \
+        FABRIC_SANDBOX_PORT="$SANDBOX_PORT" FABRIC_SANDBOX_ROOT_DIR="$WORK/sandbox" \
+        ${SANDBOX_ROOT_FLAG:+FABRIC_SANDBOX_ALLOW_ROOT=1} \
+        uv run --quiet --python "${PYTHON_VERSION:-3.12}" --no-project \
+        --with-editable '.[science]' python -m fabric_sandbox) >"$WORK/sandbox.log" 2>&1 &
+    SANDBOX_PID=$!
+    "$DATA_PY" "$REPO_ROOT/agent/scripts/hosted_tools_demo_services.py" "$SEARCH_PORT" \
+        >"$WORK/search.log" 2>&1 &
+    SEARCH_PID=$!
+    for _ in $(seq 1 300); do
+        if curl -fsS "http://127.0.0.1:$SANDBOX_PORT/healthz" >/dev/null 2>&1; then break; fi
+        sleep 0.2
+    done
+    curl -fsS "http://127.0.0.1:$SANDBOX_PORT/healthz" >/dev/null \
+        || { cat "$WORK/sandbox.log"; die "sandbox did not start"; }
+    info "sandbox on 127.0.0.1:$SANDBOX_PORT (shared secret required), SearXNG stub on :$SEARCH_PORT"
+    export FABRIC_DP_CODE_INTERPRETER_ENABLED=true
+    export FABRIC_DP_CODE_INTERPRETER_BACKEND=sandbox
+    export FABRIC_DP_CODE_INTERPRETER_URL="http://127.0.0.1:$SANDBOX_PORT"
+    export FABRIC_DP_CODE_INTERPRETER_TOKEN="$SANDBOX_TOKEN"
+    export FABRIC_DP_WEB_FETCH_ENABLED=true
+    export FABRIC_DP_WEB_FETCH_ALLOWED_HOSTS="fabric-demo.test,*"
+    export FABRIC_DP_WEB_SEARCH_ENABLED=true
+    export FABRIC_DP_WEB_BACKEND=searxng
+    export FABRIC_DP_WEB_SEARCH_URL="http://127.0.0.1:$SEARCH_PORT"
+    # Tells data_plane.py to serve the demo page through web_fetch's injected transport.
+    export FABRIC_E2E_HOSTED_SERVICES="$REPO_ROOT/agent/scripts/hosted_tools_demo_services.py"
+fi
 
 # Both listeners share one process so they share one usage buffer, which is what
 # the collector drains. The upstream model host is the only stub: no vLLM runs.
@@ -328,12 +397,23 @@ from fabric_data_plane.registry import DeploymentRegistry
 deployments = os.environ["FABRIC_E2E_DEPLOYMENTS"]
 jwks_path = os.environ["FABRIC_E2E_JWKS"]
 
+# `make demo-file-search-mcp`: hosted file search and MCP connectors (docs/file-search.md,
+# docs/mcp-connectors.md). Plain http to the MCP server is a development-only setting.
+hosted = {}
+if os.environ.get("FABRIC_E2E_FILE_STORE"):
+    hosted = {
+        "file_search_store_path": os.environ["FABRIC_E2E_FILE_STORE"],
+        "mcp_allowed_hosts": "mcp.demo.test",
+        "mcp_allow_insecure_http": True,
+    }
+
 settings = Settings(
     app_env="test",
     jwt_issuer="http://control.e2e.test",
     jwks_url="http://control.e2e.test/.well-known/jwks.json",
     jwks_file=jwks_path,
     deployments_file=deployments,
+    **hosted,
 )
 
 # Loaded from the file the Go agent wrote, unmodified.
@@ -378,6 +458,49 @@ plane = DataPlane(
     client=upstream_client,
 )
 
+mcp_port = os.environ.get("FABRIC_E2E_MCP_PORT") or ""
+if hosted and mcp_port:
+    from fabric_data_plane.hosted_tools.services import HostedServices
+
+    # DEMO ONLY. The SSRF guard refuses loopback, which is where the demo MCP server listens,
+    # so the demo names it mcp.demo.test, "resolves" that to a documentation address for the
+    # guard, and this transport delivers the connection to 127.0.0.1:<port>. Production
+    # resolves and connects for real; nothing here exists outside this script.
+    class DemoMcpRoute(httpx.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self.inner = httpx.AsyncHTTPTransport()
+
+        async def handle_async_request(self, request):
+            request.url = request.url.copy_with(host="127.0.0.1", port=int(mcp_port))
+            return await self.inner.handle_async_request(request)
+
+    async def demo_resolver(host, _port):
+        if host != "mcp.demo.test":
+            raise OSError("unknown host")
+        return ["192.0.2.80"]
+
+    plane.hosted_services = HostedServices(
+        settings,
+        mcp_client=httpx.AsyncClient(transport=DemoMcpRoute(), follow_redirects=False),
+        resolver=demo_resolver,
+    )
+
+# `make demo-hosted-tools`: web_fetch reaches the demo page through an injected transport
+# and resolver (the SSRF checks and address pinning still run); everything else is real.
+hosted_services = os.environ.get("FABRIC_E2E_HOSTED_SERVICES") or ""
+if hosted_services and settings.web_backend != "firecrawl":
+    import importlib.util
+    from fabric_data_plane.agent_tools import ToolRunner
+    from fabric_data_plane.hosted_tools.runner import HostedTools
+    spec = importlib.util.spec_from_file_location("hosted_demo_services", hosted_services)
+    services = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(services)
+    plane.agent_tool_runner = ToolRunner(settings, hosted=HostedTools(
+        settings,
+        web_client=httpx.AsyncClient(transport=httpx.MockTransport(services.web_handler)),
+        resolver=services.resolver,
+    ))
+
 
 async def main():
     inference = uvicorn.Server(uvicorn.Config(
@@ -393,26 +516,54 @@ async def main():
 asyncio.run(main())
 PYDP
 
-cd "$REPO_ROOT/data-plane"
-FABRIC_E2E_DEPLOYMENTS="$WORK/agent-state/deployments.json" \
-FABRIC_E2E_JWKS="$WORK/jwks.json" \
-FABRIC_E2E_DP_PORT="$DP_PORT" \
-FABRIC_E2E_DP_ADMIN_PORT="$DP_ADMIN_PORT" \
-FABRIC_E2E_REAL_UPSTREAM="${FABRIC_E2E_UPSTREAM:-}" \
-FABRIC_E2E_STUB_HOST="$([ -n "$AGENT_DEMO" ] && echo "$REPO_ROOT/agent/scripts/$STUB_HOST")" \
-FABRIC_E2E_EXPECTED_DEPLOYMENTS="$([ -n "$CASCADE_DEMO" ] && echo 2 || echo 1)" \
-"$DATA_PY" "$WORK/data_plane.py" >"$WORK/data-plane.log" 2>&1 &
-DATA_PLANE_PID=$!
-cd "$REPO_ROOT"
+if [ "$AGENT_DEMO" = "files" ]; then
+    "$DATA_PY" "$REPO_ROOT/agent/scripts/demo_mcp_server.py" --port "$MCP_PORT" \
+        >"$WORK/mcp.log" 2>&1 &
+    MCP_PID=$!
+    for _ in $(seq 1 50); do
+        curl -fsS "http://127.0.0.1:$MCP_PORT/healthz" >/dev/null 2>&1 && break
+        sleep 0.2
+    done
+    curl -fsS "http://127.0.0.1:$MCP_PORT/healthz" >/dev/null \
+        || { cat "$WORK/mcp.log"; die "demo MCP server did not start"; }
+    info "demo MCP server on 127.0.0.1:$MCP_PORT (the gateway knows it as mcp.demo.test)"
+fi
 
 DP_URL="http://127.0.0.1:$DP_PORT"
 DP_ADMIN_URL="http://127.0.0.1:$DP_ADMIN_PORT"
-for _ in $(seq 1 50); do
-    if curl -fsS "$DP_ADMIN_URL/healthz" >/dev/null 2>&1; then break; fi
-    sleep 0.2
-done
-curl -fsS "$DP_ADMIN_URL/healthz" >/dev/null \
-    || { cat "$WORK/data-plane.log"; die "data plane did not start"; }
+
+# A function so `make demo-hosted-tools` can restart it on other hosted-tool backends.
+start_data_plane() {
+    (cd "$REPO_ROOT/data-plane" && \
+    FABRIC_E2E_FILE_STORE="$([ "$AGENT_DEMO" = "files" ] && echo "$WORK/file-store")" \
+    FABRIC_E2E_MCP_PORT="$([ "$AGENT_DEMO" = "files" ] && echo "$MCP_PORT")" \
+    FABRIC_E2E_DEPLOYMENTS="$WORK/agent-state/deployments.json" \
+    FABRIC_E2E_JWKS="$WORK/jwks.json" \
+    FABRIC_E2E_DP_PORT="$DP_PORT" \
+    FABRIC_E2E_DP_ADMIN_PORT="$DP_ADMIN_PORT" \
+    FABRIC_E2E_REAL_UPSTREAM="${FABRIC_E2E_UPSTREAM:-}" \
+    FABRIC_E2E_STUB_HOST="$([ -n "$AGENT_DEMO" ] && echo "$REPO_ROOT/agent/scripts/$STUB_HOST")" \
+    FABRIC_E2E_EXPECTED_DEPLOYMENTS="$([ -n "$CASCADE_DEMO" ] && echo 2 || echo 1)" \
+    exec "$DATA_PY" "$WORK/data_plane.py") >>"$WORK/data-plane.log" 2>&1 &
+    DATA_PLANE_PID=$!
+    for _ in $(seq 1 50); do
+        if curl -fsS "$DP_ADMIN_URL/healthz" >/dev/null 2>&1; then break; fi
+        sleep 0.2
+    done
+    curl -fsS "$DP_ADMIN_URL/healthz" >/dev/null \
+        || { cat "$WORK/data-plane.log"; die "data plane did not start"; }
+}
+
+stop_data_plane() {
+    kill "$DATA_PLANE_PID" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+        kill -0 "$DATA_PLANE_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    DATA_PLANE_PID=""
+}
+
+start_data_plane
 info "inference on $DP_URL, admin on $DP_ADMIN_URL"
 
 MODELS=$(curl -fsS "$DP_URL/v1/models" -H "Authorization: Bearer $INFERENCE_TOKEN")
@@ -450,6 +601,8 @@ if [ -n "$AGENT_DEMO" ]; then
     FABRIC_INFERENCE_URL="$DP_URL" \
     FABRIC_API_KEY="$API_KEY" \
     FABRIC_MODEL="e2e-model" \
+    FABRIC_DEMO_MCP_URL="http://mcp.demo.test/mcp" \
+    FABRIC_DEMO_MCP_KEY="demo-mcp-key" \
     uv run --quiet --project "$REPO_ROOT/examples/python" --python "${PYTHON_VERSION:-3.12}" \
         python "$REPO_ROOT/examples/python/scripts/$DEMO_SCRIPT" ${FABRIC_AGENT_DEMO_ARGS:-}
     METRICS=$(curl -fsS "$DP_URL/metrics")
@@ -457,7 +610,49 @@ if [ -n "$AGENT_DEMO" ]; then
     # The cascade meters every attempt as an ordinary request on its own deployment.
     METRIC_PATTERN='^fabric_dp_(agent_run|tool_guard)'
     [ -n "$CASCADE_DEMO" ] && METRIC_PATTERN='^fabric_dp_requests_total'
+    [ "$AGENT_DEMO" = "hosted" ] && METRIC_PATTERN='^fabric_dp_hosted_tool_(executions|bytes)'
+    if [ "$AGENT_DEMO" = "files" ]; then
+        METRIC_PATTERN='^fabric_dp_(hosted_tool_executions|mcp_requests|file_store_operations)_total'
+        METRICS=$(echo "$METRICS" | grep -v ' 0$')
+    fi
     echo "$METRICS" | grep -E "$METRIC_PATTERN" | sed 's/^/     /' || true
+    if [ "$AGENT_DEMO" = "files" ]; then
+        info "what the demo MCP server saw (header names only; no Fabric credential):"
+        sed 's/^/     /' "$WORK/mcp.log"
+    fi
+    if [ "$AGENT_DEMO" = "hosted" ]; then
+        info "sandbox metrics:"
+        curl -fsS "http://127.0.0.1:$SANDBOX_PORT/metrics" | grep -v '^#' | sed 's/^/     /'
+        # ------------------------------------------------------------------
+        # Optional connected backends: E2B microVMs and/or a self-hosted Firecrawl.
+        # ------------------------------------------------------------------
+        if [ -z "${FABRIC_DP_E2B_API_KEY:-}" ] && [ -z "${FABRIC_DEMO_FIRECRAWL_URL:-}" ]; then
+            log "Connected backends: skipped (set FABRIC_DP_E2B_API_KEY and/or FABRIC_DEMO_FIRECRAWL_URL)"
+        else
+            log "Connected backends: restart the gateway on E2B / Firecrawl"
+            stop_data_plane
+            if [ -n "${FABRIC_DP_E2B_API_KEY:-}" ]; then
+                (cd "$REPO_ROOT/data-plane" && uv pip install --quiet --python .venv/bin/python -e '.[e2b]')
+                export FABRIC_DP_CODE_INTERPRETER_BACKEND=e2b
+                info "code_interpreter -> E2B (code leaves this machine for E2B's cloud)"
+            fi
+            if [ -n "${FABRIC_DEMO_FIRECRAWL_URL:-}" ]; then
+                export FABRIC_DP_WEB_BACKEND=firecrawl
+                export FABRIC_DP_FIRECRAWL_URL="$FABRIC_DEMO_FIRECRAWL_URL"
+                export FABRIC_DP_WEB_FETCH_ALLOWED_HOSTS="*"
+                info "web_fetch/web_search -> Firecrawl at $FABRIC_DEMO_FIRECRAWL_URL"
+            fi
+            start_data_plane
+            FABRIC_CONTROL_URL="$CONTROL_URL" \
+            FABRIC_INFERENCE_URL="$DP_URL" \
+            FABRIC_API_KEY="$API_KEY" \
+            FABRIC_MODEL="e2e-model" \
+            FABRIC_DEMO_LABEL="connected backends" \
+            FABRIC_DEMO_WEB_URL="${FABRIC_DEMO_WEB_URL:-$([ -n "${FABRIC_DEMO_FIRECRAWL_URL:-}" ] && echo https://example.com/)}" \
+            uv run --quiet --project "$REPO_ROOT/examples/python" --python "${PYTHON_VERSION:-3.12}" \
+                python "$REPO_ROOT/examples/python/scripts/$DEMO_SCRIPT" ${FABRIC_AGENT_DEMO_ARGS:-}
+        fi
+    fi
     log "Agent demo complete"
     exit 0
 fi

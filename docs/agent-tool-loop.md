@@ -72,8 +72,15 @@ returns `200` with `status: "failed"`, the steps so far, and `error`.
 |---|---|
 | `{"type":"builtin","name":"calculator"}` | Evaluates `{"expression": "..."}`: numbers, `+ - * / // % **` (`^` means power), parentheses, `sqrt abs round min max floor ceil log log10 sin cos tan`, `pi`, `e`. Parsed with `ast` and evaluated node by node; nothing is ever `eval`-ed. Expression length, nesting, exponents and magnitudes are bounded |
 | `{"type":"builtin","name":"current_time"}` | Returns the time for `{"timezone": "Asia/Tokyo"}` (IANA name, default UTC) |
+| `{"type":"builtin","name":"code_interpreter"\|"web_fetch"\|"web_search"}` | Hosted tools, enabled per stamp; refused with `400 hosted_tool_disabled` otherwise. See [Hosted tools](hosted-tools.md) |
 | `{"type":"http","url":...,"method":"POST","timeout_seconds":N}` | POSTs the parsed arguments as JSON; the response body is the tool result. See the security model below |
 | none | A *client tool*: the run stops with `requires_action` |
+| `{"type":"builtin","name":"file_search","vector_store_ids":[...]}` | Hosted search over the account's vector stores, with citations; see [File search](file-search.md) |
+
+Hosted tools are also declared directly in `tools`, without a function wrapper:
+`{"type": "file_search", "vector_store_ids": [...]}` ([File search](file-search.md)) and
+`{"type": "mcp", "server_label": ..., "server_url": ...}`, which exposes a remote MCP server's
+tools and can require the user's approval per call ([MCP connectors](mcp-connectors.md)).
 
 A tool that fails (bad arguments, an unknown tool name, an HTTP error) does not end the run:
 the model receives `{"error": "<code>", "message": "..."}` as the tool result and can recover,

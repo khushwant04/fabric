@@ -16,6 +16,7 @@ import pytest
 
 from fabric_data_plane.edge.app import EdgeGateway, create_edge_admin_app, create_edge_app
 from fabric_data_plane.edge.config import EdgeSettings
+from fabric_data_plane.edge.files import file_stamp, references_file_search
 from fabric_data_plane.edge.poller import EdgeKeyCache
 from fabric_data_plane.edge.table import RoutingTable, gateway_origin
 from tests.conftest import ACCOUNT_A, ACCOUNT_B, ISSUER, JWKS_URL, SigningKey
@@ -701,3 +702,146 @@ def test_malformed_entries_are_skipped() -> None:
     )
     table = RoutingTable(document)
     assert len(table.candidates(ACCOUNT_A, "shared-model")) == 2
+
+
+# -- file search affinity (docs/file-search.md) ---------------------------------------
+
+FILE_SEARCH_TOOL = {"type": "file_search", "vector_store_ids": ["vs_1"]}
+
+
+def _file_stamp_name(control, account) -> str:
+    return file_stamp(RoutingTable(control.document), account).stamp.name
+
+
+async def test_every_file_and_store_call_of_an_account_goes_to_one_stamp(
+    control, stamps, signer
+) -> None:
+    edge = build_edge(control, stamps)
+    home = _file_stamp_name(control, ACCOUNT_A)
+    headers = auth(signer)
+    async with client_for(edge) as client:
+        responses = [
+            await client.post(
+                "/v1/files",
+                files={"file": ("notes.md", b"# notes\nhello", "text/markdown")},
+                data={"purpose": "assistants"},
+                headers=headers,
+            ),
+            await client.get("/v1/files", headers=headers),
+            await client.get("/v1/files/file-1", headers=headers),
+            await client.delete("/v1/files/file-1", headers=headers),
+            await client.post("/v1/vector_stores", json={"name": "kb"}, headers=headers),
+            await client.get("/v1/vector_stores?limit=5", headers=headers),
+            await client.get("/v1/vector_stores/vs_1", headers=headers),
+            await client.post(
+                "/v1/vector_stores/vs_1/files", json={"file_id": "f"}, headers=headers
+            ),
+            await client.get("/v1/vector_stores/vs_1/files/f", headers=headers),
+            await client.post(
+                "/v1/vector_stores/vs_1/search", json={"query": "q"}, headers=headers
+            ),
+            await client.delete("/v1/vector_stores/vs_1", headers=headers),
+        ]
+    for response in responses:
+        assert response.status_code == 200, response.text
+        assert response.headers["x-fabric-edge-stamp"] == home
+    assert {item["host"] for item in stamps.seen} == {home}
+    # The multipart upload, the query string and the method reach the stamp intact.
+    upload = stamps.seen[0]
+    assert upload["path"] == "/v1/files"
+    assert b"# notes\nhello" in upload["body"] and b'name="purpose"' in upload["body"]
+    assert any(item["url"].endswith("/v1/vector_stores?limit=5") for item in stamps.seen)
+    assert [item["path"] for item in stamps.seen][-1] == "/v1/vector_stores/vs_1"
+
+
+async def test_file_affinity_is_per_account_and_stable(control, stamps, signer) -> None:
+    edge = build_edge(control, stamps)
+    async with client_for(edge) as client:
+        for _ in range(5):
+            response = await client.get("/v1/files", headers=auth(signer, ACCOUNT_C))
+            assert response.status_code == 200
+    # Account C holds deployments on stamp-b only, so its files can live nowhere else.
+    assert {item["host"] for item in stamps.seen} == {"stamp-b"}
+    # Rendezvous ranking is a pure function of account and stamp ids: every edge agrees.
+    first = file_stamp(RoutingTable(control.document), ACCOUNT_A)
+    again = file_stamp(RoutingTable(table_document(revision=11)), ACCOUNT_A)
+    assert first is not None and again is not None
+    assert first.stamp.stamp_id == again.stamp.stamp_id
+
+
+async def test_file_calls_do_not_fail_over_to_another_stamp(control, stamps, signer) -> None:
+    edge = build_edge(control, stamps)
+    stamps.down.add(_file_stamp_name(control, ACCOUNT_A))
+    async with client_for(edge) as client:
+        response = await client.get("/v1/vector_stores", headers=auth(signer))
+    assert response.status_code == 503
+    assert stamps.seen == []
+
+
+async def test_file_calls_need_a_valid_token(control, stamps, signer) -> None:
+    edge = build_edge(control, stamps)
+    async with client_for(edge) as client:
+        response = await client.get("/v1/files", headers={"Authorization": "Bearer nope"})
+    assert response.status_code == 401
+    assert stamps.seen == []
+
+
+async def test_agent_runs_with_file_search_go_to_the_file_stamp(control, stamps, signer) -> None:
+    edge = build_edge(control, stamps)
+    home = _file_stamp_name(control, ACCOUNT_A)
+    async with client_for(edge) as client:
+        for _ in range(10):
+            response = await client.post(
+                "/v1/agent/runs",
+                json={"model": "shared-model", "messages": [], "tools": [FILE_SEARCH_TOOL]},
+                headers=auth(signer),
+            )
+            assert response.status_code == 200
+    assert {item["host"] for item in stamps.seen} == {home}
+
+
+async def test_agent_run_with_file_search_on_a_model_the_file_stamp_lacks_is_refused(
+    control, stamps, signer
+) -> None:
+    home = _file_stamp_name(control, ACCOUNT_A)
+    other_id, other_name, region = (
+        (STAMP_B, "stamp-b", "eu-west") if home == "stamp-a" else (STAMP_A, "stamp-a", "us-east")
+    )
+    # A model placed only on the stamp that does not hold the account's files.
+    for deployment in control.document["deployments"]:
+        if deployment["model_alias"] == "a-model":
+            deployment["placements"] = [placement(other_id, other_name, region)]
+    assert _file_stamp_name(control, ACCOUNT_A) == home
+    edge = build_edge(control, stamps)
+    async with client_for(edge) as client:
+        response = await client.post(
+            "/v1/agent/runs",
+            json={"model": "a-model", "messages": [], "tools": [FILE_SEARCH_TOOL]},
+            headers=auth(signer),
+        )
+        plain = await client.post(
+            "/v1/agent/runs", json={"model": "a-model", "messages": []}, headers=auth(signer)
+        )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "file_search_stamp_mismatch"
+    # Without file_search the same model routes normally.
+    assert plain.status_code == 200
+    assert [item["host"] for item in stamps.seen] == [other_name]
+
+
+def test_references_file_search_recognises_every_declaration_shape() -> None:
+    assert references_file_search({"tools": [FILE_SEARCH_TOOL]})
+    assert references_file_search({"tools": [{"type": "builtin", "name": "file_search"}]})
+    assert references_file_search(
+        {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "kb"},
+                    "x-fabric-executor": {"type": "builtin", "name": "file_search"},
+                }
+            ]
+        }
+    )
+    assert not references_file_search({"tools": [{"type": "mcp", "server_label": "x"}]})
+    assert not references_file_search({"messages": []})

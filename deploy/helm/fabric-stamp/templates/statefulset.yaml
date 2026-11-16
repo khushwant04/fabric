@@ -160,6 +160,40 @@ spec:
               value: {{ .Values.dataPlane.upstreamTimeoutSeconds | quote }}
             - name: FABRIC_DP_RESPONSES_MAX_BODY_BYTES
               value: {{ .Values.dataPlane.responses.maxBodyBytes | quote }}
+            {{- with .Values.dataPlane.fileSearch }}
+            {{- if .enabled }}
+            # Hosted file search: stamp-local SQLite plus blobs (docs/file-search.md).
+            - name: FABRIC_DP_FILE_SEARCH_STORE_PATH
+              value: /var/lib/fabric-files/store
+            - name: FABRIC_DP_FILE_SEARCH_MAX_FILE_BYTES
+              value: {{ .maxFileBytes | int64 | quote }}
+            - name: FABRIC_DP_FILE_SEARCH_MAX_FILES_PER_ACCOUNT
+              value: {{ .maxFilesPerAccount | int64 | quote }}
+            - name: FABRIC_DP_FILE_SEARCH_MAX_BYTES_PER_ACCOUNT
+              value: {{ .maxBytesPerAccount | int64 | quote }}
+            - name: FABRIC_DP_FILE_SEARCH_MAX_STORES_PER_ACCOUNT
+              value: {{ .maxStoresPerAccount | int64 | quote }}
+            - name: FABRIC_DP_FILE_SEARCH_MAX_CHUNKS_PER_STORE
+              value: {{ .maxChunksPerStore | int64 | quote }}
+            {{- with .embeddingModel }}
+            - name: FABRIC_DP_FILE_SEARCH_EMBEDDING_MODEL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.dataPlane.mcp }}
+            {{- if .allowedHosts }}
+            # MCP connectors: the gateway is an MCP client of these hosts only.
+            - name: FABRIC_DP_MCP_ALLOWED_HOSTS
+              value: {{ join "," .allowedHosts | quote }}
+            - name: FABRIC_DP_MCP_ALLOW_INSECURE_HTTP
+              value: {{ .allowInsecureHttp | quote }}
+            - name: FABRIC_DP_MCP_TIMEOUT_SECONDS
+              value: {{ .timeoutSeconds | quote }}
+            - name: FABRIC_DP_MCP_MAX_RESPONSE_BYTES
+              value: {{ .maxResponseBytes | int64 | quote }}
+            {{- end }}
+            {{- end }}
             - name: FABRIC_DP_RATE_LIMIT_REQUESTS_PER_MINUTE
               # int64: a values-file number is a float64, and quote would render 1000000
               # as "1e+06", which the data plane refuses to start with.
@@ -198,6 +232,80 @@ spec:
             {{- if .Values.dataPlane.upstreamTls.caSecret }}
             - name: FABRIC_DP_UPSTREAM_CA_BUNDLE
               value: /etc/fabric/upstream-ca/ca.crt
+            {{- end }}
+            {{- with .Values.hostedTools }}
+            # Hosted tools (docs/hosted-tools.md). Secrets come from Secrets, never values.
+            {{- if .codeInterpreter.enabled }}
+            - name: FABRIC_DP_CODE_INTERPRETER_ENABLED
+              value: "true"
+            - name: FABRIC_DP_CODE_INTERPRETER_BACKEND
+              value: {{ .codeInterpreter.backend | quote }}
+            - name: FABRIC_DP_CODE_INTERPRETER_TIMEOUT_SECONDS
+              value: {{ .codeInterpreter.timeoutSeconds | quote }}
+            {{- if eq .codeInterpreter.backend "sandbox" }}
+            - name: FABRIC_DP_CODE_INTERPRETER_URL
+              value: http://{{ include "fabric-stamp.sandboxName" $ }}:8090
+            - name: FABRIC_DP_CODE_INTERPRETER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fabric-stamp.sandboxSecretName" $ }}
+                  key: {{ $.Values.sandbox.token.existingSecretKey }}
+            {{- else }}
+            - name: FABRIC_DP_E2B_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .codeInterpreter.e2b.existingSecret }}
+                  key: {{ .codeInterpreter.e2b.existingSecretKey }}
+            {{- with .codeInterpreter.e2b.template }}
+            - name: FABRIC_DP_E2B_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .codeInterpreter.e2b.domain }}
+            - name: FABRIC_DP_E2B_DOMAIN
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FABRIC_DP_E2B_ALLOW_INTERNET
+              value: {{ .codeInterpreter.e2b.allowInternet | quote }}
+            - name: FABRIC_DP_E2B_MAX_SANDBOXES
+              value: {{ .codeInterpreter.e2b.maxSandboxes | int64 | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if or .webFetch.enabled .webSearch.enabled }}
+            - name: FABRIC_DP_WEB_BACKEND
+              value: {{ .web.backend | quote }}
+            {{- end }}
+            {{- if .webFetch.enabled }}
+            - name: FABRIC_DP_WEB_FETCH_ENABLED
+              value: "true"
+            - name: FABRIC_DP_WEB_FETCH_ALLOWED_HOSTS
+              value: {{ .webFetch.allowedHosts | quote }}
+            {{- end }}
+            {{- if .webSearch.enabled }}
+            - name: FABRIC_DP_WEB_SEARCH_ENABLED
+              value: "true"
+            - name: FABRIC_DP_WEB_SEARCH_URL
+              value: {{ .web.searchUrl | quote }}
+            {{- if .web.searchApiKey.existingSecret }}
+            - name: FABRIC_DP_WEB_SEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .web.searchApiKey.existingSecret }}
+                  key: {{ .web.searchApiKey.existingSecretKey }}
+            - name: FABRIC_DP_WEB_SEARCH_API_KEY_HEADER
+              value: {{ .web.searchApiKey.header | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if and (or .webFetch.enabled .webSearch.enabled) (eq .web.backend "firecrawl") }}
+            - name: FABRIC_DP_FIRECRAWL_URL
+              value: {{ .web.firecrawl.url | quote }}
+            {{- if .web.firecrawl.existingSecret }}
+            - name: FABRIC_DP_FIRECRAWL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .web.firecrawl.existingSecret }}
+                  key: {{ .web.firecrawl.existingSecretKey }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           ports:
             - name: inference
@@ -252,6 +360,10 @@ spec:
             # records, but still cannot read the agent or telemetry export credential.
             - name: usage-spool
               mountPath: /var/lib/fabric-usage
+            {{- if .Values.dataPlane.fileSearch.enabled }}
+            - name: file-search
+              mountPath: /var/lib/fabric-files
+            {{- end }}
         {{- if .Values.collector.enabled }}
         # ------------------------------------------------------------------
         # Collector: drains the local administrative listener, forwards usage.
@@ -306,6 +418,16 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.dataPlane.fileSearch.enabled }}
+        # Uploaded files and vector stores. An emptyDir unless persistence is enabled.
+        - name: file-search
+          {{- if .Values.dataPlane.fileSearch.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "fabric-stamp.fileSearchClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
         {{- if .Values.operator.enabled }}
         # Projected from the ConfigMap the operator renders. A ConfigMap mount is a
         # file, so the data plane's configuration source is unchanged and it keeps

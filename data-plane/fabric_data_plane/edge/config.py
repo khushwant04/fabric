@@ -78,6 +78,8 @@ class EdgeSettings(BaseSettings):
     #: gateway enforces, so the edge never accepts what a stamp would refuse for size.
     max_json_body_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
     max_audio_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
+    #: Largest /v1/files upload forwarded (the stamp enforces its own, usually lower, limit).
+    max_file_upload_bytes: int = Field(default=32 * 1024 * 1024, ge=1)
 
     #: Region preferred when a request does not send ``X-Fabric-Region``.
     default_region: str | None = None

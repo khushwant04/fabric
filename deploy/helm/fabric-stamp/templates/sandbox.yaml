@@ -1,0 +1,177 @@
+{{- if include "fabric-stamp.sandboxEnabled" . }}
+{{- /*
+Code-interpreter sandbox (docs/hosted-tools.md). Runs model-written Python; it holds no
+credential except the shared secret the gateway authenticates with. Defense in depth:
+
+  * NetworkPolicy: no egress at all (not even DNS); ingress only from the stamp gateway pod
+  * non-root uid, no privilege escalation, every capability dropped, seccomp RuntimeDefault
+  * read-only root filesystem; one size-limited emptyDir is the only writable path
+  * optional runtimeClassName (gVisor `runsc`, Kata) for a kernel boundary per pod
+  * inside the pod: a fresh process per execution with rlimits and a wall-clock kill
+
+Process isolation is not a VM boundary. For untrusted multi-tenant code use a sandboxed
+runtime class, or the e2b backend.
+*/}}
+{{- $name := include "fabric-stamp.sandboxName" . -}}
+{{- if not .Values.sandbox.token.existingSecret }}
+{{- $key := .Values.sandbox.token.existingSecretKey -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name -}}
+{{- $token := .Values.sandbox.token.value -}}
+{{- if and (not $token) $existing (index $existing.data $key) -}}
+{{- $token = (index $existing.data $key | b64dec) -}}
+{{- end -}}
+{{- if not $token -}}
+{{- $token = randAlphaNum 48 -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+type: Opaque
+stringData:
+  {{ $key }}: {{ $token | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+spec:
+  replicas: {{ .Values.sandbox.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fabric-stamp.sandboxSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fabric-stamp.sandboxSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: fabric
+    spec:
+      # The sandbox never talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.sandbox.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sandbox
+          image: {{ include "fabric-stamp.sandboxImage" . | quote }}
+          imagePullPolicy: {{ .Values.sandbox.image.pullPolicy }}
+          env:
+            - name: FABRIC_SANDBOX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "fabric-stamp.sandboxSecretName" . }}
+                  key: {{ .Values.sandbox.token.existingSecretKey }}
+            - name: FABRIC_SANDBOX_ROOT_DIR
+              value: /var/lib/fabric-sandbox
+            - name: FABRIC_SANDBOX_MAX_CONCURRENT
+              value: {{ .Values.sandbox.limits.maxConcurrent | int64 | quote }}
+            - name: FABRIC_SANDBOX_CPU_SECONDS
+              value: {{ .Values.sandbox.limits.cpuSeconds | int64 | quote }}
+            - name: FABRIC_SANDBOX_MEMORY_BYTES
+              value: {{ .Values.sandbox.limits.memoryBytes | int64 | quote }}
+            - name: FABRIC_SANDBOX_MAX_TIMEOUT_SECONDS
+              value: {{ .Values.sandbox.limits.maxTimeoutSeconds | quote }}
+            - name: FABRIC_SANDBOX_SESSION_TTL_SECONDS
+              value: {{ .Values.sandbox.limits.sessionTtlSeconds | quote }}
+            - name: FABRIC_SANDBOX_SESSION_MAX_BYTES
+              value: {{ .Values.sandbox.limits.sessionMaxBytes | int64 | quote }}
+          ports:
+            - name: sandbox
+              containerPort: 8090
+              protocol: TCP
+          readinessProbe:
+            httpGet: {path: /healthz, port: sandbox}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: sandbox}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.sandbox.resources | nindent 12 }}
+          volumeMounts:
+            - name: work
+              mountPath: /var/lib/fabric-sandbox
+      volumes:
+        # The only writable path: session directories and scratch space. Exceeding the
+        # limit evicts the pod, which is the backstop behind the per-session byte cap.
+        - name: work
+          emptyDir:
+            sizeLimit: {{ .Values.sandbox.storage.sizeLimit }}
+      {{- with .Values.sandbox.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sandbox.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fabric-stamp.sandboxSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: sandbox
+      port: 8090
+      targetPort: sandbox
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fabric-stamp.sandboxSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the stamp gateway may call the sandbox.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "fabric-stamp.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: stamp
+      ports:
+        - port: sandbox
+          protocol: TCP
+  # No egress rules: model-written code reaches nothing, not even cluster DNS. This needs a
+  # CNI that enforces NetworkPolicy (Calico, Cilium, ...); without one it is not applied.
+  egress: []
+{{- end }}

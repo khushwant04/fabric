@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import functools
 import pathlib
-from typing import Self
+from typing import Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Audience the data plane accepts. Control tokens must never authorize inference.
@@ -195,9 +195,135 @@ class Settings(BaseSettings):
     #: Bytes of an HTTP tool's reply kept; anything beyond is truncated.
     agent_tool_max_response_bytes: int = Field(default=64 * 1024, ge=256)
 
+    #: Hosted tools (docs/hosted-tools.md): code_interpreter, web_fetch, web_search, executed
+    #: by this gateway inside the agent loop. Each is off until enabled here; a request that
+    #: declares a disabled one is refused with 400 ``hosted_tool_disabled``.
+    code_interpreter_enabled: bool = False
+    #: ``sandbox`` (Fabric's self-hosted sandbox service; works air-gapped) or ``e2b``.
+    code_interpreter_backend: Literal["sandbox", "e2b"] = "sandbox"
+    #: In-cluster base URL of the sandbox service and the shared secret it requires.
+    code_interpreter_url: str = ""
+    code_interpreter_token: SecretStr = SecretStr("")
+    #: Wall-clock limit per execution (the backend enforces it; the gateway adds slack).
+    code_interpreter_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    #: stdout and stderr each, as returned to the model.
+    code_interpreter_max_output_bytes: int = Field(default=32 * 1024, ge=256)
+    #: Produced images returned in the run response (base64): per file and per run.
+    code_interpreter_max_file_bytes: int = Field(default=2 * 1024 * 1024, ge=0)
+    code_interpreter_max_run_file_bytes: int = Field(default=8 * 1024 * 1024, ge=0)
+    #: E2B backend. The key is read from the environment or a mounted secret only and is
+    #: never logged, traced or echoed in errors. Domain points at a self-hosted E2B.
+    e2b_api_key: SecretStr = SecretStr("")
+    e2b_template: str = ""
+    e2b_domain: str = ""
+    #: Lifetime E2B enforces on each sandbox; the gateway kills it sooner when the run ends.
+    e2b_sandbox_timeout_seconds: int = Field(default=900, ge=30, le=86_400)
+    #: A run's sandbox idle this long is killed by the gateway.
+    e2b_idle_ttl_seconds: float = Field(default=600.0, gt=0)
+    e2b_max_sandboxes: int = Field(default=8, ge=1, le=1000)
+    #: Outbound internet from E2B sandboxes. Off: model-written code cannot exfiltrate.
+    e2b_allow_internet: bool = False
+
+    web_fetch_enabled: bool = False
+    web_search_enabled: bool = False
+    #: ``direct``: the gateway fetches pages itself; search uses ``web_search_url`` as a
+    #: generic HTTP API template. ``searxng``: direct fetch, search via a SearXNG instance.
+    #: ``firecrawl``: both through a self-hosted Firecrawl.
+    web_backend: Literal["direct", "searxng", "firecrawl"] = "direct"
+    #: Hosts web_fetch may reach. ``*`` means any *public* host; listed names (or
+    #: ``*.example.com`` suffixes) may also resolve to private ranges. Loopback, link-local
+    #: and metadata addresses are always refused.
+    web_fetch_allowed_hosts: str = ""
+    web_fetch_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    web_fetch_max_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
+    web_fetch_max_chars: int = Field(default=20_000, ge=256)
+    web_fetch_max_redirects: int = Field(default=3, ge=0, le=10)
+    #: SearXNG base URL, or for ``direct`` a template with ``{query}`` and ``{count}``.
+    web_search_url: str = ""
+    web_search_api_key: SecretStr = SecretStr("")
+    web_search_api_key_header: str = "Authorization"
+    web_search_max_results: int = Field(default=5, ge=1, le=20)
+    web_search_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    firecrawl_url: str = ""
+    firecrawl_api_key: SecretStr = SecretStr("")
+    firecrawl_scrape_path: str = "/v1/scrape"
+    firecrawl_search_path: str = "/v1/search"
+    firecrawl_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+
+    @model_validator(mode="after")
+    def _hosted_tools_configuration(self) -> Self:
+        """An enabled hosted tool must be usable: fail at startup, not on the first call."""
+        problems: list[str] = []
+        if self.code_interpreter_enabled:
+            if self.code_interpreter_backend == "sandbox":
+                if not self.code_interpreter_url:
+                    problems.append("code_interpreter backend sandbox needs CODE_INTERPRETER_URL")
+                if not self.code_interpreter_token.get_secret_value():
+                    problems.append("code_interpreter backend sandbox needs CODE_INTERPRETER_TOKEN")
+            elif not self.e2b_api_key.get_secret_value():
+                problems.append("code_interpreter backend e2b needs E2B_API_KEY")
+        if self.web_fetch_enabled:
+            if self.web_backend == "firecrawl" and not self.firecrawl_url:
+                problems.append("web backend firecrawl needs FIRECRAWL_URL")
+            if not self.web_fetch_allowed_hosts.strip():
+                problems.append("web_fetch needs WEB_FETCH_ALLOWED_HOSTS (a list, or *)")
+        if self.web_search_enabled:
+            if self.web_backend == "firecrawl":
+                if not self.firecrawl_url:
+                    problems.append("web backend firecrawl needs FIRECRAWL_URL")
+            elif not self.web_search_url:
+                problems.append(f"web_search with backend {self.web_backend} needs WEB_SEARCH_URL")
+        if problems:
+            raise ValueError(
+                "hosted tools misconfigured (FABRIC_DP_ prefix): " + "; ".join(problems)
+            )
+        return self
+
     #: ``model: "cascade"`` (docs/model-cascade.md): how many times one request may move
     #: to a larger tier. Every attempt is metered and charged.
     cascade_max_escalations: int = Field(default=2, ge=0, le=10)
+
+    # --- hosted tools: file search (docs/file-search.md) ---
+    #: Directory holding the stamp-local file store (SQLite plus one blob per upload). Unset,
+    #: the default, disables /v1/files, /v1/vector_stores and the file_search tool (400).
+    #: Production mounts a persistent volume here (Helm: dataPlane.fileSearch.persistence).
+    file_search_store_path: str | None = None
+    file_search_max_file_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
+    file_search_max_files_per_account: int = Field(default=100, ge=1)
+    file_search_max_bytes_per_account: int = Field(default=200 * 1024 * 1024, ge=1)
+    file_search_max_stores_per_account: int = Field(default=20, ge=1)
+    file_search_max_chunks_per_store: int = Field(default=10_000, ge=1)
+    #: Chunk size and overlap in characters (about four per token).
+    file_search_chunk_chars: int = Field(default=2000, ge=100, le=64_000)
+    file_search_chunk_overlap_chars: int = Field(default=300, ge=0)
+    #: Ceiling on results one search returns; a request may ask for fewer.
+    file_search_max_results: int = Field(default=20, ge=1, le=100)
+    #: Embeddings deployment alias for hybrid ranking. Used for an account only when that
+    #: account owns a deployment with this alias; otherwise its stores rank with BM25 alone.
+    #: Embedding calls go through the ordinary proxy path, so they are authorized and metered.
+    file_search_embedding_model: str = ""
+    file_search_embedding_batch_size: int = Field(default=64, ge=1, le=2048)
+    #: Weight of the embedding (cosine) score in hybrid ranking; the rest is BM25.
+    file_search_hybrid_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # --- hosted tools: MCP connectors (docs/mcp-connectors.md) ---
+    #: Comma-separated hostnames an ``mcp`` tool's server_url may name. Empty, the default,
+    #: disables MCP connectors (400). Loopback, link-local and metadata addresses are refused
+    #: even when listed, as literals and after DNS resolution.
+    mcp_allowed_hosts: str = ""
+    #: Allow ``http://`` MCP servers. Development only; production requires HTTPS.
+    mcp_allow_insecure_http: bool = False
+    #: Wall-clock ceiling on one MCP request (initialize, tools/list, tools/call).
+    mcp_timeout_seconds: float = Field(default=20.0, gt=0, le=300)
+    #: Bytes of one MCP reply read; a larger reply is a tool error.
+    mcp_max_response_bytes: int = Field(default=512 * 1024, ge=1024)
+    #: Bytes of one tool result handed to the model; beyond this it is truncated.
+    mcp_max_result_bytes: int = Field(default=64 * 1024, ge=256)
+    mcp_max_servers_per_run: int = Field(default=4, ge=1, le=32)
+    mcp_max_tools_per_server: int = Field(default=64, ge=1, le=512)
+    #: How long a run's tools/list result is reused across resumed requests (same
+    #: X-Fabric-Run-Id). Within one request it is listed exactly once regardless.
+    mcp_tools_cache_seconds: float = Field(default=300.0, ge=0)
 
     @field_validator("jwt_issuer", "jwks_url")
     @classmethod

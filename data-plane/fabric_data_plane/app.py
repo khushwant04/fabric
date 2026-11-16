@@ -53,6 +53,8 @@ from fabric_data_plane.errors import (
     UpstreamUnavailable,
     api_error_handler,
 )
+from fabric_data_plane.hosted_tools import file_search as hosted_file_search
+from fabric_data_plane.hosted_tools import services as hosted_services
 from fabric_data_plane.limits import (
     ConcurrencyLimiter,
     RateLimit,
@@ -1745,7 +1747,9 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
         deliberately reachable only from inside the pod.
         """
         plane.reconcile_pools()
-        return Response(content=plane.metrics.render(), media_type="text/plain; version=0.0.4")
+        hosted_metrics = hosted_services.services_for(plane).metrics.render()
+        rendered = plane.metrics.render() + hosted_metrics
+        return Response(content=rendered, media_type="text/plain; version=0.0.4")
 
     @router.post(CHAT_COMPLETIONS_PATH, summary="Chat completion")
     async def chat_completions(request: Request):
@@ -1761,6 +1765,13 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
 
     # Tests and the demo stack inject a runner with a mock transport and resolver.
     tool_runner = getattr(plane, "agent_tool_runner", None) or ToolRunner(plane.settings)
+
+    # Hosted tools (hosted_tools/): /v1/files and /v1/vector_stores; embeddings use _proxy.
+    hosted = hosted_services.services_for(plane)
+    hosted.proxy = _proxy
+    router.include_router(
+        hosted_file_search.build_router(plane, hosted, read_json=_read_json)
+    )
 
     @router.post(agent_loop.AGENT_RUNS_PATH, summary="Run a server-side tool-using agent")
     async def agent_runs(request: Request):

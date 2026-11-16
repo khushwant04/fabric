@@ -85,6 +85,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "fabric-stamp.fileSearchClaimName" -}}
+{{- if .Values.dataPlane.fileSearch.persistence.existingClaim -}}
+{{- .Values.dataPlane.fileSearch.persistence.existingClaim -}}
+{{- else -}}
+{{- printf "%s-file-search" (include "fabric-stamp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "fabric-stamp.usageSpoolClaimName" -}}
 {{- if .Values.usageSpool.existingClaim -}}
 {{- .Values.usageSpool.existingClaim -}}
@@ -120,6 +128,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* Fail early on values that would otherwise produce a pod that cannot work. */}}
 {{- define "fabric-stamp.validate" -}}
+{{- include "fabric-stamp.validateHostedTools" . -}}
 {{- if and (include "fabric-stamp.managesModelHost" .) (not .Values.operator.managedModelHost.serviceAccount.create) (not .Values.operator.managedModelHost.serviceAccount.name) -}}
 {{- fail "managed model hosts need a dedicated serviceAccount.name when serviceAccount.create is false" -}}
 {{- end -}}
@@ -183,5 +192,60 @@ from the wrong upstream would be worse than not answering.
 {{- .Values.modelHost.url -}}
 {{- else -}}
 http://model-host-not-yet-placed.invalid
+{{- end -}}
+{{- end -}}
+
+{{/* Hosted tools (docs/hosted-tools.md): the self-hosted code-interpreter sandbox. */}}
+{{- define "fabric-stamp.sandboxEnabled" -}}
+{{- if and .Values.hostedTools.codeInterpreter.enabled (eq .Values.hostedTools.codeInterpreter.backend "sandbox") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Sandbox pods carry their own app.kubernetes.io/name so that no stamp selector (the
+StatefulSet, the inference Service, the stamp NetworkPolicy) ever matches them.
+*/}}
+{{- define "fabric-stamp.sandboxSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "fabric-stamp.name" . }}-sandbox
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: sandbox
+{{- end -}}
+
+{{- define "fabric-stamp.sandboxName" -}}
+{{- printf "%s-sandbox" (include "fabric-stamp.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "fabric-stamp.sandboxSecretName" -}}
+{{- default (include "fabric-stamp.sandboxName" .) .Values.sandbox.token.existingSecret -}}
+{{- end -}}
+
+{{- define "fabric-stamp.sandboxImage" -}}
+{{- if .Values.sandbox.image.digest -}}
+{{- printf "%s@%s" .Values.sandbox.image.repository .Values.sandbox.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.sandbox.image.repository (.Values.sandbox.image.tag | default .Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "fabric-stamp.validateHostedTools" -}}
+{{- $h := .Values.hostedTools -}}
+{{- if not (has $h.codeInterpreter.backend (list "sandbox" "e2b")) -}}
+{{- fail "hostedTools.codeInterpreter.backend must be sandbox or e2b" -}}
+{{- end -}}
+{{- if and $h.codeInterpreter.enabled (eq $h.codeInterpreter.backend "e2b") (not $h.codeInterpreter.e2b.existingSecret) -}}
+{{- fail "hostedTools.codeInterpreter.backend=e2b needs hostedTools.codeInterpreter.e2b.existingSecret holding the API key (never a plain value)" -}}
+{{- end -}}
+{{- if not (has $h.web.backend (list "direct" "searxng" "firecrawl")) -}}
+{{- fail "hostedTools.web.backend must be direct, searxng or firecrawl" -}}
+{{- end -}}
+{{- if and $h.webFetch.enabled (not $h.webFetch.allowedHosts) -}}
+{{- fail "hostedTools.webFetch.enabled needs webFetch.allowedHosts (a comma-separated list, or * for any public host)" -}}
+{{- end -}}
+{{- if and (or $h.webFetch.enabled $h.webSearch.enabled) (eq $h.web.backend "firecrawl") (not $h.web.firecrawl.url) -}}
+{{- fail "hostedTools.web.backend=firecrawl needs hostedTools.web.firecrawl.url (Fabric does not deploy Firecrawl)" -}}
+{{- end -}}
+{{- if and $h.webSearch.enabled (ne $h.web.backend "firecrawl") (not $h.web.searchUrl) -}}
+{{- fail "hostedTools.webSearch.enabled needs hostedTools.web.searchUrl (SearXNG base URL or an API template)" -}}
 {{- end -}}
 {{- end -}}

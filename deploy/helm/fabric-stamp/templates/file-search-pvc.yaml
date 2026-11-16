@@ -1,0 +1,20 @@
+{{- $fs := .Values.dataPlane.fileSearch -}}
+{{- if and $fs.enabled $fs.persistence.enabled (not $fs.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "fabric-stamp.fileSearchClaimName" . }}
+  labels:
+    {{- include "fabric-stamp.labels" . | nindent 4 }}
+  annotations:
+    # Customer documents must survive a chart uninstall/reinstall; delete deliberately.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ $fs.persistence.accessMode }}]
+  {{- with $fs.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $fs.persistence.size }}
+{{- end }}
