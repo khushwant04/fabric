@@ -221,4 +221,5 @@ privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Fabric is licensed under the [Apache License 2.0](LICENSE).
+Fabric is licensed under the [Apache License 2.0](LICENSE). Copyright and attribution
+notices are in [NOTICE](NOTICE).
