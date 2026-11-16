@@ -15,6 +15,15 @@ export type Membership = {
   user_id: string
   role: "owner" | "admin" | "developer" | "viewer" | string
   status: string
+  /** Present on `/v1/me` memberships: the account this membership grants access to. */
+  account_name?: string | null
+  account_slug?: string | null
+}
+
+/** One row of `GET /v1/accounts/{id}/members`: a membership with the member's profile. */
+export type Member = Membership & {
+  email?: string | null
+  display_name?: string | null
 }
 
 export type FabricUser = {
