@@ -341,6 +341,8 @@ SQLite: only the PostgreSQL run proves isolation is enforced.
 
 ## Documentation
 
+Architecture diagrams (Mermaid, plain text and draw.io): [docs/architecture](docs/architecture/README.md).
+
 Start with the [project review](docs/project-review.md) or the
 [context index](docs/context/README.md).
 
