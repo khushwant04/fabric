@@ -8,6 +8,13 @@ yet, so earlier work is summarised by period from the pull-request history.
 
 ### Added
 
+- AWS Neuron stamps: an EC2 Inferentia2 (`inf2`) or Trainium (`trn1`, `trn2`) instance runs the
+  same `bootstrap-stamp.sh` (detected from EC2 instance metadata, or `--neuron TYPE`), which
+  installs the Neuron device plugin on k3s; models run on vLLM with the Neuron backend, requesting
+  `aws.amazon.com/neuron` devices with tensor parallelism across their NeuronCores. New placement
+  classes `neuron-inf2`, `neuron-trn1` and `neuron-trn2`; Neuron never crosses with GPU or TPU
+  classes, and FP8 checkpoints are refused. The chart takes `accelerator.type=neuron`, and the
+  console shows Neuron stamps and an Inferentia2 catalog preset. See [docs/neuron.md](docs/neuron.md).
 - Stamp activity log: the agent records enrollment, the GPUs it measured, whether the GPU
   runtime works, readiness, credential rotations, applied desired-state generations,
   model-host image pulls and failures, and pushes them to `POST /v1/stamps/{id}/events`. The
