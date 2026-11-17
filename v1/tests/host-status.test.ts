@@ -3,7 +3,7 @@ import { test } from "node:test"
 
 import {
   ACTIVE_POLL_MS, IDLE_POLL_MS, diagnoseHost, elapsedSeconds, formatBytes, formatDuration, hostPollDelay, hostStages,
-  hostSummary, isDeploymentId, isFailureEvent, isFollowing, logFileName, logLines, pullInfo, queuedStages, weightProgress, isStartupWait
+  hostSummary, isDeploymentId, isFailureEvent, isFollowing, logFileName, logLines, parseLogLine, pullInfo, queuedStages, weightProgress, isStartupWait
 } from "../lib/fabric/host-status"
 import type { HostEvent, HostSnapshot } from "../lib/fabric/types"
 
@@ -108,6 +108,14 @@ test("the log viewer filters by search and level, and names downloads safely", (
   assert.deepEqual(logLines(text, "", "problems").map((line) => line.level), ["warning", "error", "error"])
   assert.equal(logLines("").length, 0)
   assert.equal(logFileName("fabric-host/../x", new Date("2026-11-16T10:00:00Z")), "fabric-host-..-x-2026-11-16T10-00-00-000Z.log")
+})
+
+test("log lines split into time, level, source and message when the prefix is known", () => {
+  assert.deepEqual(parseLogLine("INFO 11-17 11:19:05 [api_server.py:1351] vLLM API server version 0.11.0"), { severity: "INFO", time: "11-17 11:19:05", source: "api_server.py:1351", message: "vLLM API server version 0.11.0" })
+  assert.equal(parseLogLine("WARNING 11-17 11:19:05 [x.py:1] slow").severity, "WARN")
+  assert.deepEqual(parseLogLine("2026-11-17T11:19:05.123Z ERROR boom"), { severity: "ERROR", time: "11-17 11:19:05", source: null, message: "boom" })
+  assert.deepEqual(parseLogLine("  File \"core.py\", line 699"), { severity: null, time: null, source: null, message: "  File \"core.py\", line 699" })
+  assert.equal(logLines("INFO 11-17 11:19:05 [a.py:1] hi")[0].message, "hi")
 })
 
 test("polling is fast while any host starts and slow once all are ready", () => {

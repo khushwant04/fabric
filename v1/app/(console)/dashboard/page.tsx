@@ -2,6 +2,7 @@ import { DashboardOverview } from "@/components/dashboard/overview"
 import { getAccountUsage, getDeploymentStatuses, listApiKeys, listDeployments, listPlacements, listStamps } from "@/lib/fabric/data"
 import { consoleUsesEdge, edgeGatewayUrl } from "@/lib/fabric/playground-data"
 import { deploymentState, gpuCapacity, stampState } from "@/lib/fabric/resource-state"
+import { isRemoved } from "@/lib/fabric/stamp-activity"
 import { deploymentStampChoices } from "@/lib/fabric/model-catalog"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
 
@@ -67,7 +68,7 @@ export default async function DashboardPage() {
     stampOptions={deploymentStampChoices(stamps)}
     infrastructureUnavailable={stampResult.status === "rejected"}
     deployments={deploymentData === null ? null : { total: deployments.length, ready, attention, phases, recent: recent.slice(0, 5) }}
-    stamps={stampData === null ? null : { total: stamps.length, active: activeStamps.length, rows: stampRows.slice(0, 3) }}
+    stamps={stampData === null ? null : { total: stamps.length, active: activeStamps.length, rows: stampRows.filter(({ stamp }) => !isRemoved(stamp)).slice(0, 3) }}
     capacity={capacityKnown ? { used: usedGpu, total: totalGpu } : null}
     usage={usage}
     edge={edgeUrl ? { url: edgeUrl, usedByConsole: consoleUsesEdge() } : null}

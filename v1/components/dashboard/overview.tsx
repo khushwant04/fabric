@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { describeAccelerators } from "@/lib/fabric/accelerators"
 import type { DeploymentStampChoice } from "@/lib/fabric/model-catalog"
 import type { AccountUsage, Deployment, Stamp } from "@/lib/fabric/types"
-import { formatNumber, formatRelative } from "@/lib/format"
+import { formatNumber, formatRelative, orchestratorLabel } from "@/lib/format"
 
 type State = { status: string; detail: string }
 
@@ -179,7 +179,7 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
       </MetricGrid>
       {edge ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-border bg-card px-5 py-3.5 shadow-[0_1px_2px_rgb(0_0_0/0.025)]">
         <span className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground"><WaypointsIcon className="size-4" />Inference endpoint</span>
-        <GatewayUrl url={edge.url} compact />
+        <div className="min-w-0 basis-full sm:flex-1 sm:basis-0"><GatewayUrl url={edge.url} compact /></div>
       </div> : null}
     </section>
 
@@ -205,7 +205,7 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
               <span className="min-w-0 flex-1">
                 <span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{stamp.name}</span><StatusBadge status={state.status} /></span>
                 <span className="mt-1 block truncate text-[13px] text-muted-foreground">{gpus ?? "No GPUs reported"}</span>
-                <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">{[stamp.region, stamp.orchestrator].filter(Boolean).join(" · ") || "Location unavailable"} · heartbeat {formatRelative(stamp.last_heartbeat_at)}</span>
+                <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">{[stamp.region, stamp.orchestrator ? orchestratorLabel(stamp.orchestrator) : null].filter(Boolean).join(" · ") || "Location unavailable"} · heartbeat {formatRelative(stamp.last_heartbeat_at)}</span>
               </span>
             </li>
           })}
@@ -215,13 +215,13 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
 
     <section className="flex flex-col gap-3" aria-labelledby="learn">
       <h2 id="learn" className={labelClass}>Learn</h2>
-      <ul className="grid gap-x-6 gap-y-1 rounded-2xl border border-border bg-card p-3 shadow-[0_1px_2px_rgb(0_0_0/0.025)] md:grid-cols-2">
-        {learn.map((item) => <li key={item.href}>
+      <ul className="grid grid-cols-1 gap-x-6 gap-y-1 rounded-2xl border border-border bg-card p-3 shadow-[0_1px_2px_rgb(0_0_0/0.025)] md:grid-cols-2">
+        {learn.map((item) => <li key={item.href} className="min-w-0">
           <a href={item.href} target="_blank" rel="noreferrer" className="group flex items-center gap-3.5 rounded-xl p-3 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring">
             <IconTile>{item.icon}</IconTile>
             <span className="min-w-0">
               <span className="block text-sm font-medium group-hover:underline group-hover:underline-offset-4">{item.title}</span>
-              <span className="block truncate text-[13px] text-muted-foreground">{item.description}</span>
+              <span className="block text-[13px] text-muted-foreground sm:truncate">{item.description}</span>
             </span>
           </a>
         </li>)}

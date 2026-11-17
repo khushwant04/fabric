@@ -3,6 +3,7 @@
 import { startTransition, useEffect, useRef, useState } from "react"
 import { RefreshCwIcon } from "lucide-react"
 
+import { MetaLine } from "@/components/console/meta-line"
 import { Button } from "@/components/ui/button"
 import { createLiveRefresh } from "@/lib/fabric/live-refresh"
 import { refreshConsoleView } from "@/lib/fabric/refresh-actions"
@@ -52,7 +53,7 @@ export function LiveRefresh({ checkedAt, error, intervalMs = 8000 }: {
   }, [intervalMs])
   const failure = requestError || error
   return <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground" aria-live="polite">
-    <span>{failure ? <span className="text-destructive">{failure} Displayed data may be outdated.</span> : <>Last checked <time dateTime={checkedAt}>{checkedAt.slice(11, 19)} UTC</time> · auto refresh every {Math.max(5, Math.min(intervalMs / 1000, 30))}s</>}</span>
+    {failure ? <span className="text-destructive">{failure} Displayed data may be outdated.</span> : <MetaLine><span>Last checked <time dateTime={checkedAt} className="tabular-nums">{checkedAt.slice(11, 19)} UTC</time></span><span>Auto refresh every {Math.max(5, Math.min(intervalMs / 1000, 30))}s</span></MetaLine>}
     <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => { void control.current?.run(true) }}><RefreshCwIcon className={pending ? "animate-spin" : ""} />{pending ? "Refreshing…" : "Refresh"}</Button>
   </div>
 }

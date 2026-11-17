@@ -8,6 +8,7 @@ import type { ComponentType } from "react"
 
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Spinner } from "@/components/ui/spinner"
+import { finishReasonLabel } from "@/lib/fabric/agent-runs"
 import type { AgentFile, Citation, ModelItem, ToolItem } from "@/lib/fabric/agent-stream"
 import { cn } from "@/lib/utils"
 
@@ -44,7 +45,7 @@ export function ModelStep({ item, last }: { item: ModelItem; last?: boolean }) {
       {running ? <Shimmer duration={1.5} className="text-[13px]">Thinking…</Shimmer> : <>
         <span className="font-mono text-[12px] text-muted-foreground">{item.model ?? "model"}</span>
         <span className="text-xs tabular-nums text-muted-foreground">{item.inputTokens.toLocaleString("en")} in · {item.outputTokens.toLocaleString("en")} out{ms(item.latencyMs) ? ` · ${ms(item.latencyMs)}` : ""}</span>
-        {item.finishReason ? <span className="rounded-md border px-1.5 py-0.5 text-[11px] text-muted-foreground">{item.finishReason === "tool_calls" ? `${item.toolCalls} tool call${item.toolCalls === 1 ? "" : "s"}` : item.finishReason}</span> : null}
+        {item.finishReason ? <span className="rounded-md border px-1.5 py-0.5 text-[11px] text-muted-foreground">{item.finishReason === "tool_calls" ? `${item.toolCalls} tool call${item.toolCalls === 1 ? "" : "s"}` : finishReasonLabel(item.finishReason)}</span> : null}
       </>}
     </div>
     {item.cascade?.path.length ? <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">

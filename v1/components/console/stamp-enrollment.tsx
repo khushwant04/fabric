@@ -36,7 +36,7 @@ const panels = [
 function CopyCommand({ command, label }: { command: string; label: string }) {
   const [copied, setCopied] = useState("")
   const [error, setError] = useState("")
-  return <div className="w-full min-w-0 max-w-full overflow-hidden border border-border/60 bg-muted/30">
+  return <div className="w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-border bg-muted/30">
     <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
       <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><TerminalIcon className="size-3.5 shrink-0" /><span className="truncate">{label}</span></span>
       <Button type="button" variant="ghost" size="sm" aria-label={`Copy ${label}`} onClick={async () => {
@@ -125,10 +125,10 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
               const done = item.id === "cluster" ? panel !== "cluster" : item.id === "enrollment" ? !!state.enrollmentToken : false
               return <li key={item.id} className="min-w-0">
                 <button type="button" disabled={pending} aria-current={panel === item.id ? "step" : undefined} onClick={() => setPanel(item.id)} className={cn(
-                  "flex w-full min-w-0 items-center gap-2.5 px-2 py-2 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:px-3",
+                  "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:px-3",
                   panel === item.id ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}>
-                  <span aria-hidden="true" className={cn("hidden size-6 shrink-0 items-center justify-center rounded-none border text-[11px] font-medium tabular-nums sm:flex", panel === item.id ? "border-foreground/20 bg-background text-foreground" : "border-border")}>{done ? <CheckIcon className="size-3.5" /> : index + 1}</span>
+                  <span aria-hidden="true" className={cn("hidden size-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-medium tabular-nums sm:flex", panel === item.id ? "border-foreground/20 bg-background text-foreground" : "border-border")}>{done ? <CheckIcon className="size-3.5" /> : index + 1}</span>
                   <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium sm:text-[13px]">{item.title}</span><span className="mt-0.5 hidden truncate text-[11px] font-normal text-muted-foreground md:block">{item.description}</span></span>
                 </button>
               </li>
@@ -158,7 +158,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
                 <p className="text-xs leading-5 text-muted-foreground">After you generate a token, you get a single command. It installs k3s with GPU support, TLS for the public hostname and the Fabric stamp, then waits until the stamp has enrolled. Re-running it later upgrades or repairs the stamp without a new token.</p>
                 <label className="flex items-center gap-2 text-xs"><Checkbox checked={nvidia} disabled={pending} onCheckedChange={(checked) => { setNvidia(checked === true); update("runtimeClass", checked === true ? "nvidia" : "") }} />This VM has NVIDIA GPUs or Cloud TPU chips</label>
               </div>
-              <div className="border border-border/60">
+              <div className="overflow-hidden rounded-xl border border-border">
                 <p className="border-b border-border/60 px-3 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">Before you run it</p>
                 <ul className="divide-y divide-border/60 text-xs">
                   <li className="px-3 py-2">Ubuntu 22.04 or 24.04 on x86_64, with systemd.</li>
@@ -173,7 +173,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
           {panel === "enrollment" ? <>
             <p className="text-sm leading-6 text-muted-foreground">{k3s ? "Run one command on the VM. It prepares the machine, installs the stamp and joins it to this account." : "Install the Fabric Helm chart on your cluster. Its operator joins this account and reconciles the models you deploy."}</p>
             <Field><FieldLabel htmlFor={`${id}-control`}>Control-plane address</FieldLabel><Input id={`${id}-control`} type="url" value={setup.controlPlaneUrl} onChange={(event) => update("controlPlaneUrl", event.target.value)} placeholder="https://control.your-domain.com" disabled={pending} /><FieldDescription>The HTTPS address reachable from your cluster.</FieldDescription></Field>
-            <div className="border border-border/60 px-4 py-3 text-xs"><p className="font-medium">Release</p><p className="mt-1 font-mono text-[11px] text-muted-foreground">{STAMP_RELEASE.slice(0, 12)} · chart, agent, gateway and model host</p></div>
+            <div className="rounded-xl border border-border px-4 py-3 text-xs"><p className="font-medium">Release</p><p className="mt-1 font-mono text-[11px] text-muted-foreground">{STAMP_RELEASE.slice(0, 12)} · chart, agent, gateway and model host</p></div>
             {k3s ? <p className="text-xs leading-5 text-muted-foreground">{setup.gatewayHost ? <>Public endpoint: <code>https://{setup.gatewayHost}</code> with a Let&apos;s Encrypt certificate.</> : <>No public hostname yet: the stamp enrolls, but the edge gateway cannot route to it. Add one in Runtime &amp; gateway.</>}</p> : null}
             {state.enrollmentToken ? <>
               <Alert><KeyRoundIcon /><AlertTitle>{k3s ? "Setup command ready" : "Enrollment command ready"}</AlertTitle><AlertDescription>Includes your single-use token, valid until {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "its expiry"}. Closing this drawer clears it.</AlertDescription></Alert>
@@ -183,7 +183,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
               {setup.gatewayHost ? <p className="text-xs leading-5 text-muted-foreground">Ready placements report <code>https://{setup.gatewayHost}</code>. Approve this origin in the console gateway configuration so the console can reach it.</p> : <p className="text-xs leading-5 text-muted-foreground">Public inference also needs a gateway hostname and TLS. You can configure these in Runtime &amp; gateway.</p>}
             </> : <>
               <Field><FieldLabel htmlFor={`${id}-expiry`}>Token lifetime (minutes)</FieldLabel><Input id={`${id}-expiry`} type="number" min={5} max={1440} value={expiresInMinutes} onChange={(event) => { setDirty(true); setExpiresInMinutes(event.target.value) }} disabled={pending} /><FieldDescription>Generate after your cluster is ready. Valid for 5 minutes to 24 hours.</FieldDescription></Field>
-              <div className="bg-muted/40 px-4 py-3"><p className="flex items-center gap-2 text-xs font-medium"><TerminalIcon className="size-3.5 text-muted-foreground" />{k3s ? "Your setup command will appear here" : "Your Helm command will appear here"}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Generate a token to fill the command with your stamp name, cluster settings and account credential.</p></div>
+              <div className="rounded-xl bg-muted/40 px-4 py-3"><p className="flex items-center gap-2 text-xs font-medium"><TerminalIcon className="size-3.5 text-muted-foreground" />{k3s ? "Your setup command will appear here" : "Your Helm command will appear here"}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Generate a token to fill the command with your stamp name, cluster settings and account credential.</p></div>
               {generationError ? <FieldError>{generationError}</FieldError> : null}
             </>}
             {state.error ? <FieldError>{state.error}</FieldError> : null}
