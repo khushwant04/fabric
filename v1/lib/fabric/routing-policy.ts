@@ -354,7 +354,7 @@ export type FlowNode =
   | { id: string; kind: "target"; x: number; y: number; deploymentId: string; label: string; alias: string; ready: boolean; known: boolean }
 export type FlowEdge = { id: string; source: string; target: string; kind: "rule" | "split" | "fallback"; label?: string; ruleId: string }
 
-export const FLOW = { columnX: [0, 300, 700], ruleHeight: 112, targetHeight: 84, aliasWidth: 220, ruleWidth: 300, targetWidth: 240 }
+export const FLOW = { columnX: [0, 270, 660], ruleHeight: 96, targetHeight: 80, aliasWidth: 220, ruleWidth: 300, targetWidth: 240 }
 
 /**
  * Nodes and edges for the visual editor: the alias on the left, rules top to bottom in
@@ -366,7 +366,8 @@ export function flowLayout(
   version: number | null,
   document: PolicyDocument,
   deployments: DeploymentOption[],
-  issues: ValidationIssue[] = []
+  issues: ValidationIssue[] = [],
+  names: { keys?: Record<string, string>; principals?: Record<string, string> } = {}
 ): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const rules: { rule: RuleAction; match: RuleMatch | null; isDefault: boolean }[] = [
     ...document.rules.map((rule) => ({ rule: rule as RuleAction, match: rule.match, isDefault: false })),
@@ -397,7 +398,7 @@ export function flowLayout(
       ruleId: rule.id,
       index: isDefault ? 0 : index + 1,
       label: rule.name || rule.id,
-      conditions: match ? describeMatch(match) : [],
+      conditions: match ? describeMatch(match, names) : [],
       isDefault,
       issues: issues.filter((issue) => issue.rule_id === rule.id).length,
     })

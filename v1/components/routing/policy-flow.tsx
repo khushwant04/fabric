@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, type CSSProperties } from "react"
 import { useTheme } from "next-themes"
 import {
   Background,
@@ -90,6 +90,7 @@ export function PolicyFlow({
   issues,
   selected,
   onSelect,
+  names,
 }: {
   alias: string
   version: number | null
@@ -98,9 +99,10 @@ export function PolicyFlow({
   issues: ValidationIssue[]
   selected: string
   onSelect: (ruleId: string) => void
+  names?: { keys?: Record<string, string>; principals?: Record<string, string> }
 }) {
   const { resolvedTheme } = useTheme()
-  const layout = useMemo(() => flowLayout(alias, version, document, deployments, issues), [alias, version, document, deployments, issues])
+  const layout = useMemo(() => flowLayout(alias, version, document, deployments, issues, names), [alias, version, document, deployments, issues, names])
   const order = layout.nodes.filter((node) => node.kind === "target").map((node) => (node as Extract<FlowNode, { kind: "target" }>).deploymentId)
 
   const nodes: Node<Data>[] = layout.nodes.map((node) => ({
@@ -124,13 +126,15 @@ export function PolicyFlow({
       source: edge.source,
       target: edge.target,
       type: edge.kind === "rule" ? "smoothstep" : "default",
-      label: edge.kind === "rule" ? undefined : edge.label,
+      // Weights and fallback order are labelled on the selected rule only, so the other
+      // rules' edges stay quiet lines instead of a pile of overlapping labels.
+      label: edge.kind === "rule" || !active ? undefined : edge.label,
       animated: false,
       style: {
         stroke: color,
         strokeWidth: active ? 2.25 : 1.25,
         strokeDasharray: edge.kind === "fallback" ? "5 4" : undefined,
-        opacity: selected && !active && edge.kind !== "rule" ? 0.35 : 1,
+        opacity: selected && !active && edge.kind !== "rule" ? 0.22 : 1,
       },
       markerEnd: edge.kind === "rule" ? undefined : { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
       labelStyle: { fill: "var(--foreground)", fontSize: 11, fontWeight: 500 },
@@ -140,9 +144,24 @@ export function PolicyFlow({
       zIndex: active ? 10 : 0,
     }
   })
-  const height = Math.max(380, Math.min(720, layout.nodes.filter((node) => node.kind === "rule").length * FLOW.ruleHeight + 120))
+  const rows = Math.max(
+    layout.nodes.filter((node) => node.kind === "rule").length * FLOW.ruleHeight,
+    layout.nodes.filter((node) => node.kind === "target").length * FLOW.targetHeight
+  )
+  const height = Math.max(360, Math.min(760, rows + 80))
 
-  return <div className="routing-flow w-full" style={{ height }} aria-label="Routing flow">
+  // React Flow's controls read these variables; pointing them at the console's tokens keeps
+  // the zoom buttons on-theme in light and dark.
+  const tokens = {
+    height,
+    "--xy-controls-button-background-color": "var(--card)",
+    "--xy-controls-button-background-color-hover": "var(--muted)",
+    "--xy-controls-button-color": "var(--foreground)",
+    "--xy-controls-button-color-hover": "var(--foreground)",
+    "--xy-controls-button-border-color": "var(--border)",
+    "--xy-controls-box-shadow": "none",
+  } as CSSProperties
+  return <div className="routing-flow w-full" style={tokens} aria-label="Routing flow">
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -176,14 +195,16 @@ export function PolicyFlowList({
   deployments,
   selected,
   onSelect,
+  names,
 }: {
   document: PolicyDocument
   deployments: DeploymentOption[]
   selected: string
   onSelect: (ruleId: string) => void
+  names?: { keys?: Record<string, string>; principals?: Record<string, string> }
 }) {
-  const layout = flowLayout("", null, document, deployments)
-  const names = new Map(deployments.map((item) => [item.id, item.name]))
+  const layout = flowLayout("", null, document, deployments, [], names)
+  const deploymentNames = new Map(deployments.map((item) => [item.id, item.name]))
   const order = layout.nodes.filter((node) => node.kind === "target").map((node) => (node as Extract<FlowNode, { kind: "target" }>).deploymentId)
   const rules = [...document.rules.map((rule, index) => ({ rule, index: index + 1, isDefault: false })), { rule: document.default, index: 0, isDefault: true }]
   return <ol className="flex flex-col gap-2">
@@ -194,8 +215,8 @@ export function PolicyFlowList({
           <div className="flex items-center gap-2 text-sm font-medium"><span className="flex h-5 min-w-5 items-center justify-center rounded-md bg-muted px-1 text-[11px] tabular-nums">{isDefault ? "∗" : index}</span><span className="truncate">{rule.name || rule.id}</span></div>
           <div className="mt-1 text-xs text-muted-foreground">{isDefault ? "Every request no rule above matched" : node.conditions.join(" · ") || "Every request"}</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {rule.targets.map((target) => <span key={target.deployment_id} className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs"><span className="size-2 rounded-full" style={{ background: seriesColor(order, target.deployment_id) }} />{names.get(target.deployment_id) ?? "Unknown"} <span className="tabular-nums text-muted-foreground">{target.weight}%</span></span>)}
-            {rule.fallbacks.map((id, position) => <span key={id} className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground">fallback {position + 1}: {names.get(id) ?? "Unknown"}</span>)}
+            {rule.targets.map((target) => <span key={target.deployment_id} className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs"><span className="size-2 rounded-full" style={{ background: seriesColor(order, target.deployment_id) }} />{deploymentNames.get(target.deployment_id) ?? "Unknown"} <span className="tabular-nums text-muted-foreground">{target.weight}%</span></span>)}
+            {rule.fallbacks.map((id, position) => <span key={id} className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground">fallback {position + 1}: {deploymentNames.get(id) ?? "Unknown"}</span>)}
           </div>
         </button>
       </li>

@@ -1,10 +1,10 @@
 import "server-only"
 
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
-import { getDeploymentStatuses, listDeployments, listPlacements } from "@/lib/fabric/data"
+import { getDeploymentStatuses, listDeployments, listPlacements, listStamps } from "@/lib/fabric/data"
 import { deploymentState } from "@/lib/fabric/resource-state"
 import type { DeploymentOption, PolicyVersion, RoutingPolicy, RoutingPolicySummary } from "@/lib/fabric/routing-policy"
-import { getConsoleContext, getFabricAccessToken } from "@/lib/fabric/session"
+import { getConsoleContext, getFabricAccessToken, hasScope } from "@/lib/fabric/session"
 
 async function read<T>(suffix: string): Promise<T> {
   const context = await getConsoleContext()
@@ -32,12 +32,16 @@ export async function listRoutingPolicyVersions(policyId: string) {
 
 /** The account's deployments as the routing editor shows them, with observed readiness. */
 export async function routingDeploymentOptions(): Promise<DeploymentOption[]> {
-  const deployments = await listDeployments()
+  const context = await getConsoleContext()
+  const [deployments, stamps] = await Promise.all([
+    listDeployments(),
+    hasScope(context, "stamps:read") ? listStamps().catch(() => undefined) : Promise.resolve(undefined),
+  ])
   return Promise.all(deployments.map(async (item) => {
     let ready = false
     try {
       const [statuses, placements] = await Promise.all([getDeploymentStatuses(item.id), listPlacements(item.id)])
-      ready = deploymentState(item, statuses, placements).status === "ready"
+      ready = deploymentState(item, statuses, placements, stamps).status === "ready"
     } catch {
       ready = false
     }

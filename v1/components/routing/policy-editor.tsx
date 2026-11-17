@@ -74,6 +74,10 @@ export function PolicyEditor({
   const differsFromLive = !policy.live || !sameDocument(draft, policy.live.document)
   const names = useMemo(() => new Map(deployments.map((item) => [item.id, item.name])), [deployments])
   const issues = useMemo(() => [...report.errors, ...report.warnings], [report])
+  const matchNames = useMemo(() => ({
+    keys: Object.fromEntries(apiKeys.map((key) => [key.id, key.name.replace(/ \(.*\)$/, "")])),
+    principals: Object.fromEntries(principals.map((item) => [item.id, item.name])),
+  }), [apiKeys, principals])
   const order = useMemo(
     () => flowLayout(policy.alias, policy.live_version, draft, deployments).nodes
       .filter((node) => node.kind === "target")
@@ -173,14 +177,15 @@ export function PolicyEditor({
     {message ? <Alert variant={message.tone === "error" ? "destructive" : "default"}>{message.tone === "error" ? <AlertTriangleIcon /> : <CheckIcon />}<AlertTitle>{message.tone === "error" ? "Not saved" : "Done"}</AlertTitle><AlertDescription>{message.text}</AlertDescription></Alert> : null}
     {report.errors.length ? <Alert variant="destructive"><AlertTriangleIcon /><AlertTitle>{report.errors.length} problem{report.errors.length === 1 ? "" : "s"} to fix before publishing</AlertTitle><AlertDescription><ul className="list-disc pl-4">{report.errors.slice(0, 4).map((issue, index) => <li key={index}>{issue.message}</li>)}</ul></AlertDescription></Alert> : null}
 
-    <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
       <Section
+        className="xl:sticky xl:top-6"
         title="Flow"
         description={`${draft.rules.length + 1} rule${draft.rules.length ? "s" : ""} · first match wins${validating ? " · checking…" : ""}`}
         action={<Button variant="outline" size="sm" disabled={!canWrite || draft.rules.length >= MAX_RULES} onClick={addRule}><PlusIcon /> Add rule</Button>}
       >
-        <div className="hidden border-t border-border md:block"><PolicyFlow alias={policy.alias} version={policy.live_version} document={draft} deployments={deployments} issues={issues} selected={selected} onSelect={setSelected} /></div>
-        <div className="border-t border-border p-4 md:hidden"><PolicyFlowList document={draft} deployments={deployments} selected={selected} onSelect={setSelected} /></div>
+        <div className="hidden border-t border-border md:block"><PolicyFlow alias={policy.alias} version={policy.live_version} document={draft} deployments={deployments} issues={issues} selected={selected} onSelect={setSelected} names={matchNames} /></div>
+        <div className="border-t border-border p-4 md:hidden"><PolicyFlowList document={draft} deployments={deployments} selected={selected} onSelect={setSelected} names={matchNames} /></div>
       </Section>
 
       <Section title={isDefault ? "Default rule" : current.name || "Rule"} description={isDefault ? "Serves every request no rule above matched." : "Select a rule in the flow to edit it."}>
