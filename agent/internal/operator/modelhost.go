@@ -613,6 +613,15 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 	if host.RuntimeClassName != "" && !host.IsTPU() {
 		podSpec["runtimeClassName"] = host.RuntimeClassName
 	}
+	if host.IsTPU() {
+		// libtpu starts a local runtime service and connects to it on [::]:8353 while it
+		// initialises the chips. Inside an IPv4-only pod network that connection fails
+		// ("TPU initialization failed: Failed to connect to [::]:8353"), so a TPU host
+		// shares the VM's network namespace, as the TPU image's own instructions do. One
+		// model host owns a TPU VM's chips, so its port cannot collide with another's.
+		podSpec["hostNetwork"] = true
+		podSpec["dnsPolicy"] = "ClusterFirstWithHostNet"
+	}
 	if len(host.NodeSelector) > 0 {
 		podSpec["nodeSelector"] = host.NodeSelector
 	}
