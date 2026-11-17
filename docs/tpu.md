@@ -106,7 +106,7 @@ curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/boo
 
 The command is the same as on a GPU VM: the script reads the TPU type from the VM's metadata. If you
 pin an older release with `--release`, the bootstrap stops with *release … predates Cloud TPU
-support*; any `main` commit from `d9c9921` onward has it.
+support*; use `6e81997` or later, which runs the TPU model host on the VM's network.
 
 Step 1 prints `✓ 4 × TPU v6e (v6e-4, 32 GiB HBM per chip, 128 GiB total)` and
 `model dtype: bfloat16`. Step 3, *TPU runtime*, confirms that Kubernetes can allocate
