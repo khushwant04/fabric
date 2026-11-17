@@ -127,6 +127,34 @@ type Deployment struct {
 	// writers lift it to the document's single top-level section instead, since repeating
 	// one stamp's issuer on every deployment would invite the entries to disagree.
 	Verification Verification `json:"-"`
+	// RoutingPolicies is stamp-wide in the same way, and lifted to the document's top level
+	// by both writers. Nil means the control plane has not sent any.
+	RoutingPolicies *RoutingPolicies `json:"-"`
+}
+
+// RoutingPolicies is the control plane's snapshot of live routing policies for the accounts
+// served by this stamp (ADR 0023). Each policy is carried verbatim; the data plane parses
+// and enforces it, and the revision is a digest the control plane computed over all of them.
+type RoutingPolicies struct {
+	Revision string            `json:"revision"`
+	Policies []json.RawMessage `json:"policies"`
+}
+
+// ForAccount returns the policies owned by one account, in snapshot order.
+func (r *RoutingPolicies) ForAccount(accountID string) []json.RawMessage {
+	if r == nil {
+		return nil
+	}
+	owned := []json.RawMessage{}
+	for _, raw := range r.Policies {
+		var head struct {
+			AccountID string `json:"account_id"`
+		}
+		if json.Unmarshal(raw, &head) == nil && head.AccountID == accountID {
+			owned = append(owned, raw)
+		}
+	}
+	return owned
 }
 
 // Verification is how the data plane must check the tokens it is sent.
@@ -147,6 +175,8 @@ type DeploymentsFile struct {
 	// the stamp rather than any one deployment. Omitted when the control plane did not
 	// send one, which the data plane reads as "keep what you have" rather than "clear it".
 	Verification *Verification `json:"verification,omitempty"`
+	// Omitted when the control plane sent none, which the data plane reads as no policies.
+	RoutingPolicies *RoutingPolicies `json:"routing_policies,omitempty"`
 }
 
 // writeAtomic replaces a file in one step so a reader never sees a partial
@@ -231,6 +261,12 @@ func WriteDeployments(path string, deployments []Deployment) error {
 		if entry.Verification.JWTIssuer != "" || entry.Verification.JWKSURL != "" {
 			verification := entry.Verification
 			document.Verification = &verification
+			break
+		}
+	}
+	for _, entry := range sorted {
+		if entry.RoutingPolicies != nil {
+			document.RoutingPolicies = entry.RoutingPolicies
 			break
 		}
 	}

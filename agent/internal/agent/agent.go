@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -146,6 +147,9 @@ type Agent struct {
 	// carrying this. An empty value means the control plane has not told us, which leaves
 	// the data plane on its locally configured values.
 	verification state.Verification
+	// routingPolicies is the last routing-policy snapshot the control plane sent, carried to
+	// the data plane like verification. Nil until one arrives.
+	routingPolicies *state.RoutingPolicies
 	// Status reports the control plane has not accepted yet, retried on later
 	// passes because desired state will not mention them again.
 	pendingStatus map[string]controlplane.DesiredDeployment
@@ -255,6 +259,9 @@ func (a *Agent) Ensure(ctx context.Context) error {
 		existingDeployments, readErr := state.ReadDeployments(a.config.DeploymentsPath)
 		switch {
 		case readErr == nil:
+			// The rendered snapshot is the last good one; keep carrying it until the control
+			// plane sends a newer one.
+			a.routingPolicies = existingDeployments.RoutingPolicies
 			for _, deployment := range existingDeployments.Deployments {
 				generation, knownGeneration := existing.DeploymentGenerations[deployment.DeploymentID]
 				if !knownGeneration {
@@ -681,6 +688,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		previousGenerations[id] = generation
 	}
 	previousVerification := a.verification
+	previousPolicies := a.routingPolicies
 	previousAck := a.credentials.AckedGeneration
 	changed := false
 	var changes []string
@@ -694,6 +702,14 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 		}
 		a.verification = updated
 		changed = true
+	}
+	if updated := routingPoliciesFrom(desired.RoutingPolicies); updated != nil &&
+		(a.routingPolicies == nil || a.routingPolicies.Revision != updated.Revision) {
+		a.log.Info("routing policies updated from the control plane",
+			"revision", updated.Revision, "policies", len(updated.Policies))
+		a.routingPolicies = updated
+		changed = true
+		changes = append(changes, "routing policies "+shortRevision(updated.Revision))
 	}
 
 	for _, assignment := range desired.Deployments {
@@ -752,6 +768,7 @@ func (a *Agent) ReconcileOnce(ctx context.Context) ([]state.Deployment, error) {
 			a.known = previousKnown
 			a.credentials.DeploymentGenerations = previousGenerations
 			a.verification = previousVerification
+			a.routingPolicies = previousPolicies
 			return nil, err
 		}
 	}
@@ -980,6 +997,7 @@ func (a *Agent) configured() []state.Deployment {
 		// not require rewriting every remembered entry and cannot leave two of them
 		// disagreeing about one stamp's issuer.
 		entry.Verification = a.verification
+		entry.RoutingPolicies = a.routingPolicies
 		entries = append(entries, entry)
 	}
 	return entries
@@ -1240,6 +1258,25 @@ func toolCallingFromSpec(spec map[string]any) (*bool, string) {
 		return &enabled, parser
 	}
 	return nil, parser
+}
+
+// routingPoliciesFrom converts the control plane's snapshot; nil when none was sent.
+func routingPoliciesFrom(reported *controlplane.RoutingPolicies) *state.RoutingPolicies {
+	if reported == nil || reported.Revision == "" {
+		return nil
+	}
+	policies := reported.Policies
+	if policies == nil {
+		policies = []json.RawMessage{}
+	}
+	return &state.RoutingPolicies{Revision: reported.Revision, Policies: policies}
+}
+
+func shortRevision(revision string) string {
+	if len(revision) > 12 {
+		return revision[:12]
+	}
+	return revision
 }
 
 // verificationFrom reads the control plane's reported verification contract.

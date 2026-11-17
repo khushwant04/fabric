@@ -120,9 +120,14 @@ type Spec struct {
 	// data plane's configuration from these resources and has no other channel to read
 	// stamp-wide state from. Every resource on a stamp carries the same values, and the
 	// rendered document holds one copy at the top rather than one per entry.
-	JWTIssuer  string `json:"jwtIssuer,omitempty"`
-	JWKSURL    string `json:"jwksUrl,omitempty"`
-	Generation int    `json:"generation"`
+	JWTIssuer string `json:"jwtIssuer,omitempty"`
+	JWKSURL   string `json:"jwksUrl,omitempty"`
+	// RoutingPolicies is this resource's account's live routing policies, as a JSON array
+	// carried verbatim (ADR 0023). Account-wide rather than per-deployment, here for the
+	// same reason as the issuer; the rendered document holds each policy once. Empty means
+	// the agent had no snapshot, which leaves policies out of the document.
+	RoutingPolicies string `json:"routingPolicies,omitempty"`
+	Generation      int    `json:"generation"`
 }
 
 // DesiredReplicas is the replica count to run, defaulting to one when unset.
@@ -693,6 +698,10 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 		canonicalBody["verification"] = verification
 		body["verification"] = verification
 	}
+	if policies := routingPoliciesSection(items); policies != nil {
+		canonicalBody["routing_policies"] = policies
+		body["routing_policies"] = policies
+	}
 	canonical, err := json.Marshal(canonicalBody)
 	if err != nil {
 		return "", fmt.Errorf("render canonical configuration: %w", err)
@@ -704,6 +713,59 @@ func renderConfig(items []ModelDeployment, backends map[string][]dataPlaneBacken
 		return "", fmt.Errorf("render configuration: %w", err)
 	}
 	return string(document) + "\n", nil
+}
+
+// dataPlaneRoutingPolicies is the routing-policy snapshot as the data plane reads it.
+type dataPlaneRoutingPolicies struct {
+	Revision string            `json:"revision"`
+	Policies []json.RawMessage `json:"policies"`
+}
+
+// routingPoliciesSection collects each account's policies once from the resources that
+// carry them. Nil when no resource carries any, so a stamp without policies renders the
+// same document it always did.
+func routingPoliciesSection(items []ModelDeployment) *dataPlaneRoutingPolicies {
+	seenAccount := map[string]bool{}
+	type keyed struct {
+		key string
+		raw json.RawMessage
+	}
+	var collected []keyed
+	carried := false
+	for _, item := range items {
+		if item.Spec.RoutingPolicies == "" || seenAccount[item.Spec.AccountID] {
+			continue
+		}
+		var policies []json.RawMessage
+		if err := json.Unmarshal([]byte(item.Spec.RoutingPolicies), &policies); err != nil {
+			continue
+		}
+		carried = true
+		seenAccount[item.Spec.AccountID] = true
+		for _, raw := range policies {
+			var head struct {
+				AccountID string `json:"account_id"`
+				Alias     string `json:"alias"`
+			}
+			// A resource only ever speaks for its own account.
+			if json.Unmarshal(raw, &head) != nil || head.AccountID != item.Spec.AccountID {
+				continue
+			}
+			collected = append(collected, keyed{key: head.AccountID + "\x00" + head.Alias, raw: raw})
+		}
+	}
+	if !carried {
+		return nil
+	}
+	sort.Slice(collected, func(i, j int) bool { return collected[i].key < collected[j].key })
+	section := &dataPlaneRoutingPolicies{Policies: make([]json.RawMessage, 0, len(collected))}
+	for _, item := range collected {
+		section.Policies = append(section.Policies, item.raw)
+	}
+	canonical, _ := json.Marshal(section.Policies)
+	digest := sha256.Sum256(canonical)
+	section.Revision = hex.EncodeToString(digest[:])
+	return section
 }
 
 // dataPlaneVerification is the stamp-wide token-verification contract as the data plane
