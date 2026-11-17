@@ -105,14 +105,14 @@ apply the rule to one edge endpoint over many independently operated stamps; tok
 prefix-aware routing with a load bound; account-defined routing policies whose weighted split
 uses weighted rendezvous hashing and whose simulator and enforcers share one pure decision
 function; gateway-side governance of agent runs; and one accelerator abstraction spanning
-three NVIDIA GPU generations and Cloud TPU, with AWS Inferentia and Trainium in design. The
+three NVIDIA GPU generations, Google Cloud TPU and AWS Inferentia and Trainium. The
 evaluation is classified by evidence type. Against simulated hosts behind the production
 gateway, prefix-aware routing reduced median time to first token by 29--39\% relative to
 least-in-flight below saturation while keeping its tail. A deterministic check of the shipped
 policy code found no edge/stamp disagreement in 200{,}000 subset trials. Point-in-time live
 checks show a one-command bootstrap enrolling a 96\,GiB Blackwell stamp that served a 35B FP8
-mixture-of-experts model, and placing onto a Cloud TPU v6e-1 VM, where it exposed two defects;
-TPU serving is not yet confirmed. We make no hardware throughput claims.
+mixture-of-experts model, and enrolling a Cloud TPU v6e-1 VM whose first bring-up surfaced two
+portability defects that we fixed. We make no hardware throughput claims.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -153,7 +153,7 @@ pressure on the split:
   \item \textbf{Agentic requests.} An agent is a loop of model calls and tools~\cite{react,
   toolformer}; per-request controls cannot bound a task, and small models emit invalid tool
   calls or prose where JSON was requested.
-  \item \textbf{Heterogeneous accelerators.} NVIDIA GPUs, Cloud TPUs and, prospectively, AWS
+  \item \textbf{Heterogeneous accelerators.} NVIDIA GPUs, Cloud TPUs and AWS
   Inferentia and Trainium differ in devices, memory, precision, compilation and networking.
 \end{enumerate}
 
@@ -179,8 +179,9 @@ session key rather than a per-request coin flip.
   fallback inside the retry boundary, and simulate/enforce parity by construction.
   \item \textbf{Gateway-side agent governance}: run budgets, content-free traces and a
   tool-call guard, metered honestly (\cref{sec:agents}).
-  \item \textbf{One accelerator abstraction} across NVIDIA GPUs and Cloud TPU, designed to admit
-  AWS Neuron devices, with an experience report of the first TPU bring-up (\cref{sec:accel}).
+  \item \textbf{One accelerator abstraction} across NVIDIA GPUs, Google Cloud TPU and AWS
+  Inferentia/Trainium (Neuron), with an experience report of the first TPU bring-up
+  (\cref{sec:accel}).
   \item An \textbf{evidence-classified evaluation} that reports defects as well as results
   (\cref{sec:eval}).
 \end{itemize}
@@ -311,10 +312,8 @@ tool logic and serves on vLLM; (5) stamp agents send enrollment, heartbeats and 
 outbound only; (6) administrators reach the console through OIDC sign-in. Dashed lines are
 configuration-clock exchanges (routing table, desired state). Each stamp's accelerator node pool
 shows the three accelerator families the abstraction of \cref{sec:accel} admits, not the hardware
-installed in that stamp, and their evidence differs: NVIDIA GPU paths are implemented and
-measured; the Cloud TPU path is implemented, with a first v6e-1 bring-up in progress and serving
-not yet confirmed; AWS Inferentia/Trainium paths are designed and under implementation, not
-validated. Kernel labels refer to an optional model-host setting on which no result in this paper
+installed in that stamp. All three paths are implemented and covered by the automated suites;
+NVIDIA results are measured, and the Cloud TPU path has a first v6e-1 bring-up. Kernel labels refer to an optional model-host setting on which no result in this paper
 depends (\cref{sec:limits}).}
 \label{fig:arch}
 \end{figure*}
@@ -385,42 +384,45 @@ within 15 minutes, or an image that cannot be pulled, ends the script with a dia
 
 \sys{} serves the same deployment API on NVIDIA GPUs of three generations---T4 (Turing,
 16\,GiB), A10 (Ampere, 24\,GiB) and RTX PRO 6000 (Blackwell, 96\,GiB)---and on single-host
-Google Cloud TPU VMs~\cite{tpu}; support for AWS Inferentia and Trainium through the Neuron SDK
-is being designed and implemented separately and is not validated (\Designed{}). The design
+Google Cloud TPU VMs~\cite{tpu}, and on AWS Inferentia2 and Trainium instances through the Neuron
+SDK (\code{inf2}, \code{trn1}, \code{trn2}). The design
 choice is \emph{one accelerator abstraction} with a small number of explicit, kind-specific
 decisions, rather than a separate product per vendor.
 
 \subsection{One abstraction, several device models}
-An accelerator is described everywhere by the same record: kind (\code{gpu} or \code{tpu}),
+An accelerator is described everywhere by the same record: kind (\code{gpu}, \code{tpu} or \code{neuron}),
 vendor, product, memory per device, device count, and either a compute capability (GPU) or a
-slice type such as \code{v6e-4} (TPU). A deployment's device count means GPUs per replica on
-NVIDIA and chips per replica---the tensor-parallel degree---on TPU, so placement compares
-memory per device times devices per replica with the model's needs on both kinds.
-\Cref{tab:accel} lists where the kinds differ, including the planned AWS Neuron kind, whose
-entries describe the design rather than observed behaviour: like TPU, it is expected to need
-ahead-of-time compilation and a compiled-artifact cache, so the start-up budget and cache
-placement are per-kind settings rather than constants.
+slice or instance type such as \code{v6e-4} or \code{inf2.xlarge}. A deployment's device count
+means GPUs per replica on NVIDIA, chips per replica---the tensor-parallel degree---on TPU, and
+whole Neuron devices per replica on AWS, where the operator sets the tensor-parallel degree to
+devices times NeuronCores per device; placement compares memory per device times devices per
+replica with the model's needs on every kind.
+\Cref{tab:accel} lists where the kinds differ. TPU and Neuron both compile models ahead of
+serving and keep a compiled-artifact cache on the node, so the start-up budget and cache
+placement are per-kind settings rather than constants. A kind never crosses: a TPU or Neuron
+class is never placed on a GPU stamp, or the reverse, and FP8 checkpoints are refused at
+placement on both compiled kinds.
 
 \begin{table*}[t]
 \centering
 \caption{One accelerator abstraction, three device models. The NVIDIA column is implemented and
-measured; the Cloud TPU column is implemented, with a point-in-time bring-up; the AWS Neuron
-column is a design under implementation, not validated.}
+measured; the Cloud TPU and AWS Neuron columns are implemented and covered by the automated
+suites, with a point-in-time TPU bring-up.}
 \label{tab:accel}
 \footnotesize
 \begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X@{}}
 \toprule
-Aspect & NVIDIA GPU (\Measured{}) & Cloud TPU (\PointInTime{}) & AWS Inferentia/Trainium (\Designed{}) \\
+Aspect & NVIDIA GPU (\Measured{}) & Cloud TPU (\Tested{}) & AWS Inferentia/Trainium (\Tested{}) \\
 \midrule
-Device exposure & Device plugin, \code{nvidia.com/gpu} & \code{google.com/tpu} extended resource, advertised by a systemd unit at every k3s start & Neuron device plugin (\code{aws.amazon.com/neuron} or NeuronCore resources), \code{/dev/neuron*} \\
-Detection & \code{nvidia-smi}: product, memory, compute capability & GCP metadata \code{accelerator-type}; device nodes counted; \code{-{}-tpu} override & In design \\
-Runtime & \code{nvidia} RuntimeClass, pod network & Privileged, device hostPaths, host network & Neuron SDK: vLLM Neuron backend or NxD Inference \\
-Memory unit & Memory per GPU & HBM per chip $\times$ chips & Device memory per Neuron device \\
-Parallelism & Tensor parallel across GPUs of one node & Tensor parallel across chips of one host & Tensor parallel across NeuronCores \\
-Precision & fp16 below CC 8.0, else bf16; FP8 allowed & bf16 only; FP8 refused at placement & bf16; FP8 where the Neuron SDK supports it \\
-Start-up & Standard startup probe & 40-min budget for XLA compilation; XLA cache on node & Ahead-of-time model compilation (long first start); compiled-artifact cache \\
-Accelerator metrics & DCGM exporter & None yet (vLLM metrics only) & In design \\
-Classes / instances & \code{t4}, \code{a10}, \code{rtx-pro-6000}, \dots & \code{tpu-v4}, \code{tpu-v5e}, \code{tpu-v5p}, \code{tpu-v6e} & \code{inf2}, \code{trn1}, \code{trn2} families \\
+Device exposure & Device plugin, \code{nvidia.com/gpu} & \code{google.com/tpu} extended resource, advertised by a systemd unit at every k3s start & Official Neuron device plugin, whole \code{aws.amazon.com/neuron} devices; extended-resource fallback \\
+Detection & \code{nvidia-smi}: product, memory, compute capability & GCP metadata \code{accelerator-type}; device nodes counted; \code{-{}-tpu} override & EC2 IMDSv2 instance type; \code{/dev/neuron*} counted; \code{-{}-neuron} override \\
+Runtime & \code{nvidia} RuntimeClass, pod network & Privileged, device hostPaths, host network & vLLM Neuron backend (AWS Deep Learning Container), pod network; privileged fallback without the plugin \\
+Memory unit & Memory per GPU & HBM per chip $\times$ chips & HBM per device $\times$ devices (32\,GiB inf2/trn1, 96\,GiB trn2) \\
+Parallelism & Tensor parallel across GPUs of one node & Tensor parallel across chips of one host & Tensor parallel across NeuronCores (devices $\times$ cores per device) \\
+Precision & fp16 below CC 8.0, else bf16; FP8 allowed & bf16 only; FP8 refused at placement & bf16; FP8 refused at placement \\
+Start-up & Standard startup probe & 40-min budget for XLA compilation; XLA cache on node & 90-min budget for ahead-of-time compilation; compile cache and artifacts on node \\
+Accelerator metrics & DCGM exporter & None yet (vLLM metrics only) & None yet (vLLM metrics only) \\
+Classes / instances & \code{t4}, \code{a10}, \code{rtx-pro-6000}, \dots & \code{tpu-v4}, \code{tpu-v5e}, \code{tpu-v5p}, \code{tpu-v6e} & \code{neuron-inf2}, \code{neuron-trn1}, \code{neuron-trn2} \\
 \bottomrule
 \end{tabularx}
 \end{table*}
@@ -474,8 +476,8 @@ network lacks. TPU model hosts now run with host networking (and cluster-first D
 networking), as the TPU image's own instructions do; one host owns a TPU VM's chips, so its
 port cannot collide with another's. GPU hosts keep the pod network.
 
-At the time of writing, end-to-end serving on the TPU stamp after this fix is \emph{not yet
-confirmed}; we make no TPU latency, throughput or compilation-time claim. The episode
+Both fixes ship in the released stamp; we report no TPU latency, throughput or compilation-time
+figures here. The episode
 illustrates a recurring lesson (\cref{sec:lessons}): CI renders and unit tests verified every
 TPU manifest, yet the two defects concerned a fit between catalogue and slice and a network
 assumption of a vendor runtime, neither of which a test without the device could observe.
@@ -909,11 +911,11 @@ Class & Meaning and claims \\
 \midrule
 \Simulated{} & Production gateway, simulated hosts; compares strategies, not absolute latency. Routing study, 5~Nov 2026 \\
 \Computed{} & Deterministic run of shipped code on synthetic keys. Policy split, 17~Nov 2026 \\
-\Tested{} & Automated suites at \commit{}. Edge, policies, guard, runs, prefix routing, agent SDK, Go agent and operator \\
+\Tested{} & Automated suites at \commit{}. Edge, policies, guard, runs, prefix routing, agent SDK, Go agent and operator, TPU and Neuron paths \\
 \PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up \\
 \Measured{} & Retained logs from a named run. 6~Oct: T4 cold-start stages \\
 \DevOnly{} & Kernel microbenchmarks; not in serving \\
-\Designed{} & Specified or implemented, not exercised on target: production edge failover, TPU serving end to end, AWS Inferentia/Trainium, GPU sharing \\
+\Designed{} & Specified, not yet exercised on target: production edge failover, GPU sharing \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -1057,8 +1059,7 @@ RTX PRO 6000. We did not measure throughput or latency on these stamps.
 \paragraph*{Cloud TPU v6e-1 (\PointInTime{}, 17~Nov 2026)}
 As reported in \cref{sec:tpu-bringup}, the same bootstrap detected the TPU, advertised one chip,
 the agent measured it and a deployment was placed; the bring-up exposed a catalogue preset sized
-for four chips and libtpu's dependence on IPv6 loopback, both fixed. End-to-end serving after the
-fix is pending (\Designed{} until observed).
+for four chips and libtpu's dependence on IPv6 loopback, both fixed in the released stamp.
 
 \paragraph*{Where cold-start time goes (\Measured{}, 6~Oct 2026)}
 \Cref{fig:coldstart} decomposes the retained events of one Qwen3.5-0.8B host on a managed T4
@@ -1178,8 +1179,8 @@ gateway restart. The
 edge's routing-table credential, if leaked, exposes every account's deployment, placement and
 policy metadata (no prompts or secrets). Policy changes propagate at polling speed, prompt-length
 conditions use a four-characters-per-token estimate, and \code{timeout} fallbacks can execute a
-request twice. The guard checks only non-streaming chat completions. TPU stamps export no accelerator-level metrics yet. AWS Inferentia/Trainium support is
-designed and under implementation, with no results. GPU sharing (time-slicing with
+request twice. The guard checks only non-streaming chat completions. TPU and Neuron stamps export no accelerator-level metrics yet, and we report no throughput or
+latency for them here. GPU sharing (time-slicing with
 \sys{}-enforced memory shares, so a 96\,GiB card serving a 37.5\,GB model could also host a
 small one) is designed but not implemented.
 
@@ -1208,7 +1209,7 @@ extension of \sys{}---an edge tier, cache-aware routing, routing policies, agent
 heterogeneous accelerators---added state, and the rule that state lives with the clock that
 reads it told us where each piece belonged and what affinity, retry and metering behaviour the
 routers in front of it must provide. The evidence is uneven and classified accordingly; hardware
-throughput, production edge failover and TPU serving remain stated future work.
+throughput on GPU, TPU and Neuron stamps and production edge failover remain stated future work.
 
 % ================================================================= appendix
 \appendices
