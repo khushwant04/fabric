@@ -103,7 +103,7 @@ class TPUChartTest(unittest.TestCase):
     def test_bad_values_are_refused(self):
         rejected = render({"accelerator.type": "amd"})
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("accelerator.type must be nvidia or tpu", rejected.stderr)
+        self.assertIn("accelerator.type must be nvidia, tpu or neuron", rejected.stderr)
         rejected = render(TPU | {"accelerator.tpu.devices": "{/etc/passwd}"})
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("accelerator.tpu.devices must be paths under /dev", rejected.stderr)

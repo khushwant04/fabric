@@ -133,8 +133,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "managed model hosts need a dedicated serviceAccount.name when serviceAccount.create is false" -}}
 {{- end -}}
 {{- $accelerator := .Values.accelerator | default dict -}}
-{{- if not (has (toString ($accelerator.type | default "nvidia")) (list "nvidia" "tpu")) -}}
-{{- fail "accelerator.type must be nvidia or tpu" -}}
+{{- if not (has (toString ($accelerator.type | default "nvidia")) (list "nvidia" "tpu" "neuron")) -}}
+{{- fail "accelerator.type must be nvidia, tpu or neuron" -}}
+{{- end -}}
+{{- if include "fabric-stamp.isNeuron" . -}}
+{{- range .Values.accelerator.neuron.devices -}}
+{{- if not (regexMatch "^/dev/neuron[0-9]+$" (toString .)) -}}
+{{- fail "accelerator.neuron.devices must be Neuron device nodes such as /dev/neuron0" -}}
+{{- end -}}
+{{- end -}}
+{{- if not (has (int .Values.accelerator.neuron.coresPerDevice) (list 1 2 4 8)) -}}
+{{- fail "accelerator.neuron.coresPerDevice must be 1, 2, 4 or 8" -}}
+{{- end -}}
 {{- end -}}
 {{- if include "fabric-stamp.isTPU" . -}}
 {{- range .Values.accelerator.tpu.devices -}}
@@ -198,12 +208,35 @@ true
 {{- end -}}
 
 {{/*
-The image model hosts run: the vLLM TPU image on a TPU stamp, otherwise
-operator.managedModelHost.image. The host is managed only when that image is set either way.
+Whether model hosts run on AWS Neuron devices (Inferentia2, Trainium) (docs/neuron.md).
+*/}}
+{{- define "fabric-stamp.isNeuron" -}}
+{{- $accelerator := .Values.accelerator | default dict -}}
+{{- if eq (toString $accelerator.type) "neuron" -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether model hosts run on something other than NVIDIA GPUs, where the NVIDIA runtime class
+and the DCGM exporter mean nothing.
+*/}}
+{{- define "fabric-stamp.isNotNVIDIA" -}}
+{{- if or (include "fabric-stamp.isTPU" .) (include "fabric-stamp.isNeuron" .) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The image model hosts run: the vLLM TPU image on a TPU stamp, the vLLM Neuron image on a
+Neuron stamp, otherwise operator.managedModelHost.image. The host is managed only when that
+image is set either way.
 */}}
 {{- define "fabric-stamp.modelHostImage" -}}
 {{- if and (include "fabric-stamp.isTPU" .) .Values.accelerator.tpu.image -}}
 {{- .Values.accelerator.tpu.image -}}
+{{- else if and (include "fabric-stamp.isNeuron" .) .Values.accelerator.neuron.image -}}
+{{- .Values.accelerator.neuron.image -}}
 {{- else -}}
 {{- .Values.operator.managedModelHost.image -}}
 {{- end -}}
