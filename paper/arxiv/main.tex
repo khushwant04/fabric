@@ -390,7 +390,7 @@ is being designed and implemented separately and is not validated (\Designed{}).
 choice is \emph{one accelerator abstraction} with a small number of explicit, kind-specific
 decisions, rather than a separate product per vendor.
 
-\subsection{One abstraction, two device models}
+\subsection{One abstraction, several device models}
 An accelerator is described everywhere by the same record: kind (\code{gpu} or \code{tpu}),
 vendor, product, memory per device, device count, and either a compute capability (GPU) or a
 slice type such as \code{v6e-4} (TPU). A deployment's device count means GPUs per replica on
