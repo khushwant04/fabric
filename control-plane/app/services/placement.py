@@ -67,18 +67,21 @@ _CAPABILITY_TIERS: tuple[tuple[int, int], ...] = ((8, 9), (8, 0), (7, 0))
 _MEMORY_TOLERANCE = 0.9
 
 
-#: Accelerator kinds. A class of one kind is never satisfied by a stamp of the other: a CUDA
-#: image cannot run on a TPU and the TPU image cannot run on a GPU, whatever the memory says.
+#: Accelerator kinds. A class of one kind is never satisfied by a stamp of another: a CUDA
+#: image cannot run on a TPU, the TPU image cannot run on a GPU, and the Neuron image runs
+#: only on AWS Inferentia/Trainium, whatever the memory says.
 GPU = "gpu"
 TPU = "tpu"
+NEURON = "neuron"
 
 
 @dataclass(frozen=True)
 class GpuClass:
     """What a named class requires: a frame buffer and an arithmetic tier.
 
-    For a TPU class ``memory_bytes`` is HBM per chip and ``capability`` is ``(0, 0)``:
-    compute capability is a CUDA notion, and the kind is what separates the two families.
+    For a TPU class ``memory_bytes`` is HBM per chip, and for a Neuron class HBM per device;
+    ``capability`` is then ``(0, 0)``: compute capability is a CUDA notion, and the kind is
+    what separates the families.
     """
 
     memory_bytes: int
@@ -118,6 +121,12 @@ GPU_CLASSES: dict[str, GpuClass] = {
     "tpu-v4": GpuClass(32 * _GIB, (0, 0), TPU),
     "tpu-v6e": GpuClass(32 * _GIB, (0, 0), TPU),
     "tpu-v5p": GpuClass(95 * _GIB, (0, 0), TPU),
+    # AWS Neuron, by HBM per device. A deployment's gpu_count is Neuron devices per replica;
+    # the host turns devices into NeuronCores for tensor parallelism (2 per Inferentia2 or
+    # Trainium device, 4 logical per Trainium2 device).
+    "neuron-inf2": GpuClass(32 * _GIB, (0, 0), NEURON),
+    "neuron-trn1": GpuClass(32 * _GIB, (0, 0), NEURON),
+    "neuron-trn2": GpuClass(96 * _GIB, (0, 0), NEURON),
 }
 
 #: Reported product strings mapped to a class, used *only* to fill in memory or capability a
@@ -145,6 +154,13 @@ _PRODUCT_CLASSES: dict[str, str] = {
     "tpu v6e": "tpu-v6e",
     "tpu v5p": "tpu-v5p",
     "tpu v4": "tpu-v4",
+    "inferentia2": "neuron-inf2",
+    "aws inferentia2": "neuron-inf2",
+    "trainium": "neuron-trn1",
+    "trainium1": "neuron-trn1",
+    "aws trainium": "neuron-trn1",
+    "trainium2": "neuron-trn2",
+    "aws trainium2": "neuron-trn2",
 }
 
 
@@ -154,8 +170,14 @@ def is_tpu_class(gpu_class: str) -> bool:
     return known is not None and known.kind == TPU
 
 
+def is_neuron_class(gpu_class: str) -> bool:
+    """Whether a class names AWS Neuron (Inferentia/Trainium) devices."""
+    known = GPU_CLASSES.get(gpu_class)
+    return known is not None and known.kind == NEURON
+
+
 def fp8_checkpoint(release: Any) -> bool:
-    """Whether a model release names an FP8 checkpoint, which the TPU backend cannot serve."""
+    """Whether a model release names an FP8 checkpoint, which TPU and Neuron stamps refuse."""
     if not isinstance(release, str):
         return False
     name = release.strip().lower().rsplit("/", 1)[-1]
@@ -392,13 +414,15 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
         if not isinstance(entry, dict) or _positive_int(entry.get("count")) == 0:
             # No devices of this class present, so it says nothing about what can run here.
             continue
-        kind = TPU if entry.get("accelerator") == TPU else GPU
+        reported_kind = entry.get("accelerator")
+        kind = reported_kind if reported_kind in (TPU, NEURON) else GPU
         kinds.add(kind)
         described += 1
         memory = _positive_int(entry.get("memory_bytes"))
         capability = _parse_capability(entry.get("compute_capability"))
-        if kind == TPU and capability is None:
-            # A TPU has no compute capability; its kind and HBM are what placement judges.
+        if kind in (TPU, NEURON) and capability is None:
+            # A TPU or Neuron device has no compute capability; its kind and HBM are what
+            # placement judges.
             capability = (0, 0)
         if memory == 0 or capability is None:
             # Fall back to the product only for the part that was not reported.
@@ -539,6 +563,14 @@ def check_fit(
                 # What a replica can hold is HBM x chips, so say both sides of it.
                 details = {
                     "chips_per_replica": demand.gpus_per_replica,
+                    "required_total_hbm_bytes": required.minimum_memory_bytes
+                    * demand.gpus_per_replica,
+                    "available_total_hbm_bytes": capacity.weakest_memory_bytes
+                    * demand.gpus_per_replica,
+                }
+            elif required.kind == NEURON:
+                details = {
+                    "devices_per_replica": demand.gpus_per_replica,
                     "required_total_hbm_bytes": required.minimum_memory_bytes
                     * demand.gpus_per_replica,
                     "available_total_hbm_bytes": capacity.weakest_memory_bytes

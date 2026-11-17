@@ -1982,14 +1982,15 @@
         "type": "object"
       },
       "GpuCapability": {
-        "description": "One class of accelerator on a stamp.\n\nNamed for GPUs because that is all a stamp reported before Cloud TPU support. A TPU\nentry sets ``accelerator`` to ``\"tpu\"``; ``count`` is then chips and ``memory_bytes`` HBM\nper chip, and ``compute_capability`` is absent because it is a CUDA notion. An NVIDIA\nentry omits the three accelerator fields, which keeps an existing agent's report valid.",
+        "description": "One class of accelerator on a stamp.\n\nNamed for GPUs because that is all a stamp reported before Cloud TPU support. A TPU\nentry sets ``accelerator`` to ``\"tpu\"``; ``count`` is then chips and ``memory_bytes`` HBM\nper chip, and ``compute_capability`` is absent because it is a CUDA notion. An AWS Neuron\nentry sets ``accelerator`` to ``\"neuron\"``; ``count`` is then Neuron devices and\n``memory_bytes`` HBM per device. An NVIDIA entry omits the three accelerator fields,\nwhich keeps an existing agent's report valid.",
         "properties": {
           "accelerator": {
             "anyOf": [
               {
                 "enum": [
                   "gpu",
-                  "tpu"
+                  "tpu",
+                  "neuron"
                 ],
                 "type": "string"
               },
@@ -2003,7 +2004,7 @@
             "anyOf": [
               {
                 "maxLength": 32,
-                "pattern": "^[a-z0-9][a-z0-9-]*$",
+                "pattern": "^[a-z0-9][a-z0-9.-]*$",
                 "type": "string"
               },
               {
