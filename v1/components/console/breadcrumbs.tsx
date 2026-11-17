@@ -11,6 +11,7 @@ const labels: Record<string, string> = {
   deployments: "Deployments",
   new: "Create",
   stamps: "Inference stamps",
+  routing: "Routing",
   usage: "Usage",
   access: "Identity & access",
   members: "Members",
