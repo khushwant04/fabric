@@ -433,6 +433,9 @@ class Demo:
         self.routing_policies["code-review"] = review["id"]
         for stamp in self.stamps.values():
             self.run_agent(stamp)  # deliver the published policy with desired state
+        # The agent pass reports its own view of each placement; restore what the operator
+        # would observe, as create_deployments does after its own pass.
+        self.report_observations()
         log("routing policies: chat-default (v2 live, draft pending), code-review (draft)")
 
     def placement_generation(self, deployment: dict) -> int:
