@@ -5,6 +5,7 @@ import { useState } from "react"
 import { COLORS, MetricChart } from "@/components/console/serving-metrics/metric-chart"
 import { useMetrics } from "@/components/console/serving-metrics/use-metrics"
 import { WindowSelect } from "@/components/console/serving-metrics/window-select"
+import { MetaLine } from "@/components/console/meta-line"
 import { Metric, MetricGrid, Section, SectionEmpty } from "@/components/console/section"
 import { Status } from "@/components/hexel/status"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -30,14 +31,14 @@ export function DeploymentMetrics({ deploymentId }: { deploymentId: string }) {
 
   return <div className="flex flex-col gap-4" data-testid="deployment-metrics">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-live="polite">
+      <MetaLine aria-live="polite">
         {error ? <span className="text-destructive">{error}{data ? " Showing the last result." : ""}</span>
           : data?.reported_at ? <>
             {isStale(data.reported_at) ? <Status tone="warning">No report {formatRelative(data.reported_at)}</Status> : <span>Last report {formatRelative(data.reported_at)}</span>}
-            <span>· sources {data.sources.length ? data.sources.map(sourceLabel).join(", ") : "none"}</span>
-            <span>· refreshing every {Math.round(metricsPollDelay(window) / 1000)}s</span>
+            <span>Sources: {data.sources.length ? data.sources.map(sourceLabel).join(", ") : "none"}</span>
+            <span>Refreshing every {Math.round(metricsPollDelay(window) / 1000)}s</span>
           </> : loading ? "Loading metrics…" : null}
-      </div>
+      </MetaLine>
       <WindowSelect value={window} onChange={setWindow} />
     </div>
 

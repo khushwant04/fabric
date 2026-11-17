@@ -60,7 +60,7 @@ export function Metric({ label, value, detail, icon, children }: { label: ReactN
     <span className="flex items-center justify-between gap-2 text-sm text-muted-foreground [&_svg]:size-4">{label}{icon}</span>
     <span className="font-heading text-[28px] leading-9 font-semibold tracking-[-0.02em] tabular-nums">{value}</span>
     {children}
-    {detail ? <span className="truncate text-[13px] text-muted-foreground">{detail}</span> : null}
+    {detail ? <span className="truncate text-[13px] text-muted-foreground" title={typeof detail === "string" ? detail : undefined}>{detail}</span> : null}
   </div>
 }
 

@@ -21,3 +21,13 @@ export function formatRelative(value: string | null | undefined) {
 export function shortId(value: string) {
   return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value
 }
+
+const ORCHESTRATORS: Record<string, string> = {
+  aks: "AKS", eks: "EKS", gke: "GKE", k3s: "k3s", k8s: "Kubernetes", kubernetes: "Kubernetes", openshift: "OpenShift",
+}
+
+/** An orchestrator as people write it ("AKS", "GKE", "k3s"), not the agent's lowercase id. */
+export function orchestratorLabel(value: string | null | undefined) {
+  if (!value) return "Unknown"
+  return ORCHESTRATORS[value.toLowerCase()] ?? value.charAt(0).toUpperCase() + value.slice(1)
+}

@@ -6,6 +6,7 @@ import { useState } from "react"
 import { COLORS, MetricChart } from "@/components/console/serving-metrics/metric-chart"
 import { useMetrics } from "@/components/console/serving-metrics/use-metrics"
 import { WindowSelect } from "@/components/console/serving-metrics/window-select"
+import { MetaLine } from "@/components/console/meta-line"
 import { Metric, MetricGrid, Section, SectionEmpty, labelClass } from "@/components/console/section"
 import { Sparkline } from "@/components/hexel/sparkline"
 import { Status } from "@/components/hexel/status"
@@ -31,15 +32,17 @@ export function StampMetricsView({ stampId, deploymentNames = {} }: { stampId: s
   const latestTotal = latestValue(totals, (point) => point.gpu_memory_total_bytes)
 
   return <section className="flex flex-col gap-4" data-testid="stamp-metrics" aria-labelledby="serving-metrics">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-live="polite">
-        <h2 id="serving-metrics" className={labelClass}>Serving metrics</h2>
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex min-w-0 flex-col gap-1.5">
+      <h2 id="serving-metrics" className={labelClass}>Serving metrics</h2>
+      <MetaLine aria-live="polite">
         {error ? <span className="text-destructive">{error}</span>
           : data?.reported_at ? <>
             {isStale(data.reported_at) ? <Status tone="warning">No report {formatRelative(data.reported_at)}</Status> : <span>Last report {formatRelative(data.reported_at)}</span>}
-            <span>· sources {data.sources.length ? data.sources.map(sourceLabel).join(", ") : "none"}</span>
-            <span>· refreshing every {Math.round(metricsPollDelay(window) / 1000)}s</span>
+            <span>Sources: {data.sources.length ? data.sources.map(sourceLabel).join(", ") : "none"}</span>
+            <span>Refreshing every {Math.round(metricsPollDelay(window) / 1000)}s</span>
           </> : loading ? "Loading metrics…" : null}
+      </MetaLine>
       </div>
       <WindowSelect value={window} onChange={setWindow} />
     </div>
@@ -91,11 +94,11 @@ function GpuRow({ gpu, deploymentName }: { gpu: GpuSeries; deploymentName?: stri
       <div className="truncate text-xs text-muted-foreground"><span className="font-mono">{gpu.node || "node unreported"}</span>{gpu.deployment_id ? <> · serving <Link className="hover:underline" href={`/deployments/${gpu.deployment_id}`}>{deploymentName ?? shortId(gpu.deployment_id)}</Link></> : " · not attributed to a deployment"}</div>
     </div>
     <div>
-      <div className="mb-1 flex justify-between text-xs"><span>Utilization</span><span className="font-mono tabular-nums">{formatPercent(util)}</span></div>
+      <div className="mb-1.5 flex justify-between text-xs"><span className="text-muted-foreground">Utilization</span><span className="font-medium tabular-nums">{formatPercent(util)}</span></div>
       <Progress value={util ?? 0} className="h-1.5" aria-label={`GPU ${gpu.index} utilization`} />
     </div>
     <div>
-      <div className="mb-1 flex justify-between text-xs"><span>Memory</span><span className="font-mono tabular-nums">{formatBytes(used)} / {formatBytes(total)}</span></div>
+      <div className="mb-1.5 flex justify-between text-xs"><span className="text-muted-foreground">Memory</span><span className="font-medium tabular-nums">{formatBytes(used)} <span className="font-normal text-muted-foreground">/ {formatBytes(total)}</span></span></div>
       <Progress value={total ? Math.min(100, (used ?? 0) / total * 100) : 0} className="h-1.5" aria-label={`GPU ${gpu.index} memory`} />
     </div>
     <Sparkline data={trend} width={120} height={28} className="hidden md:block" />
