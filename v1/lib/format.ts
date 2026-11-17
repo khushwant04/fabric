@@ -7,6 +7,12 @@ export function formatDate(value: string | null | undefined) {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))
 }
 
+/** A calendar date without the time ("Nov 17, 2026"), for dense tables; pair it with a formatDate title. */
+export function formatDay(value: string | null | undefined) {
+  if (!value) return "Never"
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value))
+}
+
 export function formatRelative(value: string | null | undefined) {
   if (!value) return "Never"
   const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000)

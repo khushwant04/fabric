@@ -55,7 +55,7 @@ export default async function AgentRunPage({ params }: PageProps<"/agents/runs/[
         <BudgetMeter used={run.totals.steps} budget={run.budget.steps} unit="steps" size="default" label="Steps" />
       </SectionBody>
     </Section>
-    <MetricGrid className="sm:grid-cols-2 lg:grid-cols-4">
+    <MetricGrid className="grid-cols-2 lg:grid-cols-4">
       <Metric label="Input tokens" value={formatNumber(run.totals.inputTokens)} detail="Across all steps" />
       <Metric label="Output tokens" value={formatNumber(run.totals.outputTokens)} detail="Across all steps" />
       <Metric label="Model latency" value={formatLatency(latency)} detail={`Across ${run.steps.length} traced step${run.steps.length === 1 ? "" : "s"}`} />
