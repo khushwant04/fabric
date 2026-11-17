@@ -16,13 +16,13 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { balancingStrategies, capabilityFlags, cascadeTierRange, defaultCapabilities, kernelModes, priorityRange } from "@/lib/fabric/deployment-options"
-import { gpuClassLabel, isTpuClass, tpuClasses } from "@/lib/fabric/accelerators"
-import { catalogModel, modelCatalog, stampFitsClass, suggestedDeploymentName, tpuCompatible, type CatalogModel, type DeploymentStampChoice } from "@/lib/fabric/model-catalog"
+import { classKind, gpuClassLabel, neuronClasses, tpuClasses } from "@/lib/fabric/accelerators"
+import { catalogModel, modelCatalog, stampFitsClass, suggestedDeploymentName, tpuCompatible, neuronCompatible, type CatalogModel, type DeploymentStampChoice } from "@/lib/fabric/model-catalog"
 import { cn } from "@/lib/utils"
 
 const executionModes = [{ value: "default", label: "Cluster default" }, { value: "eager", label: "Eager" }, { value: "cuda_graph", label: "CUDA graphs" }]
 const toolChoiceModes = [{ value: "default", label: "Model default" }, { value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]
-const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100", "rtx-pro-6000", ...tpuClasses]
+const gpuClasses = ["t4", "v100", "rtx-a4000", "l4", "a10", "a10g", "a100", "a100-80gb", "l40s", "h100", "rtx-pro-6000", ...tpuClasses, ...neuronClasses]
 
 /** "custom" opens the full form; a catalog id opens the short confirmation. */
 export type ModelSelection = string | null
@@ -118,10 +118,12 @@ function ModelCardBody({ model }: { model: CatalogModel }) {
   </>
 }
 
-/** Says whether a model can run on Cloud TPU: TPU entries are bf16, FP8 checkpoints are not. */
+/** Says whether a model can run on Cloud TPU or AWS Neuron: those entries are bf16, FP8 checkpoints are not. */
 function TpuChip({ model }: { model: CatalogModel }) {
-  if (isTpuClass(model.gpuClass)) return <Chip icon={<CpuIcon />}>Cloud TPU · bf16</Chip>
-  if (!tpuCompatible(model)) return <Chip icon={<TriangleAlertIcon />}>Not TPU-compatible (FP8)</Chip>
+  const kind = classKind(model.gpuClass)
+  if (kind === "tpu") return <Chip icon={<CpuIcon />}>Cloud TPU · bf16</Chip>
+  if (kind === "neuron") return <Chip icon={<CpuIcon />}>AWS Neuron · bf16</Chip>
+  if (!tpuCompatible(model) || !neuronCompatible(model)) return <Chip icon={<TriangleAlertIcon />}>Not TPU- or Neuron-compatible (FP8)</Chip>
   return null
 }
 
@@ -197,7 +199,9 @@ function ConfirmModel({ model, stamps, selectHref, onSelect, disabled, onFieldCh
   disabled: boolean
   onFieldChange?: () => void
 }) {
-  const tpu = isTpuClass(model.gpuClass)
+  const kind = classKind(model.gpuClass)
+  const tpu = kind === "tpu"
+  const neuron = kind === "neuron"
   const fitting = stamps.filter((stamp) => stampFitsClass(stamp, model.gpuClass, model.gpuCount) !== false)
   const hidden = stamps.length - fitting.length
   const labelFor = (stamp: DeploymentStampChoice) => `${stamp.label.split(" · ")[0]} · ${stamp.gpus ?? "GPUs not reported"}`
@@ -213,9 +217,11 @@ function ConfirmModel({ model, stamps, selectHref, onSelect, disabled, onFieldCh
             {fitting.map((stamp) => <SelectItem key={stamp.id} value={stamp.id}>{labelFor(stamp)}</SelectItem>)}
           </SelectContent>
         </Select>
-        <FieldDescription>{tpu
+        <FieldDescription>{neuron
+          ? fitting.length ? `Automatic placement picks a connected AWS Neuron stamp with ${model.gpuCount} free ${gpuClassLabel(model.gpuClass)}-class device${model.gpuCount === 1 ? "" : "s"} or better. The first start compiles the model with the Neuron compiler, which can take tens of minutes; later starts reuse it.` : "No connected stamp reports AWS Neuron devices this model fits on. Automatic placement waits until one does."
+          : tpu
           ? fitting.length ? `Automatic placement picks a connected Cloud TPU stamp with ${model.gpuCount} free ${gpuClassLabel(model.gpuClass)}-class chips or better. The first start compiles the model with XLA for several minutes.` : "No connected stamp reports Cloud TPU chips this model fits on. Automatic placement waits until one does."
-          : fitting.length ? `Automatic placement picks a connected stamp with a free ${model.gpuClass.toUpperCase()}-class GPU or better.` : "No connected stamp reports a GPU this model fits on. Automatic placement waits until one does."}{hidden ? ` ${hidden} stamp${hidden === 1 ? " is" : "s are"} hidden: ${tpu ? "they have no Cloud TPU chips this model fits on" : hidden === 1 ? "its GPUs are too small" : "their GPUs are too small"}.` : ""}</FieldDescription>
+          : fitting.length ? `Automatic placement picks a connected stamp with a free ${model.gpuClass.toUpperCase()}-class GPU or better.` : "No connected stamp reports a GPU this model fits on. Automatic placement waits until one does."}{hidden ? ` ${hidden} stamp${hidden === 1 ? " is" : "s are"} hidden: ${neuron ? "they have no AWS Neuron devices this model fits on" : tpu ? "they have no Cloud TPU chips this model fits on" : hidden === 1 ? "its GPUs are too small" : "their GPUs are too small"}.` : ""}</FieldDescription>
       </Field>
       <Field><FieldLabel htmlFor="name">Deployment name</FieldLabel><Input id="name" name="name" defaultValue={suggestedDeploymentName(model)} pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" maxLength={200} required disabled={disabled} autoComplete="off" /><FieldDescription>Lowercase letters, numbers and hyphens. Clients call the model as <code className="font-mono text-xs">{model.modelAlias}</code>.</FieldDescription></Field>
     </FieldGroup>
