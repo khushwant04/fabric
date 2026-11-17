@@ -79,6 +79,18 @@ class UpstreamUnavailable(ApiError):
         super().__init__(503, code, message, details or None)
 
 
+class NoReadyHost(UpstreamUnavailable):
+    """No model host of the deployment could be reached; the request reached none.
+
+    Rendered exactly like :class:`UpstreamUnavailable`. The subclass only lets a routing
+    policy tell this cause apart when deciding whether to fall back.
+    """
+
+
+class UpstreamTimeout(UpstreamUnavailable):
+    """The model host did not answer in time. Rendered like :class:`UpstreamUnavailable`."""
+
+
 async def api_error_handler(_request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ApiError)
     return exc.to_response()
