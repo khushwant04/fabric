@@ -9,11 +9,11 @@ description = "Fabric inference ingress: local token verification, routing, and 
 requires-python = ">=3.12"
 
 dependencies = [
-  "fastapi==0.162.0",
+  "fastapi==0.162.7",
   "uvicorn[standard]==0.54.0",
   "httpx==0.28.1",
-  "pydantic==2.14.2",
-  "pydantic-settings==2.16.2",
+  "pydantic==2.14.3",
+  "pydantic-settings==2.16.3",
   "pyjwt[crypto]==2.15.1",
   "cryptography==50.0.2",
   "python-json-logger==4.2.0",
@@ -33,14 +33,14 @@ pdf = ["pypdf==7.1.0"]
 e2b = ["e2b-code-interpreter==2.11.10"]
 dev = [
   "pytest==9.2.0",
-  "pytest-asyncio==1.4.1.post1",
-  "ruff==0.17.3",
+  "pytest-asyncio==1.5.0",
+  "ruff==0.17.5",
   # End-to-end test of /v1/messages with the official client; skipped when absent.
   "anthropic==2.8.0",
   # Compatibility test running the OpenAI Agents SDK against the gateway; skipped when absent.
   "openai-agents==0.24.0",
   # Also the OpenAI SDK compatibility test of /v1/files and /v1/vector_stores.
-  "openai==3.16.2",
+  "openai==3.51.0",
   # Interop of the MCP connector client with the reference server; skipped when absent.
   "mcp==2.3.0",
   # PDF extraction test for file search.
