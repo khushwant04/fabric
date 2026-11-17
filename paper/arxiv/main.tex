@@ -1,231 +1,209 @@
-\documentclass[10pt,twocolumn,letterpaper]{article}
+\documentclass[conference,letterpaper]{IEEEtran}
+\IEEEoverridecommandlockouts
 
 % ---------------------------------------------------------------- packages
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage{mathptmx}
-\usepackage[scaled=0.92]{helvet}
-\usepackage{courier}
-\usepackage[margin=0.75in,columnsep=0.28in]{geometry}
 \usepackage{microtype}
-\usepackage{amsmath,amssymb}
+\usepackage{amsmath,amssymb,amsthm}
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{array}
-\usepackage{multirow}
 \usepackage{graphicx}
 \usepackage{xcolor}
-\usepackage{enumitem}
-\usepackage[font=small,labelfont=bf,skip=4pt]{caption}
+\usepackage[caption=false,font=footnotesize]{subfig}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
 \usepackage{url}
 \usepackage[hidelinks]{hyperref}
-\usepackage[capitalise,noabbrev]{cleveref}
-\usepackage{balance}
+\usepackage[capitalise]{cleveref}
+
+% ---------------------------------------------------------------- reference names (IEEE style)
+\crefname{figure}{Fig.}{Figs.}
+\Crefname{figure}{Fig.}{Figs.}
+\crefname{table}{Table}{Tables}
+\Crefname{table}{Table}{Tables}
+\crefname{section}{Section}{Sections}
+\Crefname{section}{Section}{Sections}
+\crefname{subsection}{Section}{Sections}
+\Crefname{subsection}{Section}{Sections}
+\crefname{appendix}{Appendix}{Appendices}
+\Crefname{appendix}{Appendix}{Appendices}
+\crefname{algorithm}{Algorithm}{Algorithms}
+\Crefname{algorithm}{Algorithm}{Algorithms}
+\crefname{proposition}{Proposition}{Propositions}
+\Crefname{proposition}{Proposition}{Propositions}
 
 % ---------------------------------------------------------------- macros
 \newcommand{\sys}{Fabric}
 \newcommand{\code}[1]{\texttt{\small #1}}
-\newcommand{\ev}[1]{\textsc{#1}}            % evidence class label
+% Evidence classes (see Table "evidence"): small-caps tags.
+\newcommand{\ev}[1]{{\normalfont\textsc{#1}}}
 \newcommand{\Measured}{\ev{measured}}
 \newcommand{\PointInTime}{\ev{point-in-time}}
 \newcommand{\Simulated}{\ev{simulated}}
 \newcommand{\DevOnly}{\ev{dev-only}}
 \newcommand{\Designed}{\ev{designed}}
 \newcommand{\Tested}{\ev{tested}}
+\newcommand{\Computed}{\ev{computed}}
 \newcommand{\repourl}{\texttt{[repository URL withheld; to be added]}}
+\newcommand{\commit}{\code{948e673}}
 \definecolor{cfg}{HTML}{7451A6}
 \definecolor{gen}{HTML}{2878B5}
 \definecolor{ink}{HTML}{17202A}
 \definecolor{soft}{HTML}{F4F7FA}
-\setlist{leftmargin=*,itemsep=1pt,topsep=2pt,parsep=0pt}
-\renewcommand{\arraystretch}{1.08}
-\setlength{\tabcolsep}{4pt}
 \algrenewcommand\algorithmicrequire{\textbf{Input:}}
 \algrenewcommand\algorithmicensure{\textbf{Output:}}
-
-\title{\textbf{Fabric: Two-Clock Governance for Managed,\\Multi-Stamp, Agentic LLM Serving}}
-\author{Author Name\\Affiliation\\\texttt{email}}
-\date{November 2026}
+\newtheorem{proposition}{Proposition}
+\renewcommand{\arraystretch}{1.1}
+% Unique hyperref anchors for algorithm lines across several algorithms.
+\makeatletter
+\def\theHALG@line{\thealgorithm.\arabic{ALG@line}}
+\makeatother
+% Five authors in two rows (3 + 2).
+\makeatletter
+\newcommand{\linebreakand}{%
+  \end{@IEEEauthorhalign}\hfill\mbox{}\par
+  \mbox{}\hfill\begin{@IEEEauthorhalign}}
+\makeatother
 
 \begin{document}
+
+\title{Fabric: Two-Clock Governance for\\Multi-Stamp, Agentic LLM Serving}
+
+\author{%
+\IEEEauthorblockN{Author One}
+\IEEEauthorblockA{\textit{Affiliation} \\ City, Country \\ \texttt{email}}
+\and
+\IEEEauthorblockN{Author Two}
+\IEEEauthorblockA{\textit{Affiliation} \\ City, Country \\ \texttt{email}}
+\and
+\IEEEauthorblockN{Author Three}
+\IEEEauthorblockA{\textit{Affiliation} \\ City, Country \\ \texttt{email}}
+\linebreakand
+\IEEEauthorblockN{Author Four}
+\IEEEauthorblockA{\textit{Affiliation} \\ City, Country \\ \texttt{email}}
+\and
+\IEEEauthorblockN{Author Five}
+\IEEEauthorblockA{\textit{Affiliation} \\ City, Country \\ \texttt{email}}
+}
+
 \maketitle
 
 % ================================================================= abstract
 \begin{abstract}
-A managed language-model service runs on two clocks. The \emph{configuration clock} moves
-account intent through placement, cluster reconciliation and minutes-long model cold starts;
-the \emph{generation clock} authenticates, admits and streams a request token by token. In
-earlier work on \sys{}, an implemented Kubernetes-based serving platform, we argued that
-coupling the two clocks makes every stream depend on a distant database, and derived
-invariants that keep authorization at the serving edge and require evidence before any
-acknowledgement or destructive transition. This paper extends that account to three
-developments that stress the split: a single edge endpoint in front of many independently
-operated GPU and TPU ``stamps''; prefix-cache-aware routing; and agentic requests, in which
-one task is a sequence of model calls with tools, budgets and structured output. We make
-one organising rule explicit: \emph{state lives with the clock that reads it on the hot
-path}. Configuration state reaches serving components only as versioned, cached snapshots
-(routing tables, signing keys, route sets); generation state (prefix caches, run budgets,
-traces, in-flight leases) stays where it is consumed, and the affinity requirements of the
-edge follow from where that state lives. We describe the edge gateway, a tokenizer-free
-prefix-aware router with a load bound, gateway-side agent governance (run budgets,
-content-free traces, and a tool-call guard that repairs invalid tool calls and re-asks
-without tools when a model ignores a requested JSON schema), and an outbound-only stamp
-agent with one-command bootstrap across NVIDIA T4, A10 and RTX PRO 6000 (Blackwell) GPUs,
-with Cloud TPU support implemented but not yet validated on hardware. The evaluation is
-deliberately classified by evidence type. Against simulated model hosts behind the
-production gateway, prefix-aware routing with a 1.1 load bound reduced median time to
-first token by 29--39\% relative to least-in-flight below saturation while keeping its
-tail, and reached 75--79\% of the reachable cache-hit rate when shared prompts exceeded one
-host's cache, against 19--38\% for the alternatives. Point-in-time live checks show a
-96\,GiB Blackwell stamp enrolled by the bootstrap serving a 35B-parameter FP8
-mixture-of-experts model with a 64K context, and the gateway's structured-output repair
-passing 3/3 trials and an 8-check agent-SDK smoke test. We report no hardware throughput
-claims, and we list the defects and unvalidated paths the evidence exposes.
+A managed language-model service runs on two clocks: a \emph{configuration clock} that moves
+account intent through placement, reconciliation and minutes-long cold starts, and a
+\emph{generation clock} that authenticates, admits and streams each request token by token.
+\sys{} is an implemented, Kubernetes-based serving platform organised around one rule:
+\emph{state lives with the clock that reads it on the hot path}. Configuration reaches serving
+components only as versioned, cached snapshots; generation state stays where it is consumed,
+which fixes the affinity, retry and metering obligations of every router in front of it. We
+apply the rule to one edge endpoint over many independently operated stamps; tokenizer-free,
+prefix-aware routing with a load bound; account-defined routing policies whose weighted split
+uses weighted rendezvous hashing and whose simulator and enforcers share one pure decision
+function; gateway-side governance of agent runs; and one accelerator abstraction spanning
+three NVIDIA GPU generations and Cloud TPU, with AWS Inferentia and Trainium in design. The
+evaluation is classified by evidence type. Against simulated hosts behind the production
+gateway, prefix-aware routing reduced median time to first token by 29--39\% relative to
+least-in-flight below saturation while keeping its tail. A deterministic check of the shipped
+policy code found no edge/stamp disagreement in 200{,}000 subset trials. Point-in-time live
+checks show a one-command bootstrap enrolling a 96\,GiB Blackwell stamp that served a 35B FP8
+mixture-of-experts model, and placing onto a Cloud TPU v6e-1 VM, where it exposed two defects;
+TPU serving is not yet confirmed. We make no hardware throughput claims.
 \end{abstract}
 
-\noindent\textbf{Keywords:} LLM serving, control planes, edge routing, prefix caching,
-LLM agents, tool calling, multi-tenancy, Kubernetes, heterogeneous accelerators.
+\begin{IEEEkeywords}
+LLM serving, control planes, edge routing, prefix caching, routing policies, rendezvous
+hashing, LLM agents, tool calling, heterogeneous accelerators, Cloud TPU, Kubernetes
+\end{IEEEkeywords}
 
 % ================================================================= introduction
 \section{Introduction}
 \label{sec:intro}
 
-Serving large language models (LLMs) as a managed service combines two systems that run
-at very different rates. An administrative system changes accounts, keys, deployments,
-placements and releases; its unit of progress is a reconciled configuration, and a single
-step can take many minutes because a GPU must be scheduled, a multi-gigabyte image pulled,
-weights loaded and an engine warmed up. A real-time system authenticates a prompt, admits
-it, attaches it to a model process and extends a sequence token by token; its unit of
-progress is a request or a token, measured in milliseconds, and a stream cannot pause while
-a central database recovers. Earlier work on \sys{}~\cite{priorpaper} named these the
+Serving large language models (LLMs) as a managed service combines two systems that run at
+very different rates. An administrative system changes accounts, keys, deployments,
+placements and releases; its unit of progress is a reconciled configuration, and one step can
+take many minutes because an accelerator must be scheduled, a multi-gigabyte image pulled,
+weights loaded and an engine warmed up. A real-time system authenticates a prompt, admits it,
+attaches it to a model process and extends a sequence token by token; its unit of progress
+is a request or a token, measured in milliseconds, and a stream cannot pause while a central
+database recovers. Earlier work on \sys{}~\cite{priorpaper} named these the
 \emph{configuration clock} and the \emph{generation clock} and derived three invariants:
-authority should not accumulate in one credential domain; authorization is decided at the
-serving edge from local state; and an acknowledgement or destructive transition must follow
+authority does not accumulate in one credential domain; authorization is decided at the
+serving edge from local state; and an acknowledgement or destructive transition follows
 durable or directly observed evidence.
 
-That analysis covered one Kubernetes cluster (a ``stamp''~\cite{stamps}) with one model
-per T4 GPU and one OpenAI-compatible request at a time. Three developments since then put
+That analysis covered one Kubernetes cluster (a \emph{stamp}~\cite{stamps}) with one model
+per T4 GPU and one OpenAI-compatible request at a time. Five developments since then put
 pressure on the split:
-
 \begin{enumerate}
-  \item \textbf{One endpoint, many stamps.} Customers deploy models on several stamps
-  (an AKS GPU pool, a k3s VM with one large GPU, a TPU VM) and do not want to know which
-  URL serves which model. The obvious solution, routing inference through the control
-  plane, re-couples the clocks.
-  \item \textbf{Cache-aware placement of requests.} Engines with paged KV
-  caches~\cite{vllm,sglang} skip prefill for a prompt prefix they already hold. Where a
-  request lands therefore decides its cost, but the gateway cannot see an engine's cache
-  and does not tokenize.
-  \item \textbf{Agentic requests.} An agent is a loop of model calls interleaved with tool
-  executions~\cite{react,toolformer}. Per-request controls cannot express ``this task may
-  spend 20{,}000 tokens or 8 steps'', and small open models frequently emit undeclared
-  tools, schema-violating arguments, or prose where a JSON object was requested.
+  \item \textbf{One endpoint, many stamps.} Customers deploy on several stamps and do not want
+  to know which URL serves which model; routing through the control plane would re-couple the
+  clocks.
+  \item \textbf{Cache-aware placement.} Engines with paged KV caches~\cite{vllm,sglang} skip
+  prefill for a prefix they hold, so where a request lands decides its cost---but the gateway
+  cannot see the cache and does not tokenize.
+  \item \textbf{Account-defined routing.} Accounts want one model name whose meaning they
+  control (canaries, tool calls to a larger model, fallbacks), and what they test must be what
+  runs.
+  \item \textbf{Agentic requests.} An agent is a loop of model calls and tools~\cite{react,
+  toolformer}; per-request controls cannot bound a task, and small models emit invalid tool
+  calls or prose where JSON was requested.
+  \item \textbf{Heterogeneous accelerators.} NVIDIA GPUs, Cloud TPUs and, prospectively, AWS
+  Inferentia and Trainium differ in devices, memory, precision, compilation and networking.
 \end{enumerate}
 
 Each development introduces state. The question this paper answers is \emph{where that
-state may live} without coupling the clocks or weakening the invariants. Our answer is a
-single rule: \textbf{state lives with the clock that reads it on the hot path.}
-Configuration state is produced on the configuration clock and reaches serving components
-only as versioned, cached, monotone snapshots that the generation clock can consume while
-the producer is down. Generation state is produced and consumed on the generation clock and
-stays where it is consumed; any component that routes requests must then provide the
-\emph{affinity} that state requires. This rule explains, for example, why \sys{}'s edge
-gateway meters nothing, why agent runs pin strictly to one stamp while sessions pin only
-softly, and why the prefix index is a process-local guess rather than a replicated
-structure.
+state may live} without coupling the clocks. Our answer is one rule: \textbf{state lives
+with the clock that reads it on the hot path.} Configuration state reaches serving
+components only as versioned, cached, monotone snapshots that the generation clock can
+consume while their producer is down. Generation state stays where it is consumed, and any
+component that routes requests must provide the \emph{affinity} that state requires. The
+rule explains why \sys{}'s edge meters nothing, why agent runs pin strictly to a stamp while
+sessions pin softly, and why a routing policy's split must be a deterministic function of the
+session key rather than a per-request coin flip.
 
-\paragraph{Contributions.}
+\paragraph*{Contributions}
 \begin{itemize}
-  \item A \textbf{state-placement extension of the two-clock model} (\cref{sec:model})
-  that classifies every piece of serving state by producing and consuming clock, and
-  derives a fourth invariant: affinity requirements follow generation-state locality.
-  \item The \textbf{design of an edge tier} (\cref{sec:edge}) that provides one inference
-  URL across heterogeneous stamps while preserving local authorization (tokens are verified
-  at the edge and again at the stamp), keeping the control plane off the request path, and
-  never replaying a request that may have reached a stamp.
-  \item A \textbf{tokenizer-free, prefix-aware routing strategy with a load bound}
-  (\cref{sec:prefix}) and its evaluation against simulated hosts behind the production
-  gateway, including a bound-sensitivity study (\cref{sec:eval-routing}).
-  \item \textbf{Gateway-side agent governance} (\cref{sec:agents}): task-level run
-  budgets, content-free run traces, a tool-call guard that repairs invalid calls and
-  enforces a requested JSON schema on a final answer when the engine does not, a
-  server-side tool loop and a bounded model cascade, all metered honestly.
-  \item \textbf{Heterogeneous stamp enrollment} (\cref{sec:config}): an outbound-only agent
-  that measures capacity and pushes status, activity and serving metrics, and a
-  one-command bootstrap with preflight checks spanning three NVIDIA GPU generations and
-  Cloud TPU.
-  \item An \textbf{evidence-classified evaluation} (\cref{sec:eval}) that separates
-  simulated, point-in-time, dated, development-only and designed-but-unvalidated claims,
-  and reports defects the evidence exposed.
+  \item A \textbf{state-placement extension of the two-clock model} with a fourth invariant:
+  affinity follows generation-state locality (\cref{sec:model}).
+  \item An \textbf{edge tier} that gives one URL across stamps without putting the control
+  plane on the request path or replaying requests (\cref{sec:edge}), and a
+  \textbf{tokenizer-free prefix-aware router with a load bound} (\cref{sec:prefix}).
+  \item \textbf{Routing policies as cached snapshots} (\cref{sec:policies}): a weighted split
+  by weighted rendezvous hashing whose subset stability lets an edge and a partial stamp agree,
+  fallback inside the retry boundary, and simulate/enforce parity by construction.
+  \item \textbf{Gateway-side agent governance}: run budgets, content-free traces and a
+  tool-call guard, metered honestly (\cref{sec:agents}).
+  \item \textbf{One accelerator abstraction} across NVIDIA GPUs and Cloud TPU, designed to admit
+  AWS Neuron devices, with an experience report of the first TPU bring-up (\cref{sec:accel}).
+  \item An \textbf{evidence-classified evaluation} that reports defects as well as results
+  (\cref{sec:eval}).
 \end{itemize}
 
-This is an experience and design paper about an implemented system. Its quantitative
-results are limited: the routing study uses simulated hosts, and live checks are single
-observations. \Cref{sec:eval-plan} states the evaluation that would close the gap.
-
-% ================================================================= background
-\section{Background and Related Work}
-\label{sec:related}
-
-\paragraph{Engines and schedulers.}
-Orca introduced iteration-level scheduling for generative transformers~\cite{orca}; vLLM's
-PagedAttention manages KV memory in pages and enables sharing~\cite{vllm}. Sarathi-Serve
-chunks prefill to bound decode stalls~\cite{sarathi}; DistServe and Splitwise disaggregate
-prefill and decode~\cite{distserve,splitwise}. Llumnix migrates requests between engine
-instances at runtime~\cite{llumnix}. Clockwork obtains predictable latency by centralising
-scheduling decisions~\cite{clockwork}, and AlpaServe multiplexes models with model
-parallelism~\cite{alpaserve}. \sys{} uses vLLM as its engine and deliberately does not
-replace its scheduler: our concerns are identity, placement, routing between engine
-instances, rollout safety, metering and agent governance around the engine. Llumnix-style
-migration is incompatible with \sys{}'s rule that a stream is pinned after its first byte
-(\cref{sec:retry}).
-
-\paragraph{Prefix reuse and cache-aware routing.}
-SGLang's RadixAttention keeps a radix tree of KV-cached prefixes within an
-engine~\cite{sglang}; Preble schedules prompts across GPUs using prefix sharing and load
-together~\cite{preble}. \sys{}'s router is closer to Preble's goal but operates with less
-information: it sees only request bytes, not tokens or the engine's eviction decisions, so
-it hashes byte blocks and bounds load in the manner of consistent hashing with bounded
-loads~\cite{karger,boundedloads}. Rendezvous hashing~\cite{rendezvous} provides \sys{}'s
-explicit session and run affinity.
-
-\paragraph{Model serving systems and cold start.}
-Clipper and INFaaS provide model-agnostic serving front ends and automated model
-selection~\cite{clipper,infaas}; \sys{}'s \code{model: auto} and cascade
-(\cref{sec:cascade}) are deliberately simple, explainable relatives of model selection and
-of LLM cascades such as FrugalGPT and RouteLLM~\cite{frugalgpt,routellm}. ServerlessLLM
-attacks LLM cold start with fast checkpoint loading~\cite{serverlessllm}; our cold-start
-data (\cref{sec:eval-coldstart}) show that, on T4, engine profiling and warmup and GPU
-availability dominate weight loading, so cold start is a configuration-clock cost that
-placement and rollout must budget for.
-
-\paragraph{LLM applications and agents.}
-ReAct and Toolformer established tool-using language agents~\cite{react,toolformer};
-Gorilla studied API-call accuracy~\cite{gorilla}. On the serving side, Parrot exposes
-application structure to the server~\cite{parrot}, and InferCept handles the KV state of
-requests paused for tool calls~\cite{infercept}. Constrained decoding enforces output
-grammars inside the engine~\cite{outlines}. \sys{} is complementary: it governs agent loops
-at the gateway with budgets, traces and validation, and it compensates for an observed gap
-in which the engine does not apply a requested \code{response\_format} while tools are
-offered with automatic tool choice (\cref{sec:guard}).
-
-\paragraph{Control planes and isolation.}
-\sys{}'s reconciliation follows the Kubernetes controller and operator
-patterns~\cite{k8scontroller,k8soperator,borgomegak8s} descended from Borg~\cite{borg}.
-Credentials are JWTs~\cite{rfc7519,rfc8725} verified against cached JWKS~\cite{rfc7517},
-issued by exchange~\cite{rfc8693}. Tenant data in the control plane is protected by forced
-PostgreSQL row-level security~\cite{pgrls}. The invariants resemble resource-centric
-guidance in NIST SP~800-207~\cite{nistzt}, but we make narrower, testable claims.
-Hosted code execution can use Firecracker microVMs~\cite{firecracker} or a gVisor
-runtime~\cite{gvisor}.
+This is an experience and design paper about an implemented system. Its quantitative results
+are limited by design: the routing study uses simulated hosts and the live checks are single
+observations. \Cref{sec:limits} states what would close the gap.
 
 % ================================================================= model
-\section{System Model: Clocks and State Placement}
+\section{System Model}
 \label{sec:model}
+
+\subsection{Design goals}
+\label{sec:goals}
+\sys{} is built for an operator who runs a central control plane and many stamps it does not
+fully control (customer VMs, other clouds), and for accounts that call one endpoint from
+standard SDKs. Its goals are: \textbf{(G1)} no request depends synchronously on the control
+plane or its database; \textbf{(G2)} every serving tier authorizes locally and refuses
+rather than invents authority; \textbf{(G3)} no request is executed twice without the caller
+being able to see it, and nothing is silently dropped from usage; \textbf{(G4)} what an
+operator previews or simulates is what the data path does; \textbf{(G5)} a stamp needs only
+outbound connectivity and one command to join; and \textbf{(G6)} the engine (vLLM) is used
+unmodified, so engine upgrades and new accelerators do not fork the platform.
 
 \subsection{Two clocks}
 Let $C(t)$ be central intent at administrative time $t$. Intent passes through an
@@ -233,49 +211,46 @@ agent-applied local set $A$, an operator observation $O$ and a gateway route con
 $R$, each by asynchronous, repeated reconciliation: $C \rightarrow A \rightarrow O
 \rightarrow R$. A request arriving at generation time $\tau$ is decided from a local tuple
 \begin{equation}
-  Q(\tau) = \langle K_\tau, R_\tau, L_\tau, B_\tau, S_\tau \rangle
+  Q(\tau) = \langle K_\tau, R_\tau, P_\tau, L_\tau, B_\tau, S_\tau \rangle
 \end{equation}
-of cached verification keys $K$, account-scoped routes $R$, admission state $L$, backend
-health and in-flight state $B$, and a durable usage spool $S$---never from a synchronous
-read of $C(t)$~\cite{priorpaper}. Independence is bounded: an unknown key identifier, an
-unhealthy spool or an unavailable local limiter refuses new work rather than inventing
-authority.
+of cached verification keys $K$, account-scoped routes $R$, routing policies $P$, admission
+state $L$, backend health and in-flight state $B$, and a durable usage spool $S$---never from
+a synchronous read of $C(t)$. Independence is bounded: an unknown key identifier, an
+unhealthy spool or an unavailable local limiter refuses new work.
 
 \subsection{State placement}
-The developments in \cref{sec:intro} add state to $Q$. We classify each item by the clock
-that \emph{produces} it and the clock that \emph{reads it on the hot path}
-(\cref{tab:state}). Three cases arise.
+We classify each piece of state by the clock that \emph{produces} it and the clock that
+\emph{reads it on the hot path} (\cref{tab:state}).
 
-\textbf{Configuration-produced, generation-read} state (routing tables, keys, route
-sets, cascade tiers) is published as a \emph{snapshot} with a monotone revision. A consumer
-(i) caches the last good snapshot, including on disk, (ii) refuses a snapshot older than
-the one it holds, and (iii) keeps serving from the cache while the producer is
-unavailable. A snapshot conveys permission (ownership, placement), never an
-acknowledgement of anything the generation clock has done.
+\textbf{Configuration-produced, generation-read} state (routing tables, keys, route sets,
+routing policies, cascade tiers) is published as a \emph{snapshot} with a monotone revision.
+A consumer (i) caches the last good snapshot, including on disk, (ii) refuses a snapshot
+older than the one it holds, and (iii) keeps serving from the cache while the producer is
+down. A snapshot conveys permission, never an acknowledgement of anything the generation
+clock has done.
 
-\textbf{Generation-produced, generation-read} state (prefix caches, run budgets and
-traces, in-flight leases, sandbox sessions) stays local to the component that consumes it.
-It is not replicated, so its correctness depends on requests that share it reaching the
-same component. A router in front of that state therefore inherits an \emph{affinity
-obligation} whose strength matches the cost of losing the state: \emph{strict} when losing
-it changes semantics (a budget would reset), \emph{soft} when it only changes cost (a cache
-miss).
+\textbf{Generation-produced, generation-read} state (prefix caches, run budgets and traces,
+in-flight leases, sandbox sessions) stays local to its consumer. It is not replicated, so a
+router in front of it inherits an \emph{affinity obligation} whose strength matches the cost
+of losing it: \emph{strict} when loss changes semantics (a budget would reset), \emph{soft}
+when it changes only cost (a cache miss).
 
-\textbf{Generation-produced, configuration-read} state (usage records, activity events,
-serving metrics, host logs) flows outward asynchronously, is spooled locally, and is
-deleted only after central acknowledgement.
+\textbf{Generation-produced, configuration-read} state (usage, activity events, serving
+metrics, host logs) flows outward asynchronously, is spooled locally, and is deleted only
+after central acknowledgement.
 
 \begin{table}[t]
 \centering
 \caption{Serving state by producing and hot-path consuming clock (C = configuration,
-G = generation) and how \sys{} places it.}
+G = generation), and where \sys{} places it.}
 \label{tab:state}
-\small
+\footnotesize
 \begin{tabularx}{\columnwidth}{@{}l c X@{}}
 \toprule
 State & Prod.$\to$read & Placement and obligation \\
 \midrule
 Routing table (edge) & C$\to$G & Polled snapshot, ETag, monotone revision, disk cache \\
+Routing policies & C$\to$G & In routing table and stamp desired state; last good kept \\
 JWKS & C$\to$G & Cached; refetch on unknown \code{kid}, rate-limited \\
 Stamp route set & C$\to$G & Rendered by operator; last good kept on error \\
 In-flight leases & G$\to$G & Per gateway; drain evidence for rollouts \\
@@ -283,102 +258,64 @@ Prefix index & G$\to$G & Per gateway process; soft affinity \\
 Run budget, trace & G$\to$G & Per stamp gateway, in memory; strict affinity \\
 Sandbox session & G$\to$G & Keyed by (account, run); follows the run \\
 Usage records & G$\to$C & Durable spool; delete after central ack \\
-Activity, metrics & G$\to$C & Bounded buffers; deduplicated by event id \\
+Activity, metrics, logs & G$\to$C & Bounded buffers; deduplicated by event id \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 \subsection{Invariants}
-The earlier invariants carry over unchanged~\cite{priorpaper}; state placement adds a
-fourth.
-\begin{description}[leftmargin=0pt,font=\normalfont\bfseries]
-  \item[I1 Non-aggregation of authority.] Central synchronization, cluster mutation,
+\label{sec:invariants}
+The earlier invariants~\cite{priorpaper} carry over; state placement adds a fourth.
+\begin{itemize}
+  \item \textbf{I1 Non-aggregation of authority.} Central synchronization, cluster mutation,
   request serving, routing-table reading and telemetry export hold distinct credentials.
-  \item[I2 Local authorization.] Every serving tier verifies audience, scope and account
-  ownership from cached state; none consults the control plane per request.
-  \item[I3 Evidence before transition.] Watermarks advance, leases are deleted and old
-  releases are destroyed only after durable writes or direct observation.
-  \item[I4 Affinity follows locality.] A router must deliver every request that reads a
-  piece of generation state to the component that holds it, strictly if loss changes
-  semantics and softly if it changes only cost; it must not duplicate side effects
-  (metering, limits) that the holder already performs.
-\end{description}
+  \item \textbf{I2 Local authorization.} Every serving tier verifies audience, scope and
+  account ownership from cached state; none consults the control plane per request.
+  \item \textbf{I3 Evidence before transition.} Watermarks advance, leases are deleted and old
+  releases destroyed only after durable writes or direct observation.
+  \item \textbf{I4 Affinity follows locality.} A router delivers every request that reads a
+  piece of generation state to the component holding it---strictly if loss changes semantics,
+  softly if it changes only cost---and does not duplicate side effects (metering, limits) the
+  holder already performs.
+\end{itemize}
 I4 has a corollary for retries: a router may move a request only while it can prove the
-holder never received it, because the holder's state (and the request's cost) may already
-have changed.
+holder never received it, because the holder's state and the request's cost may already have
+changed.
 
 % ================================================================= architecture
-\section{Architecture Overview}
+\section{Architecture}
 \label{sec:arch}
 
-\Cref{fig:arch} shows the components. The \textbf{control plane} (Python, FastAPI,
-PostgreSQL) owns accounts, memberships, API keys, deployments, placements, stamp enrollment,
-audit records, observed status and aggregated usage. It issues short-lived RS256 JWTs with
-separate audiences for control and inference. The \textbf{edge gateway} is a separate
-service, built from the data-plane image, that fronts all stamps with one inference URL.
-Each \textbf{stamp} is a failure and serving domain containing an \emph{agent} that
-enrolls, polls desired state and pushes status outbound; an \emph{operator} that
-reconciles a \code{FabricModelDeployment} custom resource into model-host workloads and
-gateway routes; a stamp \emph{gateway} that verifies tokens, admits, routes, streams,
-meters and governs agent runs; and a \emph{collector} that exports spooled usage. Model
-hosts run vLLM. A web console reads only the control plane.
+\Cref{fig:arch} shows the reference deployment. The \textbf{control plane} (Python, FastAPI,
+PostgreSQL with forced row-level security) owns accounts, memberships, API keys,
+deployments, placements, routing policies, stamp enrollment, audit records, observed status
+and aggregated usage, and issues short-lived RS256 JWTs with separate audiences for control
+and inference. The \textbf{edge gateway} is a separate service built from the data-plane
+image that fronts all stamps with one inference URL. Each \textbf{stamp} is a failure and
+serving domain containing an \emph{agent} that enrolls, polls desired state and pushes status
+outbound; an \emph{operator} that reconciles a \code{FabricModelDeployment} custom resource
+into model-host workloads and gateway routes; a stamp \emph{gateway} that verifies tokens,
+admits, routes, streams, meters and governs agent runs; and a \emph{collector} that exports
+spooled usage. Model hosts run unmodified vLLM~\cite{vllm}. A web \textbf{console} reads only
+the control plane. Commodity services provide DNS and TLS fronting, secrets, image hosting,
+identity (OIDC) and observability; none is on the generation-clock path inside a stamp.
 
 \begin{figure*}[t]
 \centering
-\begin{tikzpicture}[
-  font=\sffamily\scriptsize,
-  x=1mm, y=1mm,
-  comp/.style={draw=ink, rounded corners=1.5pt, fill=white, align=center, inner sep=2pt, minimum height=5.5mm},
-  inner/.style={comp, minimum width=37mm, font=\sffamily\tiny},
-  gen/.style={-{Stealth[length=2mm]}, very thick, draw=gen},
-  cfg/.style={-{Stealth[length=1.8mm]}, thick, dashed, draw=cfg},
-  cfgl/.style={thick, dashed, draw=cfg},
-  lbl/.style={font=\sffamily\tiny, fill=white, inner sep=1pt, align=center}
-]
-% top rows
-\node[comp, minimum width=60mm] (clients) at (112,0) {Clients: OpenAI and Anthropic SDKs, agent frameworks, HTTP};
-\node[comp, minimum width=30mm] (console) at (24,0) {Console (reads the control plane only)};
-\node[comp, minimum width=44mm, fill=cfg!8] (cp) at (24,-17)
-  {\textbf{Control plane}\\accounts, keys, deployments, placements,\\stamps, status, usage, audit\\PostgreSQL with forced RLS\\JWKS $\cdot$ routing table (ETag, revision)};
-\node[comp, minimum width=86mm, fill=gen!8] (edge) at (112,-17)
-  {\textbf{Edge gateway}\\verify JWT locally $\cdot$ candidates = caller's placements of the model\\order by health, readiness, region, in-flight $\cdot$ retry only on connect failure\\run id: strict rendezvous affinity $\cdot$ session: soft affinity $\cdot$ no metering, no limits};
-\draw[gen] (clients) -- node[lbl,right=1mm]{one inference URL} (edge);
-\draw[-{Stealth[length=1.5mm]}, thin, draw=gray] (console) -- (cp);
-\draw[cfg] (cp.east) -- node[lbl,above]{poll table}node[lbl,below]{and keys} (edge.west);
-
-% stamps
-\foreach \i/\x/\title/\host in {1/24/AKS stamp: T4 pool/vLLM hosts (one per T4),
-                               2/68/k3s stamp: A10 VM/vLLM host (A10),
-                               3/112/k3s stamp: RTX PRO 6000 VM/vLLM host (96\,GiB Blackwell),
-                               4/156/k3s stamp: Cloud TPU VM (not validated)/vLLM-TPU host (bf16)} {
-  \node[inner] (g\i) at (\x,-42) {stamp gateway: verify, admit, route, meter, runs};
-  \node[inner] (a\i) at (\x,-49) {agent $\cdot$ operator $\cdot$ collector};
-  \node[inner, fill=gen!6] (m\i) at (\x,-56) {\host};
-  \node[font=\sffamily\tiny\bfseries] (t\i) at (\x,-35.5) {\title};
-}
-\begin{scope}[on background layer]
-  \foreach \i in {1,2,3} { \node[draw=ink, rounded corners=2pt, fill=soft, inner sep=1.6pt, fit=(t\i)(g\i)(m\i)] (s\i) {}; }
-  \node[draw=ink, dashed, rounded corners=2pt, fill=soft, inner sep=1.6pt, fit=(t4)(g4)(m4)] (s4) {};
-\end{scope}
-\foreach \i in {1,2,3,4} { \draw[gen] (edge.south) -- (s\i.north); }
-
-% outbound bus
-\draw[cfgl] (-2,-67) -- (176,-67);
-\foreach \i in {1,2,3,4} { \draw[cfgl] (s\i.south) -- (s\i.south |- 0,-67); }
-\draw[cfg] (-2,-67) -- (-2,-17) -- (cp.west);
-\node[lbl] at (88,-67) {stamp agents push outbound only: enroll, heartbeat, poll desired state, status, usage, activity, serving metrics, host logs};
-
-% legend
-\node[font=\sffamily\tiny, anchor=west] at (0,-72)
-  {\tikz{\draw[gen] (0,0) -- (5mm,0);} generation clock: request path, caller's own token, verified at edge and at stamp\qquad
-   \tikz{\draw[cfg] (0,0) -- (5mm,0);} configuration clock: background, outbound, cached snapshots};
-\end{tikzpicture}
-\caption{\sys{} components and the two clocks. Solid arrows carry requests; each stamp
-gateway verifies the caller's token again. Dashed arrows are background exchanges: the edge
-polls a routing table and signing keys; every stamp agent initiates all exchanges with the
-control plane (the control plane never connects into a stamp). The three GPU stamps match
-the 16~November demonstration lineup (one model per GPU); the TPU path is implemented and
-CI-checked but has not run on TPU hardware.}
+\includegraphics[width=\textwidth]{figures/fabric_architecture.png}
+\caption{Reference deployment of \sys{}. Numbered steps: (1) an application or agent calls
+the single inference URL with its token; (2) DNS/TLS fronting forwards to the control
+cluster's ingress; (3) the edge gateway verifies the token locally and picks a stamp holding
+the caller's model; (4) the stamp gateway verifies again, enforces limits, runs agent and
+tool logic and serves on vLLM; (5) stamp agents send enrollment, heartbeats and usage
+outbound only; (6) administrators reach the console through OIDC sign-in. Dashed lines are
+configuration-clock exchanges (routing table, desired state). Each stamp's accelerator node pool
+shows the three accelerator families the abstraction of \cref{sec:accel} admits, not the hardware
+installed in that stamp, and their evidence differs: NVIDIA GPU paths are implemented and
+measured; the Cloud TPU path is implemented, with a first v6e-1 bring-up in progress and serving
+not yet confirmed; AWS Inferentia/Trainium paths are designed and under implementation, not
+validated. Kernel labels refer to an optional model-host setting on which no result in this paper
+depends (\cref{sec:limits}).}
 \label{fig:arch}
 \end{figure*}
 
@@ -390,178 +327,237 @@ CI-checked but has not run on TPU hardware.}
 A stamp begins with a short-lived, single-use, account-bound enrollment token. The control
 plane consumes it atomically and issues separate agent and telemetry credentials (I1); the
 agent persists its identity on a volume and reuses it after restart. Machine credentials
-now rotate \emph{from the stamp}: the agent requests a new pair authorized by the
-credential it replaces, and older credentials receive an expiry rather than immediate
-revocation so the collector can switch files independently. Only the newest credential may
-rotate (with a narrow exception for a lost reply), so a copied, superseded credential cannot
-mint a fresh pair.
+rotate from the stamp, authorized by the credential they replace; only the newest may rotate,
+so a copied, superseded credential cannot mint a fresh pair.
 
-Placement is admission against \emph{measured} capacity. The agent reads node
-allocatable counts and GPU labels (product, memory, compute capability), separates
-Fabric-managed from foreign GPU requests, and reports a slot vector of how many $k$-GPU
-replicas fit without splitting across nodes. The control plane refuses a placement that
-cannot schedule with a typed reason (e.g.\ \code{insufficient\_free\_gpus}) instead of
-returning success for a pod that would stay Pending. Accelerator classes constrain
-placement: TPU classes go only to TPU stamps, GPU classes only to GPU stamps, and FP8
-checkpoints are refused on TPU classes.
+Placement is admission against \emph{measured} capacity. The agent reads node allocatable
+counts and accelerator labels, separates \sys{}-managed from foreign accelerator requests,
+and reports a slot vector of how many $k$-device replicas fit without splitting across
+nodes. The control plane refuses a placement that cannot schedule with a typed reason
+(e.g.\ \code{insufficient\_free\_gpus}) instead of returning success for a pod that would
+stay Pending. Deployments name a minimum \emph{accelerator class} from a closed catalogue
+(\code{t4}, \code{a10}, \code{rtx-pro-6000}, \code{tpu-v6e}, \dots), each defined by memory
+per device and, for GPUs, a minimum compute capability; an unknown class is an error rather
+than ``no constraint''.
 
 \subsection{Reconciliation and acknowledged rollouts}
 The agent polls desired state after a durable watermark, rebuilds the complete assignment
 set, publishes custom resources, and only then stores the new watermark; after losing its
-rendered state it restarts from watermark zero (I3). The operator derives serving settings
-from the weakest GPU in the pool, changing only settings the hardware makes impossible
-(e.g.\ bfloat16 to float16 below compute capability 8.0). A release change starts a
-candidate workload beside the active one; routes cut over only when the candidate has
-concrete Ready endpoints, and the old workload is deleted only after the stamp gateway
-reports the exact route revision loaded and zero in-flight requests on the old backends.
-Without spare capacity the candidate stays Pending and the active release keeps serving:
-the system degrades to ``no release'' rather than to silent downtime.
+rendered state it restarts from watermark zero (I3). A release change starts a candidate
+workload beside the active one; routes cut over only when the candidate has Ready endpoints,
+and the old workload is deleted only after the stamp gateway reports the exact route revision
+loaded and zero in-flight requests on the old backends. Without spare capacity the candidate
+stays Pending and the active release keeps serving.
 
 \subsection{Outbound observation}
-Because the control plane never connects into a stamp, everything an operator or customer
-needs to see is pushed by the agent over its own credential. Four streams exist, each
-bounded and deduplicated:
-\begin{itemize}
-  \item \textbf{Host snapshots}: pod phase, readiness, the 20 most recent events and a
-  sanitized tail of the model-host log (lines matching credential patterns are replaced),
-  every 3\,s while a host is starting and every 30\,s once all are ready.
-  \item \textbf{Activity events}: enrollment, accelerators measured, accelerator runtime
-  allocatable, readiness, credential rotation, desired state applied, image pulls with
-  duration and size, host failures. A buffer of 200 events survives disconnection; the
-  control plane deduplicates by event id and stores them under forced RLS.
-  \item \textbf{Serving metrics}: every 30\,s the agent scrapes the gateway, each vLLM
-  host and the DCGM exporters, converts counters to deltas and histograms to per-bucket
-  counts, and pushes one sample. The control plane merges samples into one-minute rows
-  and computes percentiles from merged histograms, never from averaged percentiles; a
-  missed report becomes a gap, not a dip.
-  \item \textbf{Usage}: the gateway spools records; the collector leases batches and deletes
-  them only after central acceptance, duplicate recognition or permanent rejection.
-\end{itemize}
-These streams are configuration-clock consumers of generation-clock data (\cref{tab:state})
-and never sit on the request path.
+\label{sec:observe}
+Because the control plane never connects into a stamp, everything an operator needs to see is
+pushed by the agent over its own credential, in four bounded, deduplicated streams:
+\textbf{host snapshots} (pod phase, readiness, the 20 most recent events and a sanitized tail
+of the model-host log, every 3\,s while a host starts and every 30\,s once all are ready);
+\textbf{activity events} (enrollment, accelerators measured, runtime allocatable, readiness,
+credential rotation, desired state applied, image pulls with size and duration, host
+failures; a 200-event buffer survives disconnection); \textbf{serving metrics} (every 30\,s
+the agent scrapes the gateway, each vLLM host and, on NVIDIA stamps, the DCGM exporters,
+converts counters to deltas and histograms to per-bucket counts; the control plane merges
+samples into one-minute rows and computes percentiles from merged histograms, never from
+averaged percentiles, and a missed report is a gap, not a dip); and \textbf{usage} (the
+collector leases spooled batches and deletes them only after central acceptance, duplicate
+recognition or permanent rejection). All four are configuration-clock consumers of
+generation-clock data (\cref{tab:state}).
 
-\subsection{One-command bootstrap across accelerators}
-A stamp on a single VM is created by one command that installs k3s, verifies the
-accelerator runtime, configures TLS, stores the enrollment token in a Secret, installs the
-stamp chart and images of one pinned release, and waits for enrollment. Re-running it
-upgrades in place and keeps the stamp identity. Preflight checks turn common operator
-errors into immediate, specific failures: the control-plane URL must serve a JWKS document
-(rejecting, for example, the stamp's own hostname given by mistake); the token must have
-the enrollment format; the stamp hostname's DNS record is compared with the VM's public
-address from the cloud metadata service; and the accelerator is inspected. On NVIDIA hosts
-the script reads product, memory and compute capability and selects float16 below compute
-capability 8 and bfloat16 otherwise. On a VM without an NVIDIA driver it queries the GCP
-metadata server for a TPU accelerator type, counts chip device nodes, refuses multi-host
-slices, forces bfloat16, and advertises chips to Kubernetes as the \code{google.com/tpu}
-extended resource with no device plugin. The operator then runs a vLLM TPU image with
-tensor parallelism equal to the chips per replica and an XLA compilation cache beside the
-weights. Long steps stream progress and a heartbeat so a cold image pull never looks like a
-hang; an agent that has not enrolled within 15 minutes, or an image that cannot be pulled,
-ends the script with a diagnosis.
+\subsection{One-command bootstrap}
+\label{sec:bootstrap}
+A stamp on a single VM is created by one command that installs k3s, verifies the accelerator
+runtime, configures TLS, stores the enrollment token in a Secret, installs the stamp chart
+and images of one pinned release, and waits for enrollment. Re-running it upgrades in place
+and keeps the stamp identity. Preflight checks turn common operator errors into immediate,
+specific failures: the control-plane URL must serve a JWKS document (rejecting, e.g., the
+stamp's own hostname given by mistake); the token must have the enrollment format; the stamp
+hostname's DNS record is compared with the VM's public address from the cloud metadata
+service; and the accelerator is inspected (\cref{sec:accel}). Long steps stream progress and
+a heartbeat so a cold image pull never looks like a hang; an agent that has not enrolled
+within 15 minutes, or an image that cannot be pulled, ends the script with a diagnosis.
 
-\paragraph{Designed, not implemented: GPU sharing.} A replica holds whole GPUs today, so a
-96\,GiB card serving a 35B-A3B FP8 model (about 37.5\,GB of weights) cannot also host a
-small model. The accepted design uses device-plugin time-slicing with Fabric-enforced
-memory shares: placement keeps the sum of fractions on each physical GPU at or below 0.95,
-never mixes whole-GPU and shared deployments, reports physical rather than sliced GPU
-counts, sets \code{-{}-gpu-memory-utilization} to the share times the stamp ceiling, starts
-hosts on one GPU one at a time, and is restricted to single-GPU nodes because time-slicing
-cannot bind a replica to a particular device. Isolation is cooperative; MIG is future work.
+% ================================================================= accelerators
+\section{Heterogeneous Accelerators and Cloud TPU}
+\label{sec:accel}
+
+\sys{} serves the same deployment API on NVIDIA GPUs of three generations---T4 (Turing,
+16\,GiB), A10 (Ampere, 24\,GiB) and RTX PRO 6000 (Blackwell, 96\,GiB)---and on single-host
+Google Cloud TPU VMs~\cite{tpu}; support for AWS Inferentia and Trainium through the Neuron SDK
+is being designed and implemented separately and is not validated (\Designed{}). The design
+choice is \emph{one accelerator abstraction} with a small number of explicit, kind-specific
+decisions, rather than a separate product per vendor.
+
+\subsection{One abstraction, two device models}
+An accelerator is described everywhere by the same record: kind (\code{gpu} or \code{tpu}),
+vendor, product, memory per device, device count, and either a compute capability (GPU) or a
+slice type such as \code{v6e-4} (TPU). A deployment's device count means GPUs per replica on
+NVIDIA and chips per replica---the tensor-parallel degree---on TPU, so placement compares
+memory per device times devices per replica with the model's needs on both kinds.
+\Cref{tab:accel} lists where the kinds differ, including the planned AWS Neuron kind, whose
+entries describe the design rather than observed behaviour: like TPU, it is expected to need
+ahead-of-time compilation and a compiled-artifact cache, so the start-up budget and cache
+placement are per-kind settings rather than constants.
+
+\begin{table*}[t]
+\centering
+\caption{One accelerator abstraction, three device models. The NVIDIA column is implemented and
+measured; the Cloud TPU column is implemented, with a point-in-time bring-up; the AWS Neuron
+column is a design under implementation, not validated.}
+\label{tab:accel}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X@{}}
+\toprule
+Aspect & NVIDIA GPU (\Measured{}) & Cloud TPU (\PointInTime{}) & AWS Inferentia/Trainium (\Designed{}) \\
+\midrule
+Device exposure & Device plugin, \code{nvidia.com/gpu} & \code{google.com/tpu} extended resource, advertised by a systemd unit at every k3s start & Neuron device plugin (\code{aws.amazon.com/neuron} or NeuronCore resources), \code{/dev/neuron*} \\
+Detection & \code{nvidia-smi}: product, memory, compute capability & GCP metadata \code{accelerator-type}; device nodes counted; \code{-{}-tpu} override & In design \\
+Runtime & \code{nvidia} RuntimeClass, pod network & Privileged, device hostPaths, host network & Neuron SDK: vLLM Neuron backend or NxD Inference \\
+Memory unit & Memory per GPU & HBM per chip $\times$ chips & Device memory per Neuron device \\
+Parallelism & Tensor parallel across GPUs of one node & Tensor parallel across chips of one host & Tensor parallel across NeuronCores \\
+Precision & fp16 below CC 8.0, else bf16; FP8 allowed & bf16 only; FP8 refused at placement & bf16; FP8 where the Neuron SDK supports it \\
+Start-up & Standard startup probe & 40-min budget for XLA compilation; XLA cache on node & Ahead-of-time model compilation (long first start); compiled-artifact cache \\
+Accelerator metrics & DCGM exporter & None yet (vLLM metrics only) & In design \\
+Classes / instances & \code{t4}, \code{a10}, \code{rtx-pro-6000}, \dots & \code{tpu-v4}, \code{tpu-v5e}, \code{tpu-v5p}, \code{tpu-v6e} & \code{inf2}, \code{trn1}, \code{trn2} families \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\paragraph*{Detection and advertisement}
+On a VM without an NVIDIA driver, the bootstrap queries the GCP metadata server for the
+instance's \code{accelerator-type} (an operator may pass \code{-{}-tpu v6e-4} instead), counts
+the chips' device nodes (\code{/dev/accel*} on v4 and v5e, VFIO groups on v5p and v6e),
+refuses multi-host slices, forces bfloat16 and skips every NVIDIA step. A TPU VM has no
+device plugin, so the k3s step labels the node and advertises the chips as the
+\code{google.com/tpu} extended resource---the name GKE uses, so the agent's measurement code
+describes a GKE TPU pool too---and installs a systemd unit that re-applies the advertisement
+whenever k3s starts. The agent, which runs unprivileged and can see neither metadata nor
+device nodes, measures chips from the extended resource and the accelerator-type label (or
+GKE TPU labels and machine-type prefixes), with HBM per chip by generation: 32\,GiB (v4),
+16\,GiB (v5e), 95\,GiB (v5p) and 32\,GiB (v6e). Accelerator types for v4 and v5p count
+TensorCores (two per chip), so \code{v5p-8} has four chips; v5e and v6e types count chips.
+
+\paragraph*{Model host}
+On a TPU stamp the operator runs the vLLM TPU image pinned to the same vLLM release as the
+GPU host, with \code{vllm serve}, tensor parallelism equal to the chips per replica, and the
+XLA compilation cache on the node beside the weights so a restart does not recompile from
+scratch. The container is privileged with the device nodes mounted, requests
+\code{google.com/tpu} instead of \code{nvidia.com/gpu}, and uses no RuntimeClass. Since the
+first bring-up (\cref{sec:tpu-bringup}) it also shares the VM's network namespace.
+
+\paragraph*{Placement}
+TPU classes are judged by HBM per chip times chips per replica; the per-chip floor keeps a
+16\,GiB v5e chip from being admitted for a deployment sized for 32\,GiB v6e chips. Classes are
+never placed across kinds---the GPU image cannot run on a TPU and vice versa, whatever the
+memory says---and FP8 checkpoints are refused on TPU classes with
+\code{fp8\_not\_supported\_on\_tpu}. The console's catalogue offers two TPU presets: Qwen3.5-4B
+in bf16 on one v6e chip, and Qwen3.5-9B in bf16 across four chips (fitting v6e-4 and v5e-4).
+
+\subsection{First TPU bring-up: an experience report}
+\label{sec:tpu-bringup}
+On 17~Nov 2026 we enrolled a single-host Cloud TPU v6e-1 VM (machine type
+\code{ct6e-standard-1t}: one chip, 32\,GiB HBM) with the unchanged one-command bootstrap
+(\PointInTime{}). The bootstrap detected the TPU from metadata and advertised
+\code{google.com/tpu}~=~1; the agent measured one v6e chip; and a deployment was placed. Two
+defects surfaced, both configuration-clock assumptions that only a real device exposed.
+
+\emph{A preset sized for a bigger slice.} The only TPU catalogue preset asked for four chips,
+so the smallest v6e VM was never offered as a placement target. Placement was right to refuse
+it; the catalogue was wrong. We added the one-chip Qwen3.5-4B preset.
+
+\emph{IPv6 loopback in an IPv4-only pod network.} The model host's first start failed with
+\code{TPU initialization failed: Failed to connect to [::]:8353}. libtpu starts a local
+runtime service and connects to it over the IPv6 loopback address, which the IPv4-only pod
+network lacks. TPU model hosts now run with host networking (and cluster-first DNS for host
+networking), as the TPU image's own instructions do; one host owns a TPU VM's chips, so its
+port cannot collide with another's. GPU hosts keep the pod network.
+
+At the time of writing, end-to-end serving on the TPU stamp after this fix is \emph{not yet
+confirmed}; we make no TPU latency, throughput or compilation-time claim. The episode
+illustrates a recurring lesson (\cref{sec:lessons}): CI renders and unit tests verified every
+TPU manifest, yet the two defects concerned a fit between catalogue and slice and a network
+assumption of a vendor runtime, neither of which a test without the device could observe.
 
 % ================================================================= generation clock
 \section{The Generation Clock}
 \label{sec:gen}
 
 \subsection{Stamp request path}
-The stamp gateway parses a bearer token, selects a cached key, verifies algorithm, issuer,
-exact inference audience, time claims, account and \code{inference:invoke} scope, resolves
-the model only among routes owned by that account, requires a healthy usage spool and
-stamp-local limit authority, acquires admission and an in-flight lease, rewrites the public
-alias to the internal release, strips caller-supplied identity headers, and proxies a
-response or a pinned SSE stream. Admission combines a request bucket, an in-flight bound and
-a token-rate bucket debited from metered usage, coordinated once per stamp across gateway
-processes; limits are not global across stamps.
+The stamp gateway verifies the bearer token against a cached key (issuer, exact inference
+audience, time claims, account, \code{inference:invoke} scope), resolves the model only among
+the account's routes, requires a healthy usage spool, acquires admission (request, in-flight
+and token-rate buckets, per stamp) and an in-flight lease, rewrites the alias to the internal
+release, and proxies a response or a pinned SSE stream.
 
-\paragraph{Protocol surfaces.} OpenAI chat completions, completions and Responses, and the
-Anthropic Messages API~\cite{openaiapi,anthropicapi} share this path. Responses requests
-are forwarded to engines that implement them, but the gateway enforces a stateless subset
-(\code{store}, \code{background}, \code{previous\_response\_id} and \code{conversation} are
-refused) because stored conversations would be generation state outside any affinity
-guarantee. Messages requests are \emph{translated} to chat completions and back, so they
-inherit authentication, \code{auto} routing, limits, prefix-aware routing, metering and the
-tool-call guard without the engine implementing the Messages API.
+OpenAI chat completions, completions and Responses, and the Anthropic Messages
+API~\cite{openaiapi,anthropicapi} share this path. Responses is limited to a stateless subset
+(\code{store} and \code{previous\_response\_id} are refused), because stored conversations
+would be generation state outside any affinity guarantee; Messages requests are translated to
+chat completions and back, inheriting every gateway control.
 
 \subsection{Retry and streaming boundary}
 \label{sec:retry}
 A generation request is not idempotent. The gateway retries only a pre-connection failure
 (connect error or connect timeout) on another eligible backend. An HTTP 5xx penalizes the
 backend but is returned; a write, protocol or response-timeout failure is never replayed.
-After the first SSE byte the stream is pinned; a mid-stream failure ends the stream with an
-error event. Streams request a terminal usage frame; a missing frame marks the request
-unmetered rather than estimated from chunk counts.
+After the first SSE byte the stream is pinned; a mid-stream failure ends it with an error
+event. Streams request a terminal usage frame; a missing frame marks the request unmetered
+rather than estimated from chunk counts.
 
 \subsection{The edge tier}
 \label{sec:edge}
 The edge gateway gives every account one URL across stamps. It holds two
 configuration-clock snapshots: the signing keys and a \emph{routing table} that lists, per
-account, the deployments placed on non-revoked stamps that heartbeated within a liveness
-window (300\,s by default) and report an HTTPS inference URL, with each stamp's region,
-readiness and GPU summary. The table carries an ETag and a non-decreasing revision; the
-edge polls it with jitter (10\,s by default), refuses older revisions, and saves the last
-good copy to disk. It contains no credentials, specs or in-cluster endpoints.
+account, deployments placed on non-revoked stamps that heartbeated within a liveness window
+(300\,s by default) and report an HTTPS inference URL, with each stamp's region, readiness and
+accelerator summary, and the account's live routing policies (\cref{sec:policies}). The table
+carries an ETag and a non-decreasing revision; the edge polls it with jitter (10\,s by
+default), refuses older revisions, and saves the last good copy to disk. It contains no
+credentials, specs or in-cluster endpoints.
 
-Reading the table is a cross-account operation, so its authority is isolated (I1). A
-dedicated scope sits outside the delegable scope set, can be minted only by a command-line
-tool with database access onto a system-account service principal, is dropped at token
-exchange if copied onto any other key, and is checked again at the endpoint; the query runs
-inside an explicit, scoped RLS elevation, and full reads are audited.
+Reading the table is a cross-account operation, so its authority is isolated (I1): a
+dedicated, non-delegable scope minted only onto a system service principal, checked at the
+endpoint, executed inside a scoped RLS elevation, and audited.
 
 On each request the edge verifies the caller's token with the stamp's own verification code
-(I2), reads the \code{model} field from a bounded body, and considers only stamps holding
-that account's deployment of that model; another account's model is never a candidate.
-Candidates are ordered by passive health, readiness, preferred region and the edge's own
-in-flight count. The original bytes are forwarded with the caller's own token, and the
-stamp verifies it again. Per I4:
-\begin{itemize}
-  \item \textbf{Run ids pin strictly.} A request carrying a run id goes to the stamp chosen
-  by rendezvous hashing over (account, run id); if that stamp is down the request fails,
-  because the run's budget and trace exist only there.
-  \item \textbf{Sessions pin softly.} A session key also selects a stamp by affinity, but
-  fails over, because only cache efficiency is lost.
-  \item \textbf{The edge meters and limits nothing.} Stamps already meter every request
-  they serve; edge metering would count usage twice.
-  \item \textbf{Retries follow the stamp rule}: only after a connection failure, never once
-  a stamp may have received the request.
-\end{itemize}
-Because the control plane is contacted only by background tasks, the edge keeps serving
-through a control-plane, database or identity-provider outage from memory and, after a
-restart, from its saved table and keys; without either it reports unready rather than
-refusing all traffic. A test asserts that inference through the edge makes no control-plane
-call. The cost is one more hop and TLS session, routing changes visible only after a poll,
-and per-stamp (not global) limits.
+(I2), reads the \code{model} field from a bounded body, and considers only stamps holding that
+account's deployment of that model. Candidates are ordered by passive health, readiness,
+preferred region and the edge's own in-flight count. The original bytes are forwarded with
+the caller's own token, and the stamp verifies it again. Per I4: \textbf{run ids pin
+strictly} (rendezvous hashing~\cite{rendezvous} over (account, run id); if that stamp is down
+the request fails, because the run's budget and trace exist only there); \textbf{sessions pin
+softly} (a session key selects a stamp by affinity but fails over, because only cache
+efficiency is lost); \textbf{the edge meters and limits nothing} (stamps already meter every
+request they serve); and \textbf{retries follow the stamp rule} (only after a connection
+failure). Because the control plane is contacted only by background tasks, the edge keeps
+serving through a control-plane, database or identity-provider outage from memory and, after
+a restart, from its saved table and keys; a test asserts that inference through the edge makes
+no control-plane call. The costs are one more hop and TLS session, routing changes visible
+only after a poll, and per-stamp limits.
 
 \subsection{Prefix-aware routing with a load bound}
 \label{sec:prefix}
-Within a stamp, each deployment selects a routing strategy: round robin, least in flight,
-weighted, session affinity (rendezvous on a client key) or, new, prefix-aware.
-\Cref{alg:prefix} gives the prefix-aware rule. The gateway serializes the prompt---tool
-definitions, instructions, then each message encoded separately so that appending a message
-never changes earlier encodings---and cuts it into 256-byte blocks (roughly 64 English
-tokens, the order of a KV page). Block $i$ is identified by a BLAKE2b hash chained over
-blocks $0..i$, so two prompts share their first $n$ hashes exactly when they share their
-first $n$ blocks. A bounded LRU index (65{,}536 blocks per pool) maps each hash to the four
-backends that most recently served it. Sampling parameters are excluded: they change the
-output, not the prompt.
+Within a stamp, each deployment selects a backend strategy: round robin, least in flight,
+weighted, session affinity (rendezvous on a client key) or prefix-aware (\cref{alg:prefix}).
+The gateway serializes the prompt---tool definitions, instructions, then each message encoded
+separately so that appending a message never changes earlier encodings---and cuts it into
+256-byte blocks (roughly 64 English tokens, the order of a KV page). Block $i$ is identified by
+a BLAKE2b hash chained over blocks $0..i$, so two prompts share their first $n$ hashes exactly
+when they share their first $n$ blocks. A bounded LRU index (65{,}536 blocks per pool) maps
+each hash to the four backends that most recently served it. Sampling parameters are
+excluded: they change the output, not the prompt.
 
 \begin{algorithm}[t]
-\caption{Prefix-aware backend selection (per request).}
+\caption{Prefix-aware backend selection (per request)}
 \label{alg:prefix}
 \small
 \begin{algorithmic}[1]
 \Require healthy backends $H$, in-flight counts $f$, load factor $\alpha$ (default 1.1),
 block hashes $h_0..h_{m-1}$ ($m \le 512$), index $I: h \mapsto$ recent backends
-\State $\mathit{cap} \gets \lceil \alpha \cdot (1+\sum_{b\in H} f_b)/|H| \rceil$ \Comment{mean incl.\ this request}
-\State $E \gets \{ b \in H : f_b + 1 \le \mathit{cap} \}$ \Comment{least loaded always qualifies}
+\State $\mathit{cap} \gets \lceil \alpha \cdot (1+\sum_{b\in H} f_b)/|H| \rceil$
+\State $E \gets \{ b \in H : f_b + 1 \le \mathit{cap} \}$ \Comment{least loaded qualifies}
 \For{$b \in E$}
   \State $\ell_b \gets \max\{ n : b \in I[h_j]\ \forall j < n \}$ \Comment{leading run held}
 \EndFor
@@ -572,141 +568,317 @@ block hashes $h_0..h_{m-1}$ ($m \le 512$), index $I: h \mapsto$ recent backends
 \end{algorithmic}
 \end{algorithm}
 
-The bound is consistent hashing with bounded loads~\cite{boundedloads}: affinity can never
-push a backend past $\lceil\alpha\cdot\text{mean}\rceil$, which is what prevents the hot
+The bound follows consistent hashing with bounded loads~\cite{karger,boundedloads}: affinity
+can never push a backend past $\lceil\alpha\cdot\text{mean}\rceil$, which prevents the hot
 spots that pure session hashing produces. Health is applied first, so an ejected backend is
-never chosen however much of the prompt it holds. When membership changes the pool keeps
-its index and forgets only departed backends. The index is a guess: it does not know what
+never chosen however much of the prompt it holds. The index is a guess: it does not know what
 an engine evicted, so a stale entry yields an ordinary cache miss. It is process-local, so
 several gateway replicas learn separate indexes (soft affinity per I4), and it needs no
 tokenizer, so one gateway serves every model. The per-request cost is one hash pass over at
 most 128\,KiB and a dictionary walk.
+
+% ================================================================= routing policies
+\section{Routing Policies as Cached Snapshots}
+\label{sec:policies}
+
+A \emph{routing policy} gives clients one model name, such as \code{chat-default}, and lets
+the account decide which of its deployments answer it. Policies are configuration that the
+generation clock reads on every request, so by the rule of \cref{sec:model} they must reach
+serving components as cached snapshots, and their weighted split must respect the affinity
+that prefix caches and agent runs require.
+
+\subsection{Model}
+A policy belongs to one account and is keyed by an alias that may not equal one of the
+account's deployment aliases, \code{auto} or \code{cascade}. It is an ordered list of
+\emph{rules} and a default rule; the first rule whose conditions all hold decides. Conditions
+(all optional) are: the API key the token was exchanged from, the service principal, request
+headers (\code{equals}, or a regular expression searched over at most the first 1{,}024
+characters), the endpoint (chat completions---which includes agent runs---Responses, Messages,
+completions), whether tools are declared, an estimated prompt-token range (four characters per
+token) and a \code{max\_tokens} range. A rule's \emph{action} names 1--10 target deployments
+with integer weights summing to 100 (weight 0 drains a target), up to five fallbacks, the
+conditions that trigger fallback (\code{server\_error}, \code{overload}, \code{timeout},
+\code{no\_ready\_host}), an optional stamp preference (\code{prefer} or \code{pin}), an
+optional backend strategy (\code{prefix\_aware} or \code{least\_in\_flight}) and an optional
+upstream timeout. A policy has a mutable draft and immutable, audited versions; publishing
+freezes the draft as version $N{+}1$ and rollback republishes an old version as a new one.
+Validation blocks publishing on bad weights, foreign deployments (reported identically whether
+missing or another account's), fallback cycles or invalid expressions, and warns on, e.g., a
+tool-receiving rule whose target has no tool-call parser.
+
+\subsection{The weighted split}
+The split must send every request of a conversation to the same deployment (else the prefix
+cache of \cref{sec:prefix} is scattered), must give each target its weight over anonymous
+traffic, and must let two components that see different subsets of the targets agree: the
+edge sees every stamp, while a stamp can serve only the deployments placed on it.
+\Cref{alg:split} meets all three with \emph{weighted rendezvous hashing}~\cite{rendezvous,
+weighteddht}. The key is the run id, else the session key (the same headers and body
+\code{user} field prefix-aware routing uses), else a route key the edge assigned, else a
+random key.
+
+\begin{algorithm}[t]
+\caption{Policy decision \textsc{Decide} (pure; shared by simulate, stamp and edge)}
+\label{alg:split}
+\small
+\begin{algorithmic}[1]
+\Require policy $(r_1..r_n, r_\mathrm{def})$, request facts $F$, key $k$ (or $\bot$),
+deployments available here $A$ (or all)
+\State $r \gets$ first $r_i$ with $\mathrm{match}(r_i, F)$, else $r_\mathrm{def}$
+\State $T \gets \{(d, w) \in r.\mathrm{targets} : w > 0 \wedge d \in A\}$
+\State $\mathit{split} \gets \{ d : 100\,w / \textstyle\sum_{T} w \}$ \Comment{renormalized}
+\If{$k = \bot$} \State $t \gets \bot$ \Comment{simulation reports the split only}
+\Else
+  \State $t \gets \arg\max_{(d,w)\in T} \; -w / \ln u(k, d)$ \Comment{$u \in (0,1)$}
+\EndIf
+\State \Return $(r, \mathit{split}, t, [t] \mathbin{+\!\!+} r.\mathrm{fallbacks} \setminus \{t\})$
+\end{algorithmic}
+\end{algorithm}
+
+Here $u(k,d)$ is the first 64 bits of SHA-256 over $k$ and $d$, mapped strictly into $(0,1)$.
+The construction has three properties that the system relies on.
+
+\begin{proposition}
+\label{prop:split}
+Let $u(k,d)$ be independent and uniform on $(0,1)$ across targets $d$. Then (a) target $d$
+wins with probability $w_d / \sum_{T} w$; (b) if $d^\star$ wins over $T$, it wins over every
+$S \subseteq T$ with $d^\star \in S$; (c) raising one weight $w_j$ changes the winner of a key
+only to $j$.
+\end{proposition}
+\begin{proof}
+$E_d = -\ln u(k,d)$ is exponential with rate 1, so $E_d/w_d$ is exponential with rate $w_d$
+and the target maximizing $w_d/E_d$ is the one minimizing $E_d/w_d$; the minimum of
+independent exponentials is attained by $d$ with probability $w_d/\sum w$, giving (a). Scores
+do not depend on the set of competitors, so restricting the argmax to a subset containing the
+winner leaves it unchanged (b). Raising $w_j$ raises only $j$'s score, so a key's winner either
+stays or becomes $j$ (c).
+\end{proof}
+
+Property (b) is what lets the edge and a stamp agree without coordination: the edge draws the
+target over all targets and picks a stamp holding it; the stamp draws over the targets it
+serves and, whenever it holds the edge's choice, picks the same one. For an anonymous request
+the edge draws a random key and forwards it as \code{X-Fabric-Route-Key}, so the stamp uses
+the same key. Property (c) makes canaries cheap: raising a canary from 10\% to 20\% moves only
+the sessions that must move, onto the canary; modulo hashing would move most sessions. A
+per-request weighted coin, the obvious alternative, satisfies (a) but scatters conversations.
+
+\subsection{Fallback inside the retry boundary}
+A request moves down the chain only on the rule's listed conditions and only while nothing has
+been sent to the client. A non-streamed answer that fails a listed condition is discarded and
+the next deployment is tried; a 4xx other than 429 is returned as is; a streamed response is
+never retried once it has started, although a stream can still fall back before it starts when
+its target has no reachable host. The account's own rate, token and concurrency limits, and a
+stamp that cannot record usage, are returned without fallback, because another deployment on
+the stamp would fail the same way. Within one deployment the gateway still moves between
+model hosts only after a connection failure (\cref{sec:retry}). The \code{timeout} and
+\code{server\_error} conditions can run a request twice---the first host may still be
+working---so they are opt-in per rule, and every attempt is admitted, metered and charged.
+Responses carry the policy, version, rule, target, chain and, after a fallback, its reason
+(e.g.\ \code{no\_ready\_host>server\_error}), so a caller can always see what ran (G3).
+
+\subsection{Delivery and simulate/enforce parity}
+\label{sec:policy-delivery}
+\Cref{fig:policy} shows the path. Nothing on the request path asks the control plane, and no
+new delivery mechanism exists. Every desired-state pull returns
+\code{routing\_policies\,\{revision, policies\}}, the live versions of each account with a
+deployment placed on the stamp; the agent writes them into the stamp gateway's configuration
+file (in operator mode, onto each \code{ModelDeployment} for that account) and keeps the last
+snapshot through passes without one and across restarts. The edge receives the same documents
+in its routing table, whose ETag and revision cover them, so conditional polling and the
+on-disk copy work unchanged. A policy that fails to parse is skipped and logged (its alias
+behaves as if it had none); the rest of the snapshot still applies. Policies are looked up by
+the account in the caller's verified token, so another account's policy is never consulted.
+
+Matching, the weighted draw and the fallback order live in one pure module (standard library
+only; no I/O, clock or randomness), held as two byte-identical files in the data plane and the
+control plane, with a test in each suite that fails if they differ. The simulate API, the stamp
+gateway and the edge all call the same \textsc{Decide}, so a simulated request and a real one
+cannot get different answers (G4). Enforcement happens at the stamp, which chooses among the
+deployments it serves, walks the chain, and applies the rule's strategy and timeout; the edge
+evaluates the same policy only to pick a stamp holding the chosen target and to honour stamp
+preference, which only it can. The price is propagation delay: a published change reaches
+stamps as fast as agents poll and the edge as fast as it polls (10\,s by default), and stamp
+preference is advisory for callers that bypass the edge.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize, x=1mm, y=1mm,
+  comp/.style={draw=ink, rounded corners=1.5pt, fill=white, align=center, inner sep=2pt, minimum height=6mm},
+  gen/.style={-{Stealth[length=1.8mm]}, thick, draw=gen},
+  cfg/.style={-{Stealth[length=1.6mm]}, thick, dashed, draw=cfg},
+  lbl/.style={font=\sffamily\tiny, fill=white, inner sep=0.8pt, align=center}
+]
+\node[comp, fill=cfg!8, minimum width=36mm] (cp) at (0,0) {\textbf{Control plane}\\draft $\to$ publish v$N{+}1$ $\cdot$ rollback\\simulate = \textsc{Decide}};
+\node[comp, minimum width=26mm] (edge) at (-20,-20) {\textbf{Edge}\\\textsc{Decide}: stamp, route key};
+\node[comp, minimum width=26mm] (agent) at (20,-20) {\textbf{Stamp agent}\\writes config file};
+\node[comp, fill=gen!8, minimum width=26mm] (gw) at (20,-37) {\textbf{Stamp gateway}\\\textsc{Decide}: target, chain};
+\node[comp, minimum width=22mm] (client) at (-20,-37) {Client\\\code{model: chat-default}};
+\draw[cfg] (cp.south west) ++(6,0) -- node[lbl, left=0.5mm] {routing table\\(ETag, rev.)} (edge.north);
+\draw[cfg] (cp.south east) ++(-6,0) -- node[lbl, right=0.5mm] {desired state\\(rev.)} (agent.north);
+\draw[cfg] (agent) -- (gw);
+\draw[gen] (client) -- (edge);
+\draw[gen] (edge.south east) -- node[lbl, above, sloped] {+ route key} (gw.west);
+\end{tikzpicture}
+\caption{Routing-policy delivery. Dashed: configuration-clock snapshots, each cached with the
+last good copy kept; solid: the request path, which never contacts the control plane. All three
+components run the same pure decision function.}
+\label{fig:policy}
+\end{figure}
 
 % ================================================================= agents
 \section{Governing Agentic Requests}
 \label{sec:agents}
 
 An agent's unit of work is a \emph{run}: a sequence of model calls and tool executions.
-\sys{} governs runs in the stamp gateway, the component that already authenticates, admits
-and meters each call, without SDK changes and without model-host changes. All features are
-opt-in per request.
+\sys{} governs runs in the stamp gateway, which already authenticates, admits and meters each
+call, without SDK or model-host changes. All features are opt-in per request.
 
 \subsection{Runs, budgets and traces}
-A client tags calls with \code{X-Fabric-Run-Id} and may set token and step budgets on the
-first call. The run is keyed by (account, run id), so another account's identical id is a
-different run and reads as \code{404}. Before forwarding, the gateway checks the run's
-totals; an exhausted budget returns \code{429 run\_budget\_exhausted} with
+A client tags calls with \code{X-Fabric-Run-Id} and may set token and step budgets on the first
+call. The run is keyed by (account, run id), so another account's identical id is a different
+run and reads as \code{404}. An exhausted budget returns \code{429 run\_budget\_exhausted} with
 \code{x-should-retry: false} and no \code{Retry-After}, so SDKs do not retry, and the model
-host is never called. Steps are reserved at admission so concurrent calls cannot exceed a
-step budget; a step that starts within budget runs to completion, so the token budget can
-be overshot by the last step, and the trace shows the true total. A later call that sends a
-different budget is refused (\code{409}) rather than silently changing it. The trace
-(\code{GET /v1/runs/\{id\}}) records per step the endpoint, alias, deployment, token counts
-(including discarded guard attempts), latency, finish reason, tool names, whether arguments
-were valid, and guard outcomes---but never prompts, completions or argument values; guard
-errors name schema paths and expected types only. Runs are stamp-local and in memory: a
-restart forgets them, which is the reason for strict edge affinity.
+host is never called. Steps are reserved at admission, so concurrent calls cannot exceed a step
+budget; a step that starts within budget completes, and the trace shows the true total. The trace (\code{GET /v1/runs/\{id\}}) records per step the endpoint,
+alias, deployment, token counts (including discarded guard attempts), latency, finish reason,
+tool names, argument validity and guard outcomes---never prompts, completions or argument
+values. Runs are stamp-local and in memory, which is the reason for strict edge affinity.
 
 \subsection{The tool-call guard}
 \label{sec:guard}
-Small models routinely call tools that were never declared, send arguments that are not
-JSON, or violate the declared schema. For non-streaming chat completions that declare tools
-(including translated Messages requests), the gateway validates each call
-(\cref{alg:guard}). The validator covers \code{type}, \code{required}, \code{properties},
-\code{additionalProperties}, \code{enum}, \code{const}, \code{items}, length, size and
-range bounds, and \code{anyOf}/\code{oneOf}/\code{allOf}; unknown keywords are ignored, so
-it can under-report but never rejects a call a full validator would accept.
+Small models routinely call undeclared tools, send arguments that are not JSON, or violate the
+declared schema. For non-streaming chat completions that declare tools (including translated
+Messages requests), the gateway validates each call (\cref{alg:guard}) against \code{type},
+\code{required}, \code{properties}, \code{additionalProperties}, \code{enum}, \code{const},
+\code{items}, length, size and range bounds, and \code{anyOf}/\code{oneOf}/\code{allOf};
+unknown keywords are ignored, so it can under-report but never rejects a call a full validator
+would accept.
 
 \begin{algorithm}[t]
-\caption{Tool-call guard and final-answer format enforcement.}
+\caption{Tool-call guard and final-answer format enforcement}
 \label{alg:guard}
 \small
 \begin{algorithmic}[1]
-\Require request $q$ with tools $T$ and optional schema $\sigma$ (\code{response\_format}); reply $r$; retry limit $k$ (default 1)
+\Require request $q$ with tools $T$ and optional schema $\sigma$; reply $r$; retry limit $k$ (default 1)
 \If{$r$ has tool calls}
   \State $a \gets 1$
   \While{$\mathit{errs} \gets \textsc{Check}(r, T) \neq \emptyset$}
-    \If{$a > k$} \State \Return $r$ marked \code{failed; attempts=$a$} \EndIf
-    \State meter $r$; append correction message naming $\mathit{errs}$ to $q$
+    \If{$a > k$} \State \Return $r$ marked \code{failed}, attempts $a$ \EndIf
+    \State meter $r$; append correction naming $\mathit{errs}$ to $q$
     \State $r \gets \textsc{Send}(q)$ on the same backend; $a \gets a+1$
   \EndWhile
-  \State \Return $r$ marked \code{valid} or \code{repaired; attempts=$a$}
-\ElsIf{$\sigma$ requested \textbf{and} $r$.content $\not\models \sigma$}
+  \State \Return $r$ marked \code{valid} or \code{repaired}, attempts $a$
+\ElsIf{$\sigma$ requested \textbf{and} $r.\mathrm{content} \not\models \sigma$}
   \State meter $r$; $r' \gets \textsc{Send}(q \setminus \{\text{tools}, \text{tool\_choice}\})$
-  \State \Return $r'$ marked \code{repaired} or \code{failed; attempts=2}
+  \State \Return $r'$ marked \code{repaired} or \code{failed}, attempts 2
 \EndIf
 \State \Return $r$
 \end{algorithmic}
 \end{algorithm}
 
-\paragraph{Final-answer format enforcement.} We observed that vLLM does not apply a
-requested \code{response\_format} while tools are offered with automatic tool
-choice~\cite{vllmdocs}. A small model then ends an agent loop with prose where a JSON object
-was requested, and the OpenAI Agents SDK fails with an invalid-JSON error on any agent that
-has both tools and a structured output type. When a request declares tools and a
-\code{json\_schema} or \code{json\_object} format, and the reply calls no tool but its
-content does not validate, the gateway re-asks once with the same messages and \emph{no
-tools}; with nothing to call, the engine's structured-output path enforces the schema
-(lines 10--12 of \cref{alg:guard}). This converts a configuration interaction between
-engine features into a bounded, visible, billed retry.
+\paragraph*{Final-answer format enforcement}
+vLLM does not apply a requested \code{response\_format} while tools are offered with automatic
+tool choice~\cite{vllmdocs}. A small model then ends an agent loop with prose where JSON was
+requested, and the OpenAI Agents SDK fails on any agent that has both tools and a structured
+output type. When a request declares tools and a \code{json\_schema} or \code{json\_object}
+format, and the reply calls no tool but does not validate, the gateway re-asks once with the
+same messages and \emph{no tools}; with nothing to call, the engine's structured-output
+path~\cite{outlines} enforces the schema (lines 10--12 of \cref{alg:guard}). An interaction
+between engine features becomes a bounded, visible, billed retry.
 
-\paragraph{Honest cost.} Every discarded attempt was a real model invocation: it is recorded
-as usage, debited from the token-rate limit and charged to the run budget, and the response
-header reports the attempts. Streaming responses pass through unchecked because the client
-already holds the tokens; a caller can opt out with \code{X-Fabric-Tool-Guard: off}.
+\paragraph*{Honest cost}
+Every discarded attempt was a real model invocation: it is recorded as usage, debited from the
+token-rate limit and charged to the run budget, and a response header reports the attempts.
+Streaming responses pass through unchecked because the client already holds the tokens.
+
+\begin{figure*}[t]
+\centering
+\subfloat[Routing-policy editor: rules in match order, weighted targets, a fallback edge.\label{fig:console-routing}]{%
+  \includegraphics[height=4.75cm]{figures/console_routing.png}}\hfill
+\subfloat[Logs tab: start-up stages with measured progress, and the host log.\label{fig:console-logs}]{%
+  \includegraphics[height=4.75cm]{figures/console_logs.png}}
+\caption{The operator console, captured from a seeded demonstration account against a local
+control plane; names, stamps and log lines are demonstration data, not a production
+deployment.}
+\label{fig:console}
+\end{figure*}
 
 \subsection{Server-side tool loop and hosted tools}
-\code{POST /v1/agent/runs} executes a whole loop in one request. Each model call is an
-ordinary internal chat completion---authenticated, admitted, retried, metered, guarded and
-counted as a run step---so a long loop is throttled exactly like the same number of
-separate calls. Tool calls from one turn run in parallel (bounded concurrency) and results
-are appended in call order. Tools without an executor are \emph{client tools}: the run
-returns \code{requires\_action} with the pending calls and resumes under the same run id.
-Executors include a safe calculator (AST-evaluated, never \code{eval}), HTTP tools
-restricted to an operator allowlist with loopback, link-local and metadata addresses refused
-after DNS resolution, no redirects and no credential forwarding, and hosted tools enabled
-per stamp: a code interpreter running in a separate sandbox service (fresh interpreter per
-execution, rlimits, no-egress network policy, optional gVisor or Kata runtime) or a
-Firecracker-based microVM service~\cite{firecracker}; web fetch and search through
-configurable backends; file search over per-account vector stores with an OpenAI-compatible
-Files and Vector Stores API; and MCP connectors~\cite{mcp}, where the gateway acts as the MCP
-client for allowlisted servers with optional per-call approval. Run responses and streamed
-events carry sizes and outcomes, never code, page text, queries or results.
+\code{POST /v1/agent/runs} executes a whole loop in one request. Each model call is an ordinary
+internal chat completion---authenticated, admitted, retried, metered, guarded and counted as a
+run step---so a long loop is throttled exactly like the same number of separate calls. Tool
+calls from one turn run in parallel (bounded) and results are appended in call order. Tools
+without an executor are \emph{client tools}: the run returns \code{requires\_action} and resumes
+under the same run id. Executors include a safe calculator, allowlisted HTTP tools (loopback,
+link-local and metadata addresses refused after DNS resolution), and hosted tools enabled per
+stamp: a code interpreter in a separate sandbox (fresh interpreter per execution, rlimits, no
+egress, optional gVisor or microVM~\cite{firecracker} isolation), web fetch and
+search, file search over per-account vector stores, and MCP connectors~\cite{mcp}. Run responses carry sizes and outcomes,
+never code, page text, queries or results.
 
 \subsection{Model cascade}
 \label{sec:cascade}
-\code{model: "cascade"} answers with the account's smallest deployment and escalates to the
-next tier only when the answer fails a cheap, explainable check: truncation, empty output,
-non-object tool arguments, an undeclared tool, invalid JSON or a schema mismatch, or a 5xx.
-These are not quality judgements; each is something a client would otherwise detect and
-retry. Escalations are bounded (two by default), every attempt is metered on its own
-deployment, a 4xx is returned rather than escalated, and streamed cascades go to the first
-tier only. The ladder is drawn only from the caller's deployments; through the edge it is
-limited to tiers present on the selected stamp, a direct consequence of I4.
+\code{model: "cascade"} answers with the account's smallest deployment and escalates only when
+the answer fails a cheap, explainable check: truncation, empty output, non-object tool
+arguments, an undeclared tool, invalid JSON or a schema mismatch, or a 5xx. These are not
+quality judgements; each is something a client would otherwise detect and retry. Escalations
+are bounded (two by default), each attempt is metered on its own deployment, a 4xx is returned
+rather than escalated, and streamed cascades use the first tier only. Through the edge the
+ladder is limited to tiers present on the selected stamp, a direct consequence of I4.
+
+% ================================================================= operator experience
+\section{Operator Experience}
+\label{sec:console}
+
+The console turns the outbound streams of \cref{sec:observe} into views that answer an
+operator's first questions without shell access to a stamp (\cref{fig:console}). A stamp page
+shows a live \textbf{activity} timeline (``Enrolled $\to$ accelerators found $\to$ runtime OK
+$\to$ ready''). A deployment's \textbf{Logs} tab derives a start-up
+stepper---queued for placement, scheduled, pulling the model runtime image, downloading
+weights, loading weights, compiling or warming up, ready---from host snapshots and events, with
+measured progress (image size and pull time, bytes of weights downloaded), and shows the
+sanitized server log with level parsing and search. Startup-probe misses while weights load are
+shown as expected rather than as failures; real failures appear at their stage with a diagnosis
+(e.g.\ a missing NVIDIA RuntimeClass, HBM exhaustion, or FP8 on TPU). A \textbf{Metrics} tab plots
+request rate, tokens, TTFT and inter-token percentiles from the merged one-minute rows. The
+\textbf{Routing} editor draws a policy as a flow from the model name through its rules to the
+targets, with weights on edges and dashed fallback edges; \emph{Test a request} calls the
+simulate API on the draft or live version, and \emph{Publish} shows the difference.
+
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.84\textwidth]{figures/routing_sweep.pdf}
+\caption{Routing strategies across offered load (\Simulated{}; mean of 5 seeds, bars show the
+per-seed min--max). Top: share of prompt tokens served from the hosts' prefix caches. Middle:
+TTFT p95 on the simulated clock (log scale; dotted line is the 500\,ms SLO). Bottom: goodput. At
+4 sessions/s multi-turn traffic saturates the four hosts on two of five seeds for every
+strategy.}
+\label{fig:routing}
+\end{figure*}
 
 % ================================================================= implementation
 \section{Implementation}
 \label{sec:impl}
-\Cref{tab:impl} summarises the code base at the evaluated commit. The control plane and
-gateways are Python (FastAPI, SQLAlchemy, Alembic); the agent, operator and collector are
-Go; the console is a Next.js application; Helm charts package the control plane (including
-the optional edge) and stamps. Kubernetes provides reconciliation; it does not provide
-\sys{}'s account semantics.
+\Cref{tab:impl} summarises the code base. The control plane and gateways are Python (FastAPI,
+SQLAlchemy, Alembic); the agent, operator and collector are Go; the console is a Next.js
+application; Helm charts package the control plane (with the optional edge) and stamps.
+Kubernetes provides reconciliation; it does not provide \sys{}'s account semantics.
 
 \begin{table}[t]
 \centering
-\caption{Code base at commit \code{018b56e} (non-test source lines counted with
-\code{wc -l}; test functions counted by definition).}
+\caption{Code base at commit \commit{} (non-test source lines by \code{wc -l}; test
+functions counted by definition).}
 \label{tab:impl}
-\small
+\footnotesize
 \begin{tabularx}{\columnwidth}{@{}X r r@{}}
 \toprule
-Component & Source lines & Tests \\
+Component & Lines & Tests \\
 \midrule
-Control plane (Python) & 12.2k & 307 \\
-Stamp and edge gateways, hosted tools (Python) & 16.4k & 600 \\
-Agent, operator, collector (Go) & 12.0k & 268 \\
-Console (TypeScript) & 30.8k & --- \\
+Control plane (Python) & 14.4k & 320 \\
+Stamp and edge gateways, hosted tools (Python) & 17.7k & 653 \\
+Agent, operator, collector (Go) & 11.4k & 272 \\
+Console (TypeScript) & 32.3k & --- \\
 Code sandbox service (Python) & 0.8k & --- \\
 \bottomrule
 \end{tabularx}
@@ -716,329 +888,352 @@ Code sandbox service (Python) & 0.8k & --- \\
 \section{Evaluation}
 \label{sec:eval}
 
-\subsection{Evidence protocol}
-Every number in this section comes from a dated, checked-in record or from the dated live
-observations in the paper's evidence register (\cref{app:repro}); nothing is imputed.
-\Cref{tab:evidence} defines the classes we use and assigns each claim. The questions are:
-(Q1) Does prefix-aware routing improve cache reuse without the tail-latency failure of
-session affinity? (Q2) Do the agent-governance mechanisms work with real models and real
-client SDKs? (Q3) Can heterogeneous stamps be brought up and serve, and where does
-configuration-clock time go? (Q4) What do earlier fleet observations show and not show?
+\subsection{Questions and evidence protocol}
+We ask: \textbf{RQ1} Does prefix-aware routing improve cache reuse without the tail-latency
+failure of session affinity? \textbf{RQ2} Do routing policies split, agree and fall back as
+designed? \textbf{RQ3} Do the agent-governance mechanisms work with real models and unmodified
+client SDKs? \textbf{RQ4} Can heterogeneous stamps, including Cloud TPU, be brought up, and where
+does configuration-clock time go? Every number below comes from a dated, checked-in record or
+the paper's evidence register (\cref{app:repro}); nothing is imputed. \Cref{tab:evidence}
+defines the evidence classes; each result carries its class as a small-caps tag.
 
-\begin{table*}[t]
+\begin{table}[t]
 \centering
-\caption{Evidence classes and the claims assigned to each. Only \Simulated{} and dated
-records include repeated trials; \PointInTime{} items are single observations.}
+\caption{Evidence classes. Only \Simulated{} and \Measured{} items include repeated trials or
+retained traces; \PointInTime{} items are single observations.}
 \label{tab:evidence}
-\small
-\begin{tabularx}{\textwidth}{@{}l X X@{}}
+\footnotesize
+\begin{tabularx}{\columnwidth}{@{}l X@{}}
 \toprule
-Class & Meaning & Claims in this paper \\
+Class & Meaning and claims \\
 \midrule
-\Simulated{} & Production gateway, simulated model hosts; valid for comparing strategies, not for absolute latency & Routing study, 5 Nov 2026 (\cref{sec:eval-routing}) \\
-\PointInTime{} & One live observation on the stated date & 16 Nov 2026: Blackwell stamp bring-up; structured-output repair 3/3; agent SDK smoke 8/8; parser incident; demo lineup. 20 Sep 2026: five-model T4 audit \\
-\Measured{} (dated) & Retained logs or artifacts from a named run & 6 Oct 2026: T4 cold-start stages and text-only validation; earlier two-T4 pilot admission burst and latency anecdotes \\
-\Tested{} & Automated tests at commit \code{018b56e} & Edge never contacts control plane; guard, cascade, runs, prefix routing; agent SDK against the gateway; Go agent and operator \\
-\DevOnly{} & Kernel microbenchmarks on development or spare hardware & Fused decode-step kernel; not enabled in serving (\cref{sec:limits}) \\
-\Designed{} & Implemented or specified, not exercised on target & Edge against production stamps (local two-stamp demo only); Cloud TPU on hardware; GPU sharing (not implemented) \\
+\Simulated{} & Production gateway, simulated hosts; compares strategies, not absolute latency. Routing study, 5~Nov 2026 \\
+\Computed{} & Deterministic run of shipped code on synthetic keys. Policy split, 17~Nov 2026 \\
+\Tested{} & Automated suites at \commit{}. Edge, policies, guard, runs, prefix routing, agent SDK, Go agent and operator \\
+\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up \\
+\Measured{} & Retained logs from a named run. 6~Oct: T4 cold-start stages \\
+\DevOnly{} & Kernel microbenchmarks; not in serving \\
+\Designed{} & Specified or implemented, not exercised on target: production edge failover, TPU serving end to end, AWS Inferentia/Trainium, GPU sharing \\
 \bottomrule
 \end{tabularx}
-\end{table*}
+\end{table}
 
-\subsection{Q1: Prefix-aware routing (\Simulated{})}
+\subsection{RQ1: Prefix-aware routing \normalfont(\Simulated{})}
 \label{sec:eval-routing}
 
-\paragraph{Setup.} A benchmark harness drives the production gateway (served by uvicorn)
-in front of four simulated hosts. Each host has a 32K-token LRU prefix cache in 16-token
-blocks, serialized prefill at 0.25\,ms per uncached token plus 5\,ms, decode at 16\,ms plus
-1\,ms per running sequence, and at most 16 running sequences; simulated time runs at 0.25
-of wall time. Workloads: \emph{multi-turn} (4-turn sessions over 4 shared 1{,}024-token
-system prompts, 96-token user turns, mean 128 output tokens, 2\,s think time), \emph{mixed}
-(multi-turn and single-turn requests), and \emph{shared64} (single-turn requests over 64
-distinct 1{,}024-token system prompts, more than one host's cache holds). The SLO is
-TTFT~$\le$~500\,ms and time per output token~$\le$~60\,ms; goodput is the fraction of requests
-meeting both. Each point is the mean over 5 seeds of 40\,s runs; bars show the per-seed
-range. Measured gateway overhead, included in every TTFT, was 4.1--5.6\,ms wall at p50
-across sweeps. Each artifact records its command, commit and dirty flag, and is marked
-\code{citable\_as\_hardware\_measurement: false}.
+\paragraph*{Setup}
+A harness drives the production gateway (uvicorn) in front of four simulated hosts. Each host
+has a 32K-token LRU prefix cache in 16-token blocks, serialized prefill at 0.25\,ms per uncached
+token plus 5\,ms, decode at 16\,ms plus 1\,ms per running sequence, and at most 16 running
+sequences; simulated time runs at 0.25 of wall time. Workloads: \emph{multi-turn} (4-turn
+sessions over 4 shared 1{,}024-token system prompts, 96-token user turns, mean 128 output
+tokens, 2\,s think time), \emph{mixed} (multi-turn and single-turn), and \emph{shared64}
+(single-turn over 64 distinct 1{,}024-token system prompts, more than one host's cache holds).
+The SLO is TTFT~$\le$~500\,ms and time per output token~$\le$~60\,ms; goodput is the fraction of
+requests meeting both. Each point is the mean over 5 seeds of 40\,s runs. Measured gateway
+overhead, included in every TTFT, was 4.1--5.6\,ms wall at p50. Each artifact records its
+command, commit and dirty flag, and is marked \code{citable\_as\_hardware\_measurement: false}.
 
-\begin{figure*}[t]
-\centering
-\includegraphics[width=\textwidth]{figures/routing_sweep.pdf}
-\caption{Routing strategies across offered load (\Simulated{}; mean of 5 seeds, bars show
-the per-seed min--max). Top: share of prompt tokens served from the hosts' prefix caches.
-Middle: TTFT p95 on the simulated clock (log scale; dotted line is the 500\,ms SLO). Bottom:
-goodput. At 4 sessions/s multi-turn traffic saturates the four hosts on two of five seeds
-for every strategy.}
-\label{fig:routing}
-\end{figure*}
 
-\paragraph{Below saturation.} At 1 and 2 sessions/s (\cref{fig:routing}), prefix-aware
-routing reduced median TTFT by 29--39\% relative to least in flight (e.g.\ multi-turn at
-1/s: 78 vs.\ 127\,ms; mixed at 2/s: 82 vs.\ 116\,ms) and came within 10\,ms of session
-affinity's median. It matched least in flight's p95 within a few milliseconds or improved
-on it (mixed at 1/s: 338 vs.\ 407\,ms), with goodput of 99.0--99.5\%. Cache hits rose from
-67--76\% (least in flight) to 84--89\% on mixed traffic, against 83--90\% for session
-affinity. Round robin tracked least in flight.
+\paragraph*{Below saturation}
+At 1 and 2 sessions/s (\cref{fig:routing}), prefix-aware routing reduced median TTFT by
+29--39\% relative to least in flight (e.g.\ multi-turn at 1/s: 78 vs.\ 127\,ms; mixed at 2/s:
+82 vs.\ 116\,ms) and came within 10\,ms of session affinity's median. It matched least in
+flight's p95 within a few milliseconds or improved on it (mixed at 1/s: 338 vs.\ 407\,ms), with
+goodput of 99.0--99.5\%. Cache hits rose from 67--76\% (least in flight) to 84--89\% on mixed
+traffic, against 83--90\% for session affinity. Round robin tracked least in flight.
 
-\paragraph{At 4 sessions/s.} Means hide per-seed behaviour here. On mixed traffic,
-prefix-aware routing had the best p95 on four of five seeds (318--334\,ms against least in
-flight's 361--462\,ms, goodput 98--99\% against 96--98\%) but lost the burstiest seed
-(1{,}159 vs.\ 558\,ms), which dominates its mean p95 of 494\,ms. Session affinity's mean p95
-was 1{,}746\,ms with two seeds near 3--4\,s, because hashing sessions without load placed
-more requests on one host than its batch limit admitted (in the pre-change baseline, 192
-requests on one host against 128--136 on the others). Multi-turn traffic at 4/s saturated
-the fleet on two seeds for every strategy (mean goodput 76--81\%); no routing choice fixes a
-fleet that is out of capacity.
+\paragraph*{At 4 sessions/s}
+On mixed traffic, prefix-aware routing had the best p95 on four of five seeds (318--334\,ms
+against least in flight's 361--462\,ms, goodput 98--99\% against 96--98\%) but lost the
+burstiest seed (1{,}159 vs.\ 558\,ms), which dominates its mean p95 of 494\,ms. Session
+affinity's mean p95 was 1{,}746\,ms, because hashing sessions without load placed more requests
+on one host than its batch limit admitted. Multi-turn traffic at 4/s
+saturated the fleet on two seeds for every strategy (mean goodput 76--81\%); no routing choice
+fixes a fleet that is out of capacity.
 
-\paragraph{Shared prompts beyond one host's cache.} With 64 prompts, a prompt's first use
-is always a miss, so the reachable hit rate is about 25\%, 38\% and 58\% at 1, 2 and 4
-sessions/s. Prefix-aware routing reached 19.8\%, 28.6\% and 45.7\%, i.e.\ 75--79\% of
-reachable; the other strategies reached 4.7--22.1\%, i.e.\ 19--38\%. Median TTFT barely
-moved because most requests are first uses. Concentration has a tail cost when most traffic
-is cold: at 4/s prefix-aware p95 was 441\,ms against round robin's 364\,ms (least in flight
-526\,ms), with goodput 96.2\% against 99.3\% (93.8\%).
+\paragraph*{Shared prompts beyond one host's cache}
+With 64 prompts, a prompt's first use is always a miss, so the reachable hit rate is about 25\%,
+38\% and 58\% at 1, 2 and 4 sessions/s. Prefix-aware routing reached 19.8\%, 28.6\% and 45.7\%,
+i.e.\ 75--79\% of reachable; the other strategies reached 4.7--22.1\%, i.e.\ 19--38\%.
+Concentration has a tail cost when most traffic is cold: at 4/s prefix-aware p95 was 441\,ms
+against round robin's 364\,ms (least in flight 526\,ms), with goodput 96.2\% against 99.3\%
+(93.8\%).
 
-\paragraph{Without a session key.} When clients omit the OpenAI \code{user} field, session
-affinity has nothing to hash and degenerates to rotation. At 2 sessions/s its cache hits
-fell to 75.0\% (multi-turn) and 72.2\% (mixed), with median TTFT 137 and 113\,ms;
-prefix-aware routing, which never reads the field, kept 86.4\% and 85.9\% at 88 and 81\,ms.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{figures/routing_bound.pdf}
-\caption{Load-bound sensitivity, mixed traffic at 4 sessions/s (\Simulated{}, 5 seeds).
-Dotted lines: least in flight (blue) and session affinity (orange); in the right panel
-they mark those strategies' mean TTFT p99.}
-\label{fig:bound}
-\end{figure}
+\paragraph*{Without a session key}
+When clients omit the OpenAI \code{user} field, session affinity degenerates to rotation. At 2
+sessions/s its cache hits fell to 75.0\% (multi-turn) and 72.2\% (mixed), with median TTFT 137
+and 113\,ms; prefix-aware routing, which never reads the field, kept 86.4\% and 85.9\% at 88 and
+81\,ms.
 
 \begin{table}[t]
 \centering
 \caption{Load-bound sweep, mixed traffic at 4 sessions/s (\Simulated{}, 5 seeds, means).}
 \label{tab:bound}
-\small
-\begin{tabular}{@{}l r r r r@{}}
+\footnotesize
+\begin{tabular}{@{}l c r r@{}}
 \toprule
-Strategy & \multicolumn{2}{c}{TTFT p50/p95/p99 (ms)} & Hits & Goodput \\
+Strategy & TTFT p50/p95/p99 (ms) & Hits & Goodput \\
 \midrule
-least in flight & \multicolumn{2}{r}{136 / 440 / 761} & 74.9\% & 96.1\% \\
-session affinity & \multicolumn{2}{r}{95 / 1723 / 2856} & 90.4\% & 90.5\% \\
-prefix, $\alpha{=}1.0$ & \multicolumn{2}{r}{110 / 376 / 623} & 83.2\% & 98.2\% \\
-prefix, $\alpha{=}1.1$ & \multicolumn{2}{r}{95 / 353 / 608} & 88.3\% & 97.9\% \\
-prefix, $\alpha{=}1.25$ & \multicolumn{2}{r}{94 / 376 / 819} & 90.3\% & 97.3\% \\
-prefix, $\alpha{=}1.5$ & \multicolumn{2}{r}{92 / 374 / 1368} & 91.0\% & 97.0\% \\
+least in flight & 136 / 440 / 761 & 74.9\% & 96.1\% \\
+session affinity & 95 / 1723 / 2856 & 90.4\% & 90.5\% \\
+prefix, $\alpha{=}1.0$ & 110 / 376 / 623 & 83.2\% & 98.2\% \\
+prefix, $\alpha{=}1.1$ & 95 / 353 / 608 & 88.3\% & 97.9\% \\
+prefix, $\alpha{=}1.25$ & 94 / 376 / 819 & 90.3\% & 97.3\% \\
+prefix, $\alpha{=}1.5$ & 92 / 374 / 1368 & 91.0\% & 97.0\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\paragraph{Choosing the bound.} \Cref{fig:bound} and \cref{tab:bound} show the
-trade-off the bound controls. A bound of 1.0 is as even as least in flight and gives up
-about a third of the available cache benefit. Loosening past 1.1 buys two to three points
-of cache hits for a p99 up to 1.8$\times$ worse---the session-affinity failure in
-miniature. We chose 1.1 as the default. The corresponding multi-turn sweep was
-inconclusive because two of five seeds saturated every strategy.
+\paragraph*{Choosing the bound}
+\Cref{tab:bound} shows the trade-off the bound controls. A bound of 1.0 is
+as even as least in flight and gives up about a third of the available cache benefit.
+Loosening past 1.1 buys two to three points of cache hits for a p99 up to 1.8$\times$
+worse---the session-affinity failure in miniature. We chose 1.1 as the default. The
+corresponding multi-turn sweep was inconclusive because two of five seeds saturated every
+strategy.
 
-\paragraph{Threats.} Hosts are simulated, there is one gateway and there are four backends;
-the byte-block index only approximates engine token blocks; and some sweeps ran
-concurrently, which raised measured gateway overhead (4.4\,ms when run alone, 4.8--5.2\,ms
-concurrently). The result is a comparison of strategies under one host model, not a
-statement about any GPU.
+\paragraph*{Threats}
+Hosts are simulated, there is one gateway and there are four backends; the byte-block index
+only approximates engine token blocks; and some sweeps ran concurrently, which raised measured
+gateway overhead (4.4\,ms alone, 4.8--5.2\,ms concurrently). The result compares strategies
+under one host model; it is not a statement about any GPU.
 
-\subsection{Q2: Agentic correctness}
+\subsection{RQ2: Routing policies \normalfont(\Computed{}, \Tested{})}
+\label{sec:eval-policies}
+
+\paragraph*{Split accuracy, subset stability and canary locality}
+We ran the shipped decision module on 100{,}000 synthetic keys (\Computed{}, deterministic;
+\cref{app:repro}). With weights 50/30/20 the targets received 50.00\%, 29.84\% and 20.16\% of
+keys. For each of the three two-target subsets, every key whose full-set winner was in the
+subset drew the same winner from the subset alone: 0 disagreements in 200{,}000 checks,
+confirming \cref{prop:split}(b) for the edge/stamp agreement. Raising a canary from 10\% to
+20\% moved 9.98\% of keys---the minimum, 10\%, up to sampling---and every moved key moved onto
+the canary (\cref{prop:split}(c)).
+
+\paragraph*{Automated tests (\Tested{})}
+The suites at \commit{} cover each condition, first match, determinism and the subset property,
+fallback chains and cycles, copy identity, parity with \textsc{Decide} at the stamp and in the
+simulate API, every fallback condition, no fallback after a stream starts, edge/stamp agreement,
+\code{prefer}/\code{pin}, tenant isolation, immutable versions and rollback, and routing from
+the cached table with the control plane down. We have not exercised policies on live stamps;
+RQ2 establishes mechanism, not behaviour under production traffic.
+
+\subsection{RQ3: Agentic correctness}
 \label{sec:eval-agents}
 
-\paragraph{Live checks (\PointInTime{}, 16 Nov 2026).} Against a live stamp, the
-final-answer format enforcement passed 3 of 3 trials of a request that declared tools and
-a JSON schema. An eight-check smoke test using the unmodified OpenAI Agents SDK (token
-exchange, model listing, plain chat, a raw tool call with valid JSON arguments, a
-multi-tool agent, a handoff between agents, an agent with tools and a typed output, and a
-streamed agent run with tool events) passed all eight checks. These are single
-observations, not reliability estimates.
+\paragraph*{Live checks (\PointInTime{}, 16~Nov 2026)}
+Against a live stamp, final-answer format enforcement passed 3 of 3 trials of a request that
+declared tools and a JSON schema. An eight-check smoke test with the unmodified OpenAI Agents
+SDK (token exchange, model listing, plain chat, a raw tool call with valid JSON arguments, a
+multi-tool agent, a handoff, an agent with tools and a typed output, and a streamed run with
+tool events) passed all eight. These are single observations, not reliability estimates.
 
-\paragraph{A configuration-clock defect seen on the generation clock.} On the same day,
-tool-calling requests to a Qwen3.5-2B deployment returned HTTP 400 until a tool-call parser
-preset for that model was added to the operator's model profiles; the model host then
-restarted in 71\,s and tool calls succeeded. The parser is a configuration-clock setting
-(it is fixed at host start), but its absence was visible only as generation-clock errors.
-\sys{} now pins exact model-to-parser mappings (Qwen3.5 and Qwen3.6 use an XML tool-call
-format, Qwen3-VL a JSON one) and refuses a deployment-supplied parser that contradicts a
-model's native template.
+\paragraph*{A configuration defect seen on the generation clock}
+On the same day, tool-calling requests to a Qwen3.5-2B deployment returned HTTP 400 until a
+tool-call parser preset for that model was added to the operator's model profiles; the model
+host restarted in 71\,s and tool calls succeeded. The parser is fixed at host start, but its
+absence was visible only as request errors. \sys{} now pins exact model-to-parser mappings,
+refuses a deployment-supplied parser that contradicts a model's native template, and the policy
+validator warns when a tool-receiving rule targets a deployment without one.
 
-\paragraph{Automated tests (\Tested{}).} At the evaluated commit, all Go packages of the
-agent, operator and collector pass \code{go test}. The data-plane suite includes tests that
-run the real OpenAI Agents SDK against the gateway with a scripted host; guard tests for
-repair, failure, billing of discarded attempts and the no-tools final-answer retry; edge
-tests for cross-account refusal, connect-only failover, no replay after a request may have
-been sent, run-id affinity, serving from the saved table with the control plane down, and a
-test that inference through the edge never contacts the control plane; and prefix-routing
-tests including a four-turn conversation reaching one host without a session key.
-Run on 17 Nov 2026 in a CPU-only container, the data-plane suite reported 785 passed and 2
-skipped test cases (parametrized cases counted individually), and the control-plane suite
-reported 314 passed and 20 skipped; the skipped cases include tests that need a PostgreSQL
-server (among them the row-level-security tests), which this run did not provide.
+\paragraph*{Automated tests (\Tested{})}
+Run on 17~Nov 2026 at \commit{} in a CPU-only container, the data-plane suite reported 860
+passed and 2 skipped test cases (parametrized cases counted individually), including the real
+OpenAI Agents SDK against the gateway with a scripted host, guard repair and billing, and edge
+refusal, failover and no-replay tests. The control-plane suite reported 327 passed and 20 skipped; the skipped cases need a
+PostgreSQL server (among them the row-level-security tests), which this run did not provide.
 
-\subsection{Q3: Heterogeneous bring-up and cold start}
+\subsection{RQ4: Heterogeneous bring-up and cold start}
 \label{sec:eval-coldstart}
 
-\paragraph{Blackwell stamp (\PointInTime{}, 16 Nov 2026).} A single VM with one NVIDIA RTX
-PRO 6000 Blackwell GPU (96\,GiB) was enrolled with the one-command bootstrap and served
-Qwen3.6-35B-A3B-FP8 (about 37.5\,GB of weights) with a 64K-token context to Ready; the
-model-host image pull took 4\,min~4\,s. The demonstration lineup placed one model per GPU:
-Qwen3.5-2B on a T4, Qwen3.5-9B with an 8K context on an A10, and the 35B-A3B FP8 model on
-the RTX PRO 6000. We did not measure throughput or latency on these stamps.
+\paragraph*{Blackwell stamp (\PointInTime{}, 16~Nov 2026)}
+A single VM with one RTX PRO 6000 Blackwell GPU (96\,GiB) was enrolled with the one-command
+bootstrap and served Qwen3.6-35B-A3B-FP8 (about 37.5\,GB of weights) with a 64K-token context to
+Ready; the model-host image pull took 4\,min~4\,s. The demonstration lineup placed one model per
+GPU: Qwen3.5-2B on a T4, Qwen3.5-9B with an 8K context on an A10, and the 35B-A3B FP8 model on the
+RTX PRO 6000. We did not measure throughput or latency on these stamps.
 
-\paragraph{Where cold-start time goes (\Measured{}, 6 Oct 2026).} \Cref{fig:coldstart}
-decomposes the retained events of one Qwen3.5-0.8B host on an AKS T4 node: 334\,s waiting
-for a schedulable GPU, 106\,s pulling an 8.9\,GB image, 111\,s from container start to
-loaded weights (weights download itself took 10.8\,s for 1.72\,GiB), 330\,s of engine
-profiling, KV allocation and warmup, and 40\,s of frontend warmup until the API listened:
-922\,s in total. Qwen3.5-2B and 4B reported 351\,s and 355\,s of engine initialization. An
-isolated text-only run on a spare T4 reached \code{/health} in 404\,s, of which 313\,s was
-engine warmup; its first request took 6.4\,s and the next two 0.76 and 0.75\,s, because
-Triton kernels were JIT-compiled on first use. Node caches and CPU reservations differed
-between the two runs, so the difference is not an isolated effect of text-only mode.
+\paragraph*{Cloud TPU v6e-1 (\PointInTime{}, 17~Nov 2026)}
+As reported in \cref{sec:tpu-bringup}, the same bootstrap detected the TPU, advertised one chip,
+the agent measured it and a deployment was placed; the bring-up exposed a catalogue preset sized
+for four chips and libtpu's dependence on IPv6 loopback, both fixed. End-to-end serving after the
+fix is pending (\Designed{} until observed).
+
+\paragraph*{Where cold-start time goes (\Measured{}, 6~Oct 2026)}
+\Cref{fig:coldstart} decomposes the retained events of one Qwen3.5-0.8B host on a managed T4
+node: 334\,s waiting for a schedulable GPU, 106\,s pulling an 8.9\,GB image, 111\,s from container
+start to loaded weights (the download itself took 10.8\,s for 1.72\,GiB), 330\,s of engine
+profiling, KV allocation and warmup, and 40\,s of frontend warmup: 922\,s in total. An isolated text-only run on a spare T4
+reached \code{/health} in 404\,s, of which 313\,s was engine warmup; its first request took 6.4\,s
+and the next two 0.76 and 0.75\,s, because kernels were JIT-compiled on first use. Node caches and
+CPU reservations differed between the two runs, so the difference is not an isolated effect of
+text-only mode.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/cold_start.pdf}
-\caption{Configuration-clock cost of one cold T4 model host (\Measured{}, 6 Oct 2026),
-from retained timestamps (top) and an isolated text-only validation run measured from
-process start (bottom). Weight download is a small fraction; GPU availability and engine
-warmup dominate.}
+\caption{Configuration-clock cost of one cold T4 model host (\Measured{}, 6~Oct 2026), from
+retained timestamps (top) and an isolated text-only run from process start (bottom). Weight
+download is a small fraction; GPU availability and engine warmup dominate.}
 \label{fig:coldstart}
 \end{figure}
 
-These data justify two design choices. Rollouts must start a candidate beside the active
-release (\cref{sec:config}), because a recreate would expose roughly 15 minutes of
-downtime; and placement must refuse what a stamp cannot hold, because a Pending pod's wait
-is the single largest stage.
-
-\paragraph{Cloud TPU (\Designed{}).} TPU detection, chart values and the rendered TPU
-model host are checked in CI, but vLLM has not been started on TPU chips by us; we make no
-TPU serving claim.
-
-\subsection{Q4: Earlier fleet observations}
-On 20 Sep 2026 a live audit found five Ready T4 nodes, five Ready model hosts, five
-Available one-replica deployments and one HTTP 200 completion from each of five aliases
-(\PointInTime{})~\cite{priorpaper}. An earlier two-T4 pilot recorded 30 concurrent requests
-under a configured cap producing 5 served and 25 explicit \code{429} refusals with
-\code{Retry-After}, all 30 attributed in usage, together with operational anecdotes:
-4.25\,GiB of weights loaded from node-local NVMe in 3.3\,s, about 16\,ms per token
-single-stream decode, and p95 TTFT near 1.6\,s for that workload (\Measured{}, dated). These
-establish reachability and explicit refusal, not throughput, fairness or reliability.
-
-\subsection{What is not evaluated, and the plan}
-\label{sec:eval-plan}
-We report no hardware throughput or tail-latency results for any current stamp, no
-cross-stamp failover measured on production stamps (the edge has run only in a local
-two-stamp demonstration with real agents and HTTPS gateways, including serving through a
-control-plane outage and an edge restart from cache), no agent task-success rates, and no
-TPU results. The evaluation that would close these gaps is: (1) replay the routing
-workloads against real vLLM hosts on one GPU class with pinned image, model revision and
-settings, reporting engine-side TTFT and time per output token from Prometheus histograms;
-(2) run the edge in front of at least two production stamps and inject stamp and
-control-plane failures, recording failover latency and the absence of duplicate execution;
-(3) measure guard repair rates per model on a public tool-calling benchmark, separating
-repaired, failed and valid outcomes and their token cost; and (4) start the TPU path on
-v5e and v6e hardware.
+These data justify two design choices: rollouts start a candidate beside the active release,
+because a recreate would expose roughly 15 minutes of downtime; and placement refuses what a
+stamp cannot hold, because a Pending pod's wait is the largest single stage. They also explain
+the 40-minute TPU start-up budget: XLA compilation adds to, rather than replaces, these stages.
 
 % ================================================================= lessons
 \section{Lessons}
 \label{sec:lessons}
 
-\paragraph{Place state before you route.} Every edge-routing decision we made was forced
-by where some piece of generation state lived: run budgets forced strict affinity; prefix
-caches allowed soft affinity; stamp-local metering forbade edge metering; stamp-local
-cascades limited escalation to one stamp. Writing the state table first
-(\cref{tab:state}) would have produced the edge design directly.
+\paragraph*{Place state before you route}
+Every routing decision we made was forced by where some generation state lived: run budgets
+forced strict affinity; prefix caches allowed soft affinity; stamp-local metering forbade edge
+metering; stamp-local cascades limited escalation to one stamp; and prefix caches forced the
+policy split to be a deterministic function of the session key. Writing \cref{tab:state} first
+would have produced these designs directly.
 
-\paragraph{Configuration surfaces leak into generation correctness.} Two of our agentic
-failures were configuration interactions, not model failures: a missing tool-call parser
-(HTTP 400 until the host restarted with the right preset) and an engine that ignores a
-requested output format while tools are offered. Both are invisible to the control plane
-and visible only on the request path, which argues for gateway-level validation that turns
-silent semantic errors into bounded, metered, observable retries.
+\paragraph*{Make simulation the enforcement code}
+A simulator that models the data path drifts from it. One pure function, copied byte for byte
+and tested for identity, made ``what you test is what runs'' a property of the build.
 
-\paragraph{Charge for corrections.} A guard that re-asks a model hides cost unless it bills
-it. Recording discarded attempts as usage, debiting them from rate limits and run budgets,
-and reporting attempts in headers kept the mechanism honest and let budgets stop runaway
-repair loops.
+\paragraph*{Configuration surfaces leak into generation correctness}
+Our agentic and TPU failures were configuration interactions, not model failures: a missing
+tool-call parser, an engine that ignores a requested output format while tools are offered, a
+catalogue preset larger than the smallest slice, and a vendor runtime that assumes IPv6 loopback.
+All were invisible to the control plane and to CI. This argues for gateway validation that
+turns silent errors into bounded, metered retries, and for treating first bring-up on each
+accelerator as part of the test plan.
 
-\paragraph{Outbound-only observation is sufficient.} Status, activity, metrics and logs
-pushed by the agent gave the console a complete view of stamps on VMs the central
-Prometheus cannot reach, without opening an inbound path. Bounded buffers with event
-identifiers made disconnection a delay rather than a loss.
+\paragraph*{Charge for corrections; observe outbound}
+A guard or fallback that re-runs a request hides cost unless it bills it; recording discarded
+attempts as usage and debiting them from limits and run budgets kept both mechanisms honest.
+Status, activity, metrics and logs pushed by the agent gave the console a complete view of
+stamps that central monitoring cannot reach, without an inbound path.
 
-\paragraph{Cold start is a scheduling resource.} Image pulls, engine warmup and GPU
-availability make minutes of configuration-clock time per host. Treating spare capacity and
-warm caches as resources is a prerequisite for safe rollouts and for any autoscaler.
+% ================================================================= related work
+\section{Related Work}
+\label{sec:related}
+
+\paragraph*{Engines and schedulers}
+Orca introduced iteration-level scheduling for generative transformers~\cite{orca}; vLLM's
+PagedAttention manages KV memory in pages~\cite{vllm}. Sarathi-Serve chunks prefill to bound
+decode stalls~\cite{sarathi}; DistServe and Splitwise disaggregate prefill and
+decode~\cite{distserve,splitwise}; Llumnix migrates requests between instances~\cite{llumnix};
+Clockwork centralises scheduling for predictable latency~\cite{clockwork}; AlpaServe multiplexes
+models with model parallelism~\cite{alpaserve}. \sys{} uses vLLM unmodified and governs what
+surrounds it; Llumnix-style migration conflicts with its rule that a stream is pinned after its
+first byte.
+
+\paragraph*{Prefix reuse and request routing}
+SGLang's RadixAttention reuses KV-cached prefixes within an engine~\cite{sglang}; Preble
+schedules prompts across GPUs using prefix sharing and load together~\cite{preble}. \sys{}'s
+router shares Preble's goal with less information---request bytes, not tokens or eviction
+decisions---and bounds load as consistent hashing with bounded loads does~\cite{karger,
+boundedloads}. Its policy split uses weighted rendezvous hashing~\cite{rendezvous,weighteddht},
+whose minimal-disruption property is also what makes consistent hashing attractive for software
+load balancers such as Maglev~\cite{maglev}; we use it to make an edge and a partial replica agree
+on a weighted choice without coordination.
+
+\paragraph*{Model selection, cascades and cold start}
+Clipper and INFaaS automate model selection behind one front end~\cite{clipper,infaas};
+RouteLLM learns to route between models and FrugalGPT cascades them~\cite{routellm,frugalgpt}.
+\sys{}'s policies and cascade are explainable, operator-authored relatives whose conditions are
+request facts, not learned predictors. ServerlessLLM speeds checkpoint loading~\cite{serverlessllm};
+our T4 data show warmup and accelerator availability dominating loading.
+
+\paragraph*{Agents and structured output}
+Parrot exposes application structure to the
+server~\cite{parrot}; InferCept handles KV state of requests paused for tools~\cite{infercept};
+constrained decoding enforces grammars inside the engine~\cite{outlines}. \sys{} governs agent
+loops at the gateway with budgets, traces and validation, complementary to engine-side work.
+
+\paragraph*{Configuration management and control planes}
+\sys{}'s reconciliation follows the Kubernetes controller and operator
+patterns~\cite{k8scontroller,borgomegak8s} descended from Borg~\cite{borg}. Versioned,
+validated configuration with staged rollout and fast rollback is established practice at
+scale~\cite{fbconfig}; \sys{} adds the constraint that the consumers of such configuration sit on
+the generation path and must keep serving from a cached copy. Credentials are
+JWTs~\cite{rfc7519} verified against cached keys and issued by token
+exchange; tenant data is protected by row-level security~\cite{pgrls}; the
+invariants resemble NIST SP~800-207~\cite{nistzt}, with narrower, testable claims.
 
 % ================================================================= limitations
-\section{Limitations and Threats to Validity}
+\section{Limitations and Evaluation Plan}
 \label{sec:limits}
 
-\paragraph{Evidence.} The routing results use simulated hosts. Live checks are single
-observations without repetition or confidence intervals. The September audit, the October
-validation and the November checks differ in topology and software. The bring-up of the
-Blackwell stamp establishes that the path works once, not its reliability.
+\paragraph*{Evidence}
+The routing results use simulated hosts. Live checks are single observations without
+repetition or confidence intervals, and the September, October and November observations
+differ in topology and software. The policy results establish mechanism, not production
+behaviour. TPU serving has not been observed end to end.
 
-\paragraph{Known gaps.} The stamp pod still mounts the agent's Kubernetes service-account
-token into the gateway and collector containers, so I1 is enforced by application roles
-but not by Kubernetes credentials. The September analysis also reported a same-release
-replica reduction that did not converge automatically and a one-pass reconciliation delay
-after projected-token rotation~\cite{priorpaper}; we have not re-audited either. Limits,
-runs and prefix indexes are per stamp or per gateway process, not global; an account served
-by two stamps can use both stamps' allowances. Agent runs are in memory and lost on gateway
-restart. The edge's routing-table credential, if leaked, exposes every account's deployment
-and placement metadata (but no prompts or secrets). The tool-call guard checks only
-non-streaming chat completions. Usage records are operational, not billing-grade. Hosted
-code execution in the process sandbox shares a kernel across runs unless a gVisor or Kata
-runtime class or microVM backend is configured. GPU sharing is designed but not
-implemented, so large GPUs serving moderate models are underused.
+\paragraph*{Known gaps}
+The stamp pod still mounts the agent's Kubernetes service-account token into the gateway and
+collector containers, so I1 is enforced by application roles but not by Kubernetes credentials.
+Limits, runs and prefix indexes are per stamp or per gateway process, and runs are lost on
+gateway restart. The
+edge's routing-table credential, if leaked, exposes every account's deployment, placement and
+policy metadata (no prompts or secrets). Policy changes propagate at polling speed, prompt-length
+conditions use a four-characters-per-token estimate, and \code{timeout} fallbacks can execute a
+request twice. The guard checks only non-streaming chat completions. TPU stamps export no accelerator-level metrics yet. AWS Inferentia/Trainium support is
+designed and under implementation, with no results. GPU sharing (time-slicing with
+\sys{}-enforced memory shares, so a 96\,GiB card serving a 37.5\,GB model could also host a
+small one) is designed but not implemented.
 
-\paragraph{Kernel work.} A fused decode-step kernel for the gated-delta recurrence was
-measured at 1.81$\times$ the stock operation at batch 1 inside a CUDA graph on T4 (20.37
-vs.\ 11.30\,$\mu$s) with bit-identical outputs, reaching parity at 16--32 sequences
-(\DevOnly{}). The operation is roughly 2\% of a token's cost, it is not enabled in serving,
-and we claim no end-to-end benefit.
+\paragraph*{Kernel work}
+A fused decode-step kernel for the gated-delta recurrence was measured at 1.81$\times$ the stock
+operation at batch 1 inside a CUDA graph on T4 (20.37 vs.\ 11.30\,$\mu$s) with bit-identical
+outputs, reaching parity at 16--32 sequences (\DevOnly{}). It is an optional model-host setting,
+not registered under the vLLM release the stamps run, and we claim no end-to-end benefit.
+
+\paragraph*{Evaluation plan}
+The evaluation that would close these gaps is: (1) replay the routing workloads against real
+vLLM hosts on one GPU class with pinned image, model revision and settings, reporting engine-side
+TTFT and time per output token from Prometheus histograms; (2) run the edge in front of at least
+two production stamps and inject stamp and control-plane failures, recording failover latency and
+the absence of duplicate execution; (3) exercise routing policies on live stamps, measuring
+propagation delay from publish to enforcement and verifying session stickiness under canary
+changes; (4) measure guard repair rates per model on a public tool-calling benchmark, separating
+repaired, failed and valid outcomes and their token cost; and (5) confirm TPU serving on v6e-1
+and v6e-4, recording XLA compilation time with a cold and a warm cache.
 
 % ================================================================= conclusion
 \section{Conclusion}
 \label{sec:conclusion}
-A managed LLM service is easier to reason about as two clocks than as one control loop.
-Extending \sys{} with an edge tier, cache-aware routing, heterogeneous stamps and agentic
-requests added state at every tier; the rule that state lives with the clock that reads it
-told us where each piece belonged and what affinity, retry and metering behaviour the
-routers in front of it must provide. The resulting system serves one endpoint across stamps
-without putting the control plane on the request path, routes for cache reuse without
-session affinity's tail, and governs agent loops with budgets, content-free traces and
-honest, bounded repair of the tool-call and output-format errors that small open models
-make. Its evidence is uneven, and we have classified it accordingly: a simulated routing
-study, dated cold-start records, and point-in-time live checks, with throughput on real
-hardware, production edge failover and TPU serving left as stated future work.
+A managed LLM service is easier to reason about as two clocks than as one control loop. Each
+extension of \sys{}---an edge tier, cache-aware routing, routing policies, agent governance and
+heterogeneous accelerators---added state, and the rule that state lives with the clock that
+reads it told us where each piece belonged and what affinity, retry and metering behaviour the
+routers in front of it must provide. The evidence is uneven and classified accordingly; hardware
+throughput, production edge failover and TPU serving remain stated future work.
 
-\section*{Acknowledgements}
-[To be added.]
-
-\balance
-\bibliographystyle{plain}
-\bibliography{references}
-
-\appendix
+% ================================================================= appendix
+\appendices
 \section{Reproducibility and Evidence Map}
 \label{app:repro}
-Source code and records: \repourl, commit \code{018b56e}. All plotted values are read
-from the repository: \code{paper/data/evidence.json} (evidence register, including the
-16~November live observations with scope ``point-in-time live check'' and the 6~October
-cold-start timestamps) and the routing artifacts under
-\code{docs/benchmarks/routing-2026-11-05/} (schema \code{fabric.routing-benchmark/v1}; each
-records its command, commit, dirty flag, host model and per-seed summaries). Figures are
-regenerated deterministically with
-\code{uv run --project paper python paper/generate\_figures.py}; the routing benchmark is
-rerun with \code{make bench-routing}. The edge, agent-loop, cascade and agent-run
-demonstrations run without a GPU via \code{make demo-edge}, \code{make demo-agent-loop},
-\code{make demo-cascade} and \code{make demo-agent}. Operational identifiers (hostnames,
-cloud resource names, addresses, credentials) are omitted from this paper by design.
+{\raggedright
+Source code and records: \repourl, commit \commit. All plotted and quoted values are read from
+the repository: \code{paper/data/evidence.json} (evidence register: the 16~Nov live observations
+and the 17~Nov TPU bring-up, both with scope ``point-in-time live check''; the 6~Oct cold-start
+timestamps; and the routing-policy split check), and the routing artifacts under
+\code{docs/benchmarks/routing-2026-11-05/} (schema \code{fabric.routing-benchmark/v1}; each records
+its command, commit, dirty flag, host model and per-seed summaries). Figures are regenerated
+deterministically with \code{paper/generate\_figures.py} (which also crops the architecture
+diagram and console screenshots from checked-in images), the routing benchmark with
+\code{make bench-routing}, and the policy check with \code{paper/policy\_split\_check.py}.
+Edge, agent and cascade demonstrations run without an accelerator (\code{make demo-edge},
+\code{make demo-agent}, \code{make demo-cascade}). Operational identifiers (hostnames, cloud
+resource names, addresses, credentials) are omitted by design.\par}
+
+\section*{Acknowledgment}
+[To be added by the authors. Per arXiv policy, disclose here any use of generative tools in
+preparing the manuscript or the software, and acknowledge funding and compute providers.]
+
+\IEEEtriggeratref{26}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
 
 \end{document}

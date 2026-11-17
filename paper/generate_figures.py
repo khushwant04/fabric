@@ -569,6 +569,44 @@ def cold_start() -> None:
         save(fig, "cold_start")
 
 
+def _raster(source: Path, name: str, box_xyxy: tuple[int, int, int, int], width: int,
+            erase: tuple[tuple[int, int, int, int, tuple[int, int, int]], ...] = ()) -> None:
+    """Crop a checked-in image, optionally blank regions, resize, and write a PNG.
+
+    Pillow writes no timestamps into PNGs, so identical inputs give identical bytes.
+    """
+    from PIL import Image, ImageDraw
+
+    image = Image.open(source).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    for x0, y0, x1, y1, fill in erase:
+        draw.rectangle((x0, y0, x1, y1), fill=fill)
+    image = image.crop(box_xyxy)
+    height = round(image.height * width / image.width)
+    image.resize((width, height), Image.LANCZOS).save(OUT / f"{name}.png", optimize=False)
+
+
+def architecture_diagram() -> None:
+    """The reference architecture diagram with accelerator node pools (docs/assets), cropped.
+
+    The crop drops the outer margin and the numbered request-flow legend at the bottom; the
+    paper's caption lists the same six steps. The rendered diagram labels the edge gateway
+    "Envoy". The implemented edge gateway is a Fabric service built from the data-plane image
+    (ADR 0021 rejects Envoy), so that one word is blanked with the box's own fill colour.
+    Nothing else is changed.
+    """
+    _raster(REPO / "docs" / "assets" / "fabric-architecture-accelerators.webp", "fabric_architecture",
+            (50, 48, 1950, 1035), 1900, erase=((680, 438, 713, 450, (242, 242, 242)),))
+
+
+def console_screenshots() -> None:
+    """Two console screenshots of the seeded demo account, cropped to the content pane."""
+    shots = REPO / "docs" / "screenshots"
+    _raster(shots / "routing" / "26-routing-editor.png", "console_routing", (612, 120, 2800, 1680), 1400)
+    _raster(shots / "console" / "06d-deployment-logs-downloading.png", "console_logs",
+            (616, 470, 2800, 1594), 1400)
+
+
 def main() -> None:
     cloud_architecture()
     fleet_evolution()
@@ -579,7 +617,9 @@ def main() -> None:
     routing_sweep()
     routing_bound()
     cold_start()
-    print(f"Generated 9 PDF and 9 PNG figures in {OUT}")
+    architecture_diagram()
+    console_screenshots()
+    print(f"Generated 9 PDF and 12 PNG figures in {OUT}")
 
 
 if __name__ == "__main__":
