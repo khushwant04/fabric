@@ -71,12 +71,14 @@ type GPU struct {
 	MemoryBytes       int64  `json:"memory_bytes"`
 	ComputeCapability string `json:"compute_capability,omitempty"`
 	Source            string `json:"source,omitempty"`
-	// Accelerator is "tpu" for Cloud TPU chips; omitted for GPUs, so an NVIDIA stamp's
-	// report is unchanged. For a TPU, Count is chips and MemoryBytes is HBM per chip.
+	// Accelerator is "tpu" for Cloud TPU chips and "neuron" for AWS Inferentia/Trainium
+	// devices; omitted for GPUs, so an NVIDIA stamp's report is unchanged. For a TPU, Count
+	// is chips and MemoryBytes is HBM per chip; for Neuron, devices and HBM per device.
 	Accelerator string `json:"accelerator,omitempty"`
-	// Vendor is "google" for TPU chips; omitted for GPUs.
+	// Vendor is "google" for TPU chips and "aws" for Neuron devices; omitted for GPUs.
 	Vendor string `json:"vendor,omitempty"`
-	// AcceleratorType is the TPU slice type, e.g. "v6e-4".
+	// AcceleratorType is the TPU slice type, e.g. "v6e-4", or the Neuron node's EC2
+	// instance type, e.g. "inf2.xlarge".
 	AcceleratorType string `json:"accelerator_type,omitempty"`
 }
 

@@ -60,6 +60,8 @@ spec:
             - --model-host-gpu-memory-utilization={{ .gpuMemoryUtilization }}
             {{- if include "fabric-stamp.isTPU" $ }}
             - --model-host-dtype={{ $.Values.accelerator.tpu.dtype | default "bfloat16" }}
+            {{- else if include "fabric-stamp.isNeuron" $ }}
+            - --model-host-dtype={{ $.Values.accelerator.neuron.dtype | default "bfloat16" }}
             {{- else }}
             - --model-host-dtype={{ .dtype }}
             {{- end }}
@@ -118,6 +120,22 @@ spec:
             {{- with .Values.accelerator.tpu }}
             # Cloud TPU: chips as google.com/tpu, no RuntimeClass (there is no NVIDIA runtime).
             - --model-host-accelerator=tpu
+            {{- if .privileged }}
+            - --model-host-privileged
+            {{- end }}
+            {{- with .command }}
+            - {{ printf "--model-host-command=%s" (join " " .) | quote }}
+            {{- end }}
+            {{- range .devices }}
+            - {{ printf "--model-host-device=%s" . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- else if include "fabric-stamp.isNeuron" . }}
+            {{- with .Values.accelerator.neuron }}
+            # AWS Neuron: devices as aws.amazon.com/neuron from the Neuron device plugin, no
+            # RuntimeClass (there is no NVIDIA runtime).
+            - --model-host-accelerator=neuron
+            - --model-host-neuron-cores-per-device={{ int .coresPerDevice }}
             {{- if .privileged }}
             - --model-host-privileged
             {{- end }}

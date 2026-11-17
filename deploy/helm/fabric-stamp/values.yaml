@@ -522,7 +522,7 @@ gpu:
   # device while another node sits idle.
   spreadAcrossNodes: true
 
-# The accelerator model hosts run on (docs/tpu.md).
+# The accelerator model hosts run on (docs/tpu.md, docs/neuron.md).
 #
 #   nvidia  NVIDIA GPUs through the device plugin and gpu.runtimeClassName. Every stamp
 #           before Cloud TPU support; choosing it changes nothing.
@@ -532,6 +532,14 @@ gpu:
 #           and get a longer startup budget for XLA compilation. gpu.runtimeClassName and the
 #           DCGM exporter are not used. Set gpu.nodeSelector to the TPU node's label
 #           (the bootstrap uses accelerator=tpu).
+#   neuron  AWS Inferentia2 or Trainium (inf2, trn1, trn2). Model hosts run vLLM on Neuron
+#           from the AWS Deep Learning Containers, request aws.amazon.com/neuron devices from
+#           the Neuron device plugin, use tensor parallelism across the NeuronCores of the
+#           devices they ask for, keep the Neuron compiler's output on the node next to the
+#           weights, and get a long startup budget for ahead-of-time compilation.
+#           gpu.runtimeClassName and the DCGM exporter are not used. Set gpu.nodeSelector to
+#           the Neuron node's label (the bootstrap uses accelerator=neuron; on EKS, for
+#           example node.kubernetes.io/instance-type=inf2.xlarge).
 accelerator:
   type: nvidia
   tpu:
@@ -552,6 +560,29 @@ accelerator:
     devices: []
     # TPUs serve bfloat16 checkpoints; float16 and FP8 weights are not supported.
     dtype: bfloat16
+  neuron:
+    # vLLM with the Neuron backend from AWS Deep Learning Containers. Pinned to the Neuron
+    # SDK 2.28 release (vLLM 0.13 with the vllm-neuron plugin), the last release whose
+    # serving stack still supports Inferentia2 and Trainium1 as well as Trainium2; later
+    # releases serve Trainium2 and newer only. Check the Neuron DLC release notes before
+    # raising it, and keep the host's Neuron driver at least as new as the image's runtime.
+    image: public.ecr.aws/neuron/pytorch-inference-vllm-neuronx:0.13.0-neuronx-py312-sdk2.28.0-ubuntu24.04
+    # The image's entrypoint is not a server, so the command is given explicitly; the
+    # operator appends the same flags it passes on GPUs.
+    command: ["vllm", "serve"]
+    # NeuronCores vLLM sees on one device at the runtime's default logical-core setting:
+    # 2 on Inferentia2 and Trainium (trn1), 4 on Trainium2 (eight physical cores, LNC=2).
+    # A replica's tensor-parallel size is its devices times this. The bootstrap sets it from
+    # the instance type.
+    coresPerDevice: 2
+    # With the Neuron device plugin the requested devices are injected into the container
+    # and nothing else is needed. Without it, set privileged and list the device nodes,
+    # which the bootstrap does only when the device plugin cannot run.
+    privileged: false
+    # Host device nodes mounted into the model host at the same path, e.g. /dev/neuron0.
+    devices: []
+    # Fabric serves bf16 checkpoints on Neuron; FP8 checkpoints are refused at placement.
+    dtype: bfloat16
 
 # GPU utilisation and memory for the console's serving metrics (docs/serving-metrics.md).
 # The agent reads an NVIDIA DCGM exporter through its Service's Endpoints. Without one, the
@@ -566,7 +597,8 @@ gpuMetrics:
     service: dcgm-dcgm-exporter
   # Run a small exporter on each GPU node with this stamp, for a cluster that has none (a
   # k3s VM). Uses gpu.nodeSelector, gpu.tolerations and gpu.runtimeClassName, and reads the
-  # devices without requesting nvidia.com/gpu. Never rendered when accelerator.type is tpu.
+  # devices without requesting nvidia.com/gpu. Never rendered when accelerator.type is tpu or
+  # neuron.
   dcgmExporter:
     enabled: false
     image:

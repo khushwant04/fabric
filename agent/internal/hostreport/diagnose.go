@@ -49,6 +49,38 @@ var logPatterns = []logPattern{
 		"Deploy the model's bf16 checkpoint on a TPU stamp; FP8 checkpoints need an NVIDIA GPU.",
 	},
 	{
+		regexp.MustCompile(`(?i)No neuron devices? (were |was )?found|Failed to (open|find|discover) (the )?neuron device|nrt_init failed|Neuron runtime (initialization|init) failed|/dev/neuron[0-9]*: No such file|NEURON_RT_VISIBLE_CORES.*(invalid|out of range)|Logical Neuron Core.*not available`),
+		"NeuronRuntimeMissing",
+		"The model server cannot open the Neuron devices inside its container.",
+		"The container must request aws.amazon.com/neuron so the Neuron device plugin injects " +
+			"/dev/neuron*: check the neuron-device-plugin pods in kube-system and the Neuron driver " +
+			"on the instance (ls /dev/neuron*, neuron-ls); on k3s, re-run the bootstrap command, " +
+			"which installs the device plugin and sets the chart's Neuron values. Only one process " +
+			"can hold a NeuronCore, so stop anything else using the devices.",
+	},
+	{
+		regexp.MustCompile(`(?i)neuronx-cc.*(failed|error|returned non-zero)|NEFF.*(compil|generation).*fail|neuronx_distributed.*compil.*(fail|error)|neuron.*compil(er|ation).*(failed|crash|exited|error)`),
+		"NeuronCompilationFailed",
+		"The Neuron compiler could not compile this model for the instance.",
+		"Neuron compiles every model ahead of time on first start. Check that the architecture " +
+			"is supported by vLLM on Neuron, lower max_model_len or max_num_seqs, and make sure the " +
+			"instance has enough host memory and disk for compilation. A corrupt compile cache under " +
+			"the node's model cache (neuron/) can be deleted to force a clean compile.",
+	},
+	{
+		regexp.MustCompile(`(?i)NRT_RESOURCE|nrt.*(failed to allocate|out of memory|insufficient memory)|neuron.*(out of (device )?memory|failed to allocate|insufficient (device )?memory)`),
+		"NeuronOutOfMemory",
+		"The model does not fit in Neuron device HBM with these settings.",
+		"Lower max_model_len or max_num_seqs, use more Neuron devices (tensor parallelism spans " +
+			"their NeuronCores), or deploy on an instance with more HBM per device.",
+	},
+	{
+		regexp.MustCompile(`(?i)fp8.*not supported.*neuron|neuron.*does not support.*fp8`),
+		"QuantizationUnsupported",
+		"This checkpoint's FP8 quantization is not supported on AWS Neuron.",
+		"Deploy the model's bf16 checkpoint on a Neuron stamp; FP8 checkpoints need an NVIDIA GPU.",
+	},
+	{
 		regexp.MustCompile(`(?i)failed to infer device type|no CUDA GPUs are available|Found no NVIDIA driver|libcuda\.so.*(cannot open|not found)`),
 		"GPURuntimeMissing",
 		"The model server cannot see a GPU inside its container.",

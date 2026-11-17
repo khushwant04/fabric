@@ -443,6 +443,14 @@ async def _demand_for_spec(
             gpu_class=demand.gpu_class,
             release=release,
         )
+    if placement.is_neuron_class(demand.gpu_class) and placement.fp8_checkpoint(release):
+        raise BadRequest(
+            "fp8_not_supported_on_neuron",
+            "AWS Neuron stamps serve bf16 checkpoints; deploy this model's bf16 release on a "
+            "Neuron class",
+            gpu_class=demand.gpu_class,
+            release=release,
+        )
     return demand
 
 

@@ -20,7 +20,7 @@ Repeated observations are recorded once, and again only when they change.
 | Kind | When | Severity |
 |---|---|---|
 | `enrolled` / `identity_reused` | first enrollment / a restart that reused the stored identity | success / info |
-| `gpus_measured` | product, count and memory per GPU class, when they change; on a Cloud TPU stamp *TPU measured: 4 × TPU v6e (v6e-4, 32 GiB HBM per chip, 128 GiB total)* ([Cloud TPU stamps](tpu.md)) | info |
+| `gpus_measured` | product, count and memory per GPU class, when they change; on a Cloud TPU stamp *TPU measured: 4 × TPU v6e (v6e-4, 32 GiB HBM per chip, 128 GiB total)* ([Cloud TPU stamps](tpu.md)); on an AWS Neuron stamp *Neuron measured: 1 × Inferentia2 (inf2.xlarge, 32 GiB HBM, 2 NeuronCores)* ([AWS Neuron stamps](neuron.md)) | info |
 | `gpu_runtime` | allocatable `nvidia.com/gpu` present, or missing with a hint (device plugin, RuntimeClass, re-run the bootstrap); on a TPU stamp, allocatable `google.com/tpu` chips | success / warning |
 | `ready` | heartbeat accepted and the GPU runtime works | success |
 | `credentials_rotated` | a rotation succeeded (requested or by age); failures are `error` | success |

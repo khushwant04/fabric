@@ -107,14 +107,27 @@ type ModelHost struct {
 	// Command replaces the image's entrypoint when the image has none that serves, as the
 	// TPU image does not; empty keeps the entrypoint.
 	Command []string
+	// NeuronCoresPerDevice is how many NeuronCores vLLM sees on one Neuron device at the
+	// runtime's default logical-core setting: 2 on Inferentia2 and Trainium, 4 on
+	// Trainium2. GPUs counts devices on a Neuron stamp, and vLLM's tensor parallelism counts
+	// cores, so the host's tensor-parallel size is the product. Zero means 2.
+	NeuronCoresPerDevice int
 }
 
 // AcceleratorTPU selects Cloud TPU rendering for the model host.
 const AcceleratorTPU = "tpu"
 
+// AcceleratorNeuron selects AWS Neuron (Inferentia2, Trainium) rendering for the model host.
+const AcceleratorNeuron = "neuron"
+
 // IsTPU reports whether the host runs on TPU chips.
 func (m ModelHost) IsTPU() bool {
 	return m.Accelerator == AcceleratorTPU
+}
+
+// IsNeuron reports whether the host runs on AWS Neuron devices.
+func (m ModelHost) IsNeuron() bool {
+	return m.Accelerator == AcceleratorNeuron
 }
 
 // deviceResource is the extended resource the host requests its devices as.
@@ -122,7 +135,27 @@ func (m ModelHost) deviceResource() string {
 	if m.IsTPU() {
 		return hardware.TPUResource
 	}
+	if m.IsNeuron() {
+		return hardware.NeuronResource
+	}
 	return hardware.GPUResource
+}
+
+// defaultNeuronCoresPerDevice is Inferentia2's and Trainium's NeuronCores per device.
+const defaultNeuronCoresPerDevice = 2
+
+// neuronCores is the NeuronCores a Neuron host's devices give it, which is the
+// tensor-parallel size vLLM on Neuron is started with.
+func (m ModelHost) neuronCores() int {
+	perDevice := m.NeuronCoresPerDevice
+	if perDevice <= 0 {
+		perDevice = defaultNeuronCoresPerDevice
+	}
+	devices := m.GPUs
+	if devices <= 0 {
+		devices = 1
+	}
+	return devices * perDevice
 }
 
 // startupThreshold is the startup probe's failure budget at a 10s period. A TPU host
@@ -132,11 +165,20 @@ func (m ModelHost) startupThreshold() int {
 	if m.IsTPU() {
 		return tpuStartupFailureThreshold
 	}
+	if m.IsNeuron() {
+		return neuronStartupFailureThreshold
+	}
 	return startupFailureThreshold
 }
 
 // tpuStartupFailureThreshold allows 40 minutes at a 10s period.
 const tpuStartupFailureThreshold = 240
+
+// neuronStartupFailureThreshold allows 90 minutes at a 10s period. vLLM on Neuron compiles
+// the whole model ahead of time with neuronx-cc on a cold cache, which takes tens of minutes
+// for a small model on an inf2.xlarge's four vCPUs, on top of the weight download. The
+// compiled artifacts are kept on the node, so only the first start pays for it.
+const neuronStartupFailureThreshold = 540
 
 // ParseNodeSelector reads repeated key=value flags into a selector.
 func ParseNodeSelector(entries []string) (map[string]string, error) {
@@ -342,7 +384,11 @@ func (m ModelHost) hostArgs() []string {
 	if m.MaxNumSeqs > 0 {
 		args = append(args, "--max-num-seqs="+strconv.Itoa(m.MaxNumSeqs))
 	}
-	if m.GPUs > 1 {
+	if m.IsNeuron() {
+		// vLLM on Neuron counts NeuronCores, not devices: one Inferentia2 device is two
+		// cores, and a server started with fewer leaves the rest of its devices idle.
+		args = append(args, "--tensor-parallel-size="+strconv.Itoa(m.neuronCores()))
+	} else if m.GPUs > 1 {
 		// Without this the container reserves every device it asked for and the server uses
 		// one, so the rest are held by the limit and usable by nothing. A deployment
 		// admitted for four devices per replica (ADR 0013) has to actually shard across
@@ -593,6 +639,9 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 	if host.IsTPU() {
 		host.addTPUSettings(container, &volumes)
 	}
+	if host.IsNeuron() {
+		host.addNeuronSettings(container, &volumes)
+	}
 
 	podSpec := map[string]any{
 		"containers": []map[string]any{container},
@@ -610,7 +659,7 @@ func (r *Reconciler) desiredHostNamed(item ModelDeployment, name string) deploym
 		}
 		podSpec["imagePullSecrets"] = secrets
 	}
-	if host.RuntimeClassName != "" && !host.IsTPU() {
+	if host.RuntimeClassName != "" && !host.IsTPU() && !host.IsNeuron() {
 		podSpec["runtimeClassName"] = host.RuntimeClassName
 	}
 	if host.IsTPU() {
@@ -708,6 +757,62 @@ func (m ModelHost) addTPUSettings(container map[string]any, volumes *[]map[strin
 		map[string]any{"name": "VLLM_XLA_CACHE_PATH", "value": modelCacheMountPath + "/xla"},
 		map[string]any{"name": "JAX_COMPILATION_CACHE_DIR", "value": modelCacheMountPath + "/jax"},
 	)
+}
+
+// addNeuronSettings adapts the server container to an AWS Neuron instance: the Neuron
+// image's command, the Neuron compiler's caches on the node's disk next to the weights, and,
+// only where no Neuron device plugin injects the devices, privileged access to /dev/neuron*.
+//
+// Two caches, because vLLM on Neuron keeps two things. NEURON_COMPILE_CACHE_URL is
+// neuronx-cc's cache of compiled graphs, keyed by the graph itself, so one directory serves
+// every model. NEURON_COMPILED_ARTIFACTS is where the serving plugin saves and reloads the
+// compiled model, and it reloads whatever is there without checking that the model or its
+// shapes match, so the directory is named after everything that changes the compilation.
+func (m ModelHost) addNeuronSettings(container map[string]any, volumes *[]map[string]any) {
+	if len(m.Command) > 0 {
+		container["command"] = append([]string(nil), m.Command...)
+	}
+	if m.Privileged {
+		container["securityContext"] = map[string]any{"privileged": true}
+	}
+	mounts := container["volumeMounts"].([]map[string]any)
+	for index, path := range m.DevicePaths {
+		name := "neuron-device-" + strconv.Itoa(index)
+		*volumes = append(*volumes, map[string]any{
+			"name": name, "hostPath": map[string]any{"path": path},
+		})
+		mounts = append(mounts, map[string]any{"name": name, "mountPath": path})
+	}
+	container["volumeMounts"] = mounts
+	container["env"] = append(container["env"].([]map[string]any),
+		map[string]any{"name": "NEURON_COMPILE_CACHE_URL", "value": modelCacheMountPath + "/neuron/compile-cache"},
+		map[string]any{"name": "NEURON_COMPILED_ARTIFACTS", "value": modelCacheMountPath + "/neuron/compiled/" + m.neuronArtifactKey()},
+	)
+}
+
+// neuronArtifactKey names a compiled model by what it was compiled for, so a changed model,
+// release, core count, context length, batch size or dtype compiles afresh rather than
+// loading a model compiled for something else.
+func (m ModelHost) neuronArtifactKey() string {
+	model := m.ModelRef
+	if model == "" {
+		model = m.ServedName
+	}
+	var name strings.Builder
+	for _, r := range strings.ToLower(model) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			name.WriteRune(r)
+		default:
+			name.WriteRune('-')
+		}
+	}
+	dtype := m.DType
+	if dtype == "" {
+		dtype = "auto"
+	}
+	return fmt.Sprintf("%s/tp%d-len%d-seqs%d-%s",
+		strings.Trim(name.String(), "-."), m.neuronCores(), m.MaxModelLen, m.MaxNumSeqs, strings.ToLower(dtype))
 }
 
 func (r *Reconciler) desiredHostService(item ModelDeployment) service {

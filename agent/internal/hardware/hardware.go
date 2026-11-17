@@ -71,13 +71,23 @@ type Profile struct {
 	// the chip ("TPU v6e"), MemoryMiB is HBM per chip, Count is chips, and Capability is
 	// unknown because compute capability is a CUDA notion.
 	Kind string `json:",omitempty"`
-	// AcceleratorType is the TPU slice type the node was labelled with, e.g. "v6e-4".
+	// AcceleratorType is the TPU slice type the node was labelled with, e.g. "v6e-4", or
+	// the EC2 instance type of a Neuron node, e.g. "inf2.xlarge".
 	AcceleratorType string `json:",omitempty"`
+	// NeuronCores is the physical NeuronCores on one device of a Neuron node. For Neuron,
+	// Kind is KindNeuron, Model is the device ("Inferentia2"), MemoryMiB is HBM per device
+	// and Count is devices.
+	NeuronCores int `json:",omitempty"`
 }
 
 // IsTPU reports whether the profile describes TPU chips.
 func (p Profile) IsTPU() bool {
 	return p.Kind == KindTPU
+}
+
+// IsNeuron reports whether the profile describes AWS Neuron devices.
+func (p Profile) IsNeuron() bool {
+	return p.Kind == KindNeuron
 }
 
 // SupportsBFloat16 reports whether this hardware can execute bfloat16.
@@ -212,8 +222,9 @@ func ProfileNodes(ctx context.Context, client Getter, selector map[string]string
 
 // unequippedNodes counts ready nodes that should carry accelerators but advertise none.
 type unequippedNodes struct {
-	gpu int
-	tpu int
+	gpu    int
+	tpu    int
+	neuron int
 }
 
 // gpuLabelled reports whether a node is labelled as carrying an NVIDIA GPU, whatever it
@@ -228,8 +239,8 @@ func gpuLabelled(labels map[string]string) bool {
 }
 
 // profileNodes also counts ready nodes that should carry GPUs (selected by a GPU node
-// selector, or labelled as GPU nodes) but advertise none, and TPU-labelled nodes that
-// advertise no TPU chips.
+// selector, or labelled as GPU nodes) but advertise none, TPU-labelled nodes that
+// advertise no TPU chips, and Neuron nodes that advertise no Neuron devices.
 func profileNodes(
 	ctx context.Context, client Getter, selector map[string]string,
 ) ([]Profile, unequippedNodes, error) {
@@ -277,12 +288,25 @@ func profileNodes(
 				profiles = append(profiles, profile)
 				continue
 			}
+			// So does a Neuron node, whose device plugin advertises whole devices.
+			devices := 0
+			if raw, ok := item.Status.Allocatable[NeuronResource]; ok {
+				devices, _ = strconv.Atoi(raw)
+			}
+			if devices > 0 {
+				profile := Profile{Node: item.Metadata.Name, Count: devices, Source: "unknown"}
+				describeNeuron(&profile, item.Metadata.Labels)
+				profiles = append(profiles, profile)
+				continue
+			}
 			// No allocatable GPU means nothing can be scheduled here, whatever the
 			// machine type claims. A node whose driver or device plugin is missing looks
 			// exactly like this, and it is the reason a GPU pool can exist while
 			// advertising nothing.
 			if tpuLabelled(item.Metadata.Labels) {
 				unequipped.tpu++
+			} else if neuronLabelled(item.Metadata.Labels) {
+				unequipped.neuron++
 			} else if len(selector) > 0 || gpuLabelled(item.Metadata.Labels) {
 				unequipped.gpu++
 			}
