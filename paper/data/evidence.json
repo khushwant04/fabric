@@ -156,5 +156,39 @@
       {"gpu": "NVIDIA A10", "model": "Qwen3.5-9B", "context_tokens": 8192},
       {"gpu": "NVIDIA RTX PRO 6000", "model": "Qwen3.6-35B-A3B-FP8"}
     ]
+  },
+  "live_observations_2026_11_17_tpu": {
+    "date": "2026-11-17",
+    "scope": "point-in-time live check",
+    "vm": "single-host Cloud TPU v6e-1 VM (machine type ct6e-standard-1t): 1 chip, 32 GiB HBM",
+    "bootstrap": "one-command bootstrap detected the TPU from the GCP metadata accelerator-type",
+    "advertised_resource": {"google.com/tpu": 1},
+    "agent_measured": "1 x TPU v6e reported by the stamp agent",
+    "placement": "a deployment was placed on the TPU stamp",
+    "defects": [
+      {
+        "symptom": "the only catalog TPU preset asked for 4 chips, so a v6e-1 stamp was never offered as a placement",
+        "fix": "single-chip preset: Qwen3.5 4B bf16 on class tpu-v6e with 1 chip per replica"
+      },
+      {
+        "symptom": "libtpu failed at model-host start: TPU initialization failed: Failed to connect to [::]:8353",
+        "cause": "libtpu reaches its local runtime service over IPv6 loopback, which the IPv4-only pod network lacks",
+        "fix": "TPU model hosts run with hostNetwork and ClusterFirstWithHostNet DNS; GPU hosts keep the pod network"
+      }
+    ],
+    "end_to_end_serving": "not yet confirmed (pending)",
+    "not_measured": "throughput, latency, XLA compilation time"
+  },
+  "routing_policy_split_check": {
+    "date": "2026-11-17",
+    "scope": "deterministic computation with the shipped routing-policy module; not a measurement",
+    "source": "python3 paper/policy_split_check.py at commit 948e673 (choose_target over keys key-0 .. key-99999)",
+    "keys": 100000,
+    "weights": {"a": 50, "b": 30, "c": 20},
+    "shares_percent": {"a": 50.0, "b": 29.84, "c": 20.16},
+    "subset_checks": 200000,
+    "subset_disagreements": 0,
+    "canary_10_to_20_moved_percent": 9.98,
+    "canary_moves_not_onto_canary": 0
   }
 }
