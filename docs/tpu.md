@@ -101,13 +101,12 @@ TPU chips* checked. Copy the command, then SSH in (`gcloud compute tpus tpu-vm s
 ```bash
 curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh | sudo bash -s -- \
   --name tpu-01 --control-plane https://api.example.com --token '<token>' \
-  --host tpu-01.stamps.example.com --email ops@example.com \
-  --release <commit with Cloud TPU support>
+  --host tpu-01.stamps.example.com --email ops@example.com
 ```
 
-TPU support is in releases that include `accelerator.tpu` in the stamp chart. The bootstrap stops
-with *release … predates Cloud TPU support* when the pinned default is older. In that case, pass
-`--release` with a newer commit from `main`. CI publishes images for every commit on `main`.
+The command is the same as on a GPU VM: the script reads the TPU type from the VM's metadata. If you
+pin an older release with `--release`, the bootstrap stops with *release … predates Cloud TPU
+support*; any `main` commit from `d9c9921` onward has it.
 
 Step 1 prints `✓ 4 × TPU v6e (v6e-4, 32 GiB HBM per chip, 128 GiB total)` and
 `model dtype: bfloat16`. Step 3, *TPU runtime*, confirms that Kubernetes can allocate
