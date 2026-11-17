@@ -266,6 +266,15 @@ spec:
                     source cannot verify anything, so a partial value is ignored rather
                     than half-applied.
                   maxLength: 400
+                routingPolicies:
+                  type: string
+                  description: |
+                    This resource's account's live routing policies as a JSON array, carried
+                    verbatim from the control plane (ADR 0023). Account-wide rather than
+                    per-deployment; the operator writes each policy once into the rendered
+                    configuration, where the data plane enforces it. Absent leaves policies
+                    out of the configuration.
+                  maxLength: 524288
                 generation:
                   type: integer
                   description: Control-plane generation this declaration came from.

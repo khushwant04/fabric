@@ -94,6 +94,10 @@ APIs by the person or machine that would create it.
   | `batch-summarizer` | `qwen3.5-0.8b-batch` | vm-gpu | Updating (generation 2 not yet observed) |
   | `long-context-eval` | `qwen3.5-2b-longctx` | vm-gpu | Failed (KV cache does not fit on a T4) |
   | `research-pool` | `qwen3.5-2b-research`, 4 replicas | not placed | Waiting |
+- **Routing policies** ([routing-policies.md](routing-policies.md)): `chat-default` with four
+  rules (tool calls, the batch API key, long prompts, a gold-tier header) and a 90/10 canary
+  on the default rule, published twice, with an unpublished draft raising the canary to 20%;
+  and `code-review`, a draft whose only target is still deploying.
 - **Access:**
   - Four service principals. `legacy-etl` is disabled.
   - Six API keys, with and without service principals and expiry. `legacy-notebook` is revoked.

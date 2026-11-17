@@ -257,6 +257,40 @@ await visit("24-command-palette", "/dashboard", async (current) => {
   await current.waitForTimeout(300)
 })
 
+// --- routing policies -----------------------------------------------------------------------
+// The list, the visual editor with a rule selected, the test panel answering a described
+// request, and the publish dialog's draft-vs-live diff (docs/routing-policies.md).
+const routingPolicy = state.routing_policies?.["chat-default"]
+async function openTestPanel(current) {
+  await current.getByRole("tab", { name: /Test a request/ }).click()
+  await current.getByLabel("Session key").fill("support-thread-4821")
+  await current.getByLabel("Prompt tokens", { exact: true }).fill("2400")
+  await current.getByRole("button", { name: "Run test" }).click()
+  await current.getByText("Traffic split").waitFor()
+  await current.getByRole("tab", { name: /Test a request/ }).evaluate((element) => element.scrollIntoView({ block: "start" }))
+  await current.waitForTimeout(600)
+}
+async function waitForFlow(current) {
+  await current.locator(".react-flow__node-rule").first().waitFor()
+  await current.waitForTimeout(600)
+}
+async function openPublish(current) {
+  await waitForFlow(current)
+  await current.getByRole("button", { name: "Publish" }).click()
+  await current.getByRole("dialog").waitFor()
+}
+if (routingPolicy) {
+  await visit("routing/25-routing", "/routing")
+  if (want("routing/26-routing-editor")) await tall(() => visit("routing/26-routing-editor", `/routing/${routingPolicy}`, waitForFlow))
+  if (want("routing/27-routing-test")) await tall(() => visit("routing/27-routing-test", `/routing/${routingPolicy}`, openTestPanel))
+  await visit("routing/28-routing-publish-diff", `/routing/${routingPolicy}`, openPublish)
+  if (want("routing/29-routing-editor-mobile")) {
+    await page.setViewportSize({ width: 390, height: 1600 })
+    await visit("routing/29-routing-editor-mobile", `/routing/${routingPolicy}`)
+    await page.setViewportSize({ width: 1440, height: 900 })
+  }
+}
+
 // --- dark theme -------------------------------------------------------------------------
 // The home page, then the main pages and a drawer again in dark (dark/).
 const darkShots = [
@@ -274,6 +308,11 @@ const darkShots = [
     await current.waitForTimeout(300)
   }],
   ["dark/onboarding", "/onboarding?switch=true"],
+  ...(routingPolicy ? [
+    ["dark/routing", "/routing"],
+    ["dark/routing-editor", `/routing/${routingPolicy}`, waitForFlow],
+    ["dark/routing-test", `/routing/${routingPolicy}`, openTestPanel],
+  ] : []),
 ]
 if (darkShots.some(([name]) => want(name))) {
   await page.evaluate(() => localStorage.setItem("fabric-theme", "dark"))

@@ -29,7 +29,7 @@ import httpx
 from fastapi import APIRouter, FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from fabric_data_plane import agent_loop, anthropic_messages, cascade
+from fabric_data_plane import agent_loop, anthropic_messages, cascade, policy_routing
 from fabric_data_plane.agent_runs import AgentRunStore, build_runs_router, open_run_step
 from fabric_data_plane.agent_tools import ToolRunner
 from fabric_data_plane.auth import (
@@ -47,9 +47,11 @@ from fabric_data_plane.config import (
 from fabric_data_plane.errors import (
     ApiError,
     BadRequest,
+    NoReadyHost,
     NotFound,
     PayloadTooLarge,
     TooManyRequests,
+    UpstreamTimeout,
     UpstreamUnavailable,
     api_error_handler,
 )
@@ -187,6 +189,9 @@ class DataPlane:
         # label of a captured request that can still reach its host.
         self._admitted_streams: dict[uuid.UUID, int] = {}
         self._pools_lock = threading.Lock()
+        # Pools that apply a routing-policy rule's strategy to a deployment's backends. They
+        # share the deployment pool's health, so in-flight counts and ejections are one view.
+        self._strategy_views: dict[tuple[uuid.UUID, str], tuple[Any, BackendPool]] = {}
         rate_limit = RateLimit(
             requests_per_minute=settings.rate_limit_requests_per_minute,
             # A burst of zero with a rate set would refuse everything, so it falls
@@ -295,6 +300,8 @@ class DataPlane:
             active = deployment_ids()
 
         with self._pools_lock:
+            for view_key in [key for key in self._strategy_views if key[0] not in active]:
+                del self._strategy_views[view_key]
             withdrawn = self._known_deployments - active
             self._known_deployments = set(active)
             for stale_id in self._pools.keys() - active:
@@ -323,7 +330,32 @@ class DataPlane:
                 ):
                     self.metrics.retire_deployment(str(stale_id))
 
-    def pool_for(self, deployment: Deployment) -> BackendPool:
+    def pool_for(self, deployment: Deployment, strategy: str | None = None) -> BackendPool:
+        """The deployment's pool, or a view of it that selects with ``strategy``.
+
+        A routing-policy rule may ask for a strategy other than the deployment's own. The view
+        shares the pool's health and in-flight counts, and keeps its own strategy state (a
+        prefix index, for instance) for as long as the backend set is unchanged.
+        """
+        pool = self._deployment_pool(deployment)
+        if strategy is None or strategy == pool.strategy_name:
+            return pool
+        identity = (pool.health, tuple(backend.backend_id for backend in pool.backends))
+        key = (deployment.deployment_id, strategy)
+        with self._pools_lock:
+            cached = self._strategy_views.get(key)
+            if cached is None or cached[0] != identity:
+                view = BackendPool(
+                    pool.backends,
+                    health=pool.health,
+                    strategy=strategy,
+                    prefix_load_factor=self.settings.prefix_routing_load_factor,
+                )
+                cached = (identity, view)
+                self._strategy_views[key] = cached
+            return cached[1]
+
+    def _deployment_pool(self, deployment: Deployment) -> BackendPool:
         """Return the backend pool for a deployment, built once and reused.
 
         Memoised by deployment id so per-backend health accumulates across requests. A
@@ -817,6 +849,65 @@ async def _proxy(
     then passes ``principal`` and ``payload`` so every later step is this one code path.
     ``strip_headers`` names extra client headers not to forward, and ``on_deployment`` is told
     which deployment the router chose before the request is admitted.
+
+    A model name that is the alias of one of the account's published routing policies is
+    served by ``policy_routing`` (ADR 0023), which picks the deployment and walks the
+    rule's fallback chain through :func:`_proxy_deployment`. Every other model name takes
+    exactly the path it took before routing policies existed.
+    """
+    if principal is None:
+        principal = plane.authenticate(request.headers.get("authorization"))
+    if payload is None:
+        payload = await _read_json(
+            request,
+            maximum_bytes=(
+                plane.settings.responses_max_body_bytes
+                if upstream_path == RESPONSES_PATH
+                else None
+            ),
+        )
+    plan = policy_routing.plan(plane, request, upstream_path, principal, payload)
+    if plan is None:
+        return await _proxy_deployment(
+            plane,
+            request,
+            upstream_path,
+            principal=principal,
+            payload=payload,
+            strip_headers=strip_headers,
+            on_deployment=on_deployment,
+        )
+    return await policy_routing.serve(
+        plan,
+        plane,
+        request,
+        upstream_path,
+        principal,
+        payload,
+        proxy=_proxy_deployment,
+        strip_headers=strip_headers,
+        on_deployment=on_deployment,
+    )
+
+
+async def _proxy_deployment(
+    plane: DataPlane,
+    request: Request,
+    upstream_path: str,
+    *,
+    principal: InferencePrincipal | None = None,
+    payload: dict[str, Any] | None = None,
+    strip_headers: tuple[str, ...] = (),
+    on_deployment: Callable[[Deployment], None] | None = None,
+    deployment: Deployment | None = None,
+    strategy: str | None = None,
+    upstream_timeout: float | None = None,
+) -> JSONResponse | StreamingResponse:
+    """Serve one request on one deployment: resolve, admit, forward, meter.
+
+    ``deployment`` skips model-name resolution (a routing policy already chose it, from the
+    account's own deployments); ``strategy`` and ``upstream_timeout`` are a policy rule's
+    overrides of the deployment's backend strategy and of the upstream timeout.
     """
     started = time.perf_counter()
     if principal is None:
@@ -836,13 +927,16 @@ async def _proxy(
     # Retire withdrawn pool/metric state before resolution, including the case where
     # this request names the removed deployment and resolution itself will fail.
     plane.reconcile_pools()
-    deployment, routing_headers = _resolve_json_deployment(
-        plane,
-        model=model,
-        account_id=principal.account_id,
-        payload=payload,
-        upstream_path=upstream_path,
-    )
+    if deployment is None:
+        deployment, routing_headers = _resolve_json_deployment(
+            plane,
+            model=model,
+            account_id=principal.account_id,
+            payload=payload,
+            upstream_path=upstream_path,
+        )
+    else:
+        routing_headers = {}
     if is_responses:
         routing_headers = {**routing_headers, "cache-control": "no-store"}
     if on_deployment is not None:
@@ -918,7 +1012,8 @@ async def _proxy(
 
     # A deployment is served by a pool of backends (ADR 0010). The pool skips a backend
     # that is ejected or unhealthy, so a healthy replica is chosen even when one is down.
-    pool = plane.pool_for(deployment)
+    pool = plane.pool_for(deployment, strategy=strategy)
+    timeout_seconds = upstream_timeout or plane.settings.upstream_timeout_seconds
     session_key = _session_key(request, payload)
     # Hashed only for a strategy that routes on it (ADR 0019).
     prefix = prefix_blocks(payload) if pool.uses_prefix else None
@@ -948,7 +1043,7 @@ async def _proxy(
                         f"{backend.url}{upstream_path}",
                         json=upstream_payload,
                         headers=headers,
-                        timeout=plane.settings.upstream_timeout_seconds,
+                        timeout=timeout_seconds,
                     )
                 except httpx.HTTPError as exc:
                     logger.warning("backend %s failed: %s", backend.backend_id, exc)
@@ -966,7 +1061,12 @@ async def _proxy(
                             duration_seconds=time.perf_counter() - started,
                         )
                         request_recorded = True
-                        raise UpstreamUnavailable(
+                        failure = (
+                            UpstreamTimeout
+                            if isinstance(exc, httpx.TimeoutException)
+                            else UpstreamUnavailable
+                        )
+                        raise failure(
                             "upstream_unavailable",
                             "The model host connection failed after the request may have started",
                         ) from exc
@@ -1000,7 +1100,7 @@ async def _proxy(
                     duration_seconds=time.perf_counter() - started,
                 )
                 request_recorded = True
-                raise UpstreamUnavailable(
+                raise NoReadyHost(
                     "upstream_unavailable", "No healthy model host is available"
                 )
 
@@ -1020,7 +1120,7 @@ async def _proxy(
                     deployment=deployment,
                     send=lambda retry: plane.client.post(
                         f"{retry_backend.url}{upstream_path}", json=retry, headers=headers,
-                        timeout=plane.settings.upstream_timeout_seconds,
+                        timeout=timeout_seconds,
                     ),
                 )
                 charged_tokens = run_step.extra_tokens
@@ -1082,7 +1182,7 @@ async def _proxy(
             outcome="upstream_unavailable",
             duration_seconds=time.perf_counter() - started,
         )
-        raise UpstreamUnavailable("upstream_unavailable", "No healthy model host is available")
+        raise NoReadyHost("upstream_unavailable", "No healthy model host is available")
 
     plane.retain_stream(deployment)
     cleanup_accounted = False
@@ -1194,7 +1294,7 @@ async def _proxy(
                 try:
                     upstream_request = plane.client.build_request(
                         "POST", f"{backend.url}{upstream_path}", json=upstream_payload,
-                        headers=headers, timeout=plane.settings.upstream_timeout_seconds,
+                        headers=headers, timeout=timeout_seconds,
                     )
                     responses_upstream = await plane.client.send(upstream_request, stream=True)
                 except httpx.HTTPError as exc:
@@ -1207,7 +1307,12 @@ async def _proxy(
                     if _safe_to_retry_transport_failure(exc):
                         tried.add(backend.backend_id)
                         continue
-                    raise UpstreamUnavailable(
+                    failure = (
+                        UpstreamTimeout
+                        if isinstance(exc, httpx.TimeoutException)
+                        else UpstreamUnavailable
+                    )
+                    raise failure(
                         "upstream_unavailable",
                         "The model host connection failed after the request may have started",
                     ) from exc
@@ -1240,7 +1345,7 @@ async def _proxy(
 
             if responses_upstream is None:
                 request_outcome = "upstream_error_streamed"
-                raise UpstreamUnavailable(
+                raise NoReadyHost(
                     "upstream_unavailable", "No healthy model host is available"
                 )
         except BaseException:
@@ -1313,7 +1418,7 @@ async def _proxy(
                         f"{backend.url}{upstream_path}",
                         json=upstream_payload,
                         headers=headers,
-                        timeout=plane.settings.upstream_timeout_seconds,
+                        timeout=timeout_seconds,
                     ) as upstream:
                         health_failed = upstream.status_code >= 500
                         upstream_error = not upstream.is_success
@@ -1404,6 +1509,8 @@ async def _proxy_messages(plane: DataPlane, request: Request) -> Response:
         payload = await _read_json(
             request, maximum_bytes=plane.settings.responses_max_body_bytes, label="Messages"
         )
+        # A routing policy matches on the request the caller sent, as the edge saw it.
+        request.state.routing_policy_body = payload
         try:
             chat_payload, context = anthropic_messages.to_chat_request(payload)
         except anthropic_messages.MessagesRequestError as exc:
@@ -1734,6 +1841,11 @@ def build_inference_router(plane: DataPlane) -> APIRouter:
                     "owned_by": "fabric",
                 }
                 for deployment in plane.registry.for_account(principal.account_id)
+            ]
+            # Aliases of published routing policies are callable model names too.
+            + [
+                {"id": alias, "object": "model", "owned_by": "fabric"}
+                for alias in policy_routing.policy_aliases(plane, principal.account_id)
             ],
         }
 

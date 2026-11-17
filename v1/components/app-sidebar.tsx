@@ -9,6 +9,7 @@ import {
   KeyRoundIcon,
   HouseIcon,
   NetworkIcon,
+  RouteIcon,
   FingerprintIcon,
   ListTreeIcon,
   ScrollTextIcon,
@@ -43,6 +44,7 @@ const sections: NavSection[] = [
     items: [
       { title: "Deployments", url: "/deployments", icon: <BoxesIcon />, scope: "deployments:read" },
       { title: "Inference stamps", url: "/stamps", icon: <CpuIcon />, scope: "stamps:read" },
+      { title: "Routing", url: "/routing", icon: <RouteIcon />, scope: "deployments:read" },
       { title: "Usage", url: "/usage", icon: <ChartNoAxesCombinedIcon />, scope: "deployments:read" },
     ],
   },

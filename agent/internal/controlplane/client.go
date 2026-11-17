@@ -192,6 +192,17 @@ type DesiredState struct {
 	// Absent from an older control plane, which leaves the stamp on its locally
 	// configured values rather than clearing them.
 	Verification *VerificationConfig `json:"verification,omitempty"`
+	// Live routing policies of every account placed on this stamp (ADR 0023). Sent whole on
+	// every pass. Absent from an older control plane, which leaves the rendered policies as
+	// they are.
+	RoutingPolicies *RoutingPolicies `json:"routing_policies,omitempty"`
+}
+
+// RoutingPolicies is a versioned snapshot of published routing policies. The agent does not
+// interpret a policy: it carries each one verbatim to the data plane, which enforces it.
+type RoutingPolicies struct {
+	Revision string            `json:"revision"`
+	Policies []json.RawMessage `json:"policies"`
 }
 
 // StatusReport is an observed-state write.

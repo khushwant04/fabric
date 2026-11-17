@@ -11,6 +11,7 @@ from app.api.v1 import (
     deployments,
     edge,
     identity_providers,
+    routing_policies,
     service_principals,
     serving_metrics,
     stamps,
@@ -27,6 +28,7 @@ api_router.include_router(service_principals.router)
 api_router.include_router(api_keys.router)
 api_router.include_router(identity_providers.router)
 api_router.include_router(deployments.router)
+api_router.include_router(routing_policies.router)
 api_router.include_router(stamps.router)
 api_router.include_router(edge.router)
 api_router.include_router(telemetry.router)

@@ -47,6 +47,7 @@ from app.models import (
     DeploymentPlacement,
     DeploymentStatus,
     InferenceStamp,
+    RoutingPolicy,
 )
 from app.schemas import (
     EdgeDeployment,
@@ -54,6 +55,7 @@ from app.schemas import (
     EdgePlacement,
     EdgeRoutingTable,
 )
+from app.services import routing_policies
 from app.services.accounts import ensure_system_account, get_system_account
 from app.services.audit import record_audit
 from app.services.service_principals import create_service_principal
@@ -171,9 +173,23 @@ async def build_routing_table(
                     select(func.max(DeploymentPlacement.updated_at)).scalar_subquery(),
                     select(func.max(InferenceStamp.updated_at)).scalar_subquery(),
                     select(func.max(DeploymentStatus.reported_at)).scalar_subquery(),
+                    select(func.max(RoutingPolicy.updated_at)).scalar_subquery(),
                 )
             )
         ).one()
+        # Live routing policies of active accounts; a deleted or unpublished one is absent,
+        # and its alias then routes exactly as it did before the policy existed.
+        active_accounts = {
+            str(account_id)
+            for account_id in (
+                await session.execute(select(Account.id).where(Account.status == "active"))
+            ).scalars()
+        }
+        policies = [
+            document
+            for document in await routing_policies.live_snapshots(session)
+            if document["account_id"] in active_accounts
+        ]
 
     system_account_id = system_account.id if system_account else None
     revision = max(_epoch_ms(mark) for mark in marks)
@@ -229,21 +245,28 @@ async def build_routing_table(
     ordered = list(deployments.values())
     return EdgeRoutingTable(
         revision=revision,
-        etag=_content_etag(ordered),
+        etag=_content_etag(ordered, policies),
         generated_at=moment,
         stamp_liveness_seconds=settings.edge_stamp_liveness_seconds,
         deployments=ordered,
+        routing_policies=policies,
     )
 
 
-def _content_etag(deployments: list[EdgeDeployment]) -> str:
-    canonical = []
+def _content_etag(
+    deployments: list[EdgeDeployment], policies: list[dict[str, Any]] | None = None
+) -> str:
+    canonical: list[Any] = []
     for entry in deployments:
         dumped = entry.model_dump(mode="json")
         for placement in dumped["placements"]:
             for field in _VOLATILE_PLACEMENT_FIELDS:
                 placement.pop(field, None)
         canonical.append(dumped)
+    if policies:
+        # Appended only when there are policies, so a table without any keeps the ETag it
+        # had before routing policies existed.
+        canonical.append({"routing_policies": routing_policies.snapshot_revision(policies)})
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
