@@ -45,6 +45,7 @@ from app.schemas import (
     StampCapabilities,
     VerificationConfig,
 )
+from app.services import routing_policies
 from app.services.audit import publish_outbox, record_audit
 from app.services.stamp_events import record_control_plane_event
 
@@ -657,6 +658,7 @@ async def build_desired_state(
         max_generation=max_generation,
         deployments=deployments,
         verification=_verification_config(),
+        routing_policies=await routing_policies.stamp_snapshot(session, stamp_id),
     )
 
 

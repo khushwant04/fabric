@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.core import scopes as scope_defs
 from app.core.model_profiles import default_tool_call_parser, equivalent_tool_call_parser
+from app.schemas_routing import RoutingPolicySnapshot
 
 
 class ORMModel(BaseModel):
@@ -789,6 +790,10 @@ class DesiredStateResponse(BaseModel):
     #: when it changes: an agent that restarts, or one enrolled after a change, has to
     #: converge without depending on having seen an earlier response.
     verification: VerificationConfig | None = None
+    #: Live routing policies of every account placed on this stamp, sent whole on every
+    #: pass like ``verification`` (ADR 0023). The agent writes them into the data plane's
+    #: file, which the gateway enforces from; it never asks the control plane per request.
+    routing_policies: RoutingPolicySnapshot | None = None
 
 
 class StatusCondition(BaseModel):
@@ -1118,3 +1123,6 @@ class EdgeRoutingTable(BaseModel):
     generated_at: dt.datetime
     stamp_liveness_seconds: int
     deployments: list[EdgeDeployment]
+    #: Live routing policies across accounts (ADR 0023). The edge evaluates them with the
+    #: same code as the stamps to pick the target deployment, then a stamp holding it.
+    routing_policies: list[dict[str, Any]] = Field(default_factory=list)

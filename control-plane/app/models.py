@@ -677,3 +677,81 @@ class IdempotencyKey(Base):
             name="uq_idempotency_keys_account_id_principal_id_operation_key",
         ),
     )
+
+
+class RoutingPolicy(Base):
+    """A routing policy: the public alias, its editable draft, and the live version.
+
+    The draft is mutable; every publish freezes it into an immutable
+    :class:`RoutingPolicyVersion`. ``live_version`` names the version stamps and the edge
+    enforce. Deleting keeps the history and frees the alias (docs/routing-policies.md).
+    """
+
+    __tablename__ = "routing_policies"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    draft: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    draft_updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
+    )
+    draft_updated_by: Mapped[str | None] = mapped_column(String(128))
+    live_version: Mapped[int | None] = mapped_column(Integer)
+    created_by: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[dt.datetime] = _created_at()
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=func.now(),
+    )
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "id", name="uq_routing_policies_account_id_id"),
+        Index(
+            "uq_routing_policies_active_alias",
+            "account_id",
+            "alias",
+            unique=True,
+            sqlite_where=text("deleted_at IS NULL"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+
+class RoutingPolicyVersion(Base):
+    """One published, immutable version of a routing policy."""
+
+    __tablename__ = "routing_policy_versions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    policy_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    document: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False)
+    note: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    #: Set when this version republished an older one.
+    rolled_back_from: Mapped[int | None] = mapped_column(Integer)
+    published_by: Mapped[str | None] = mapped_column(String(128))
+    published_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "policy_id"],
+            ["routing_policies.account_id", "routing_policies.id"],
+            ondelete="CASCADE",
+            name="fk_routing_policy_versions_policy",
+        ),
+        UniqueConstraint(
+            "policy_id", "version", name="uq_routing_policy_versions_policy_id_version"
+        ),
+        Index("ix_routing_policy_versions_account_id", "account_id"),
+    )
