@@ -125,6 +125,13 @@ export function confirmsModelDeletion(typed: unknown, modelAlias: string) {
   return typeof typed === "string" && typed === modelAlias && modelAlias.length > 0
 }
 
+// Kept here rather than imported from ./accelerators: this module is loaded on its own by
+// tests that supply only its known dependencies.
+function reportsOnlyTpuChips(stamp: Stamp): boolean {
+  const gpus = stamp.capabilities?.gpus
+  return Array.isArray(gpus) && gpus.length > 0 && gpus.every((gpu) => typeof gpu === "object" && gpu !== null && (gpu as { accelerator?: unknown }).accelerator === "tpu")
+}
+
 /** An active stamp offered as infrastructure in the create-deployment form. */
 export type DeploymentStampOption = { id: string; label: string }
 
@@ -134,6 +141,6 @@ export function deploymentStampOptions(stamps: Stamp[], now = Date.now()): Deplo
     .filter((stamp) => stampState(stamp, now).status === "active")
     .map((stamp) => ({
       id: stamp.id,
-      label: `${stamp.name} · ${stamp.orchestrator || "Kubernetes"} · ${gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "Unknown"} GPUs`,
+      label: `${stamp.name} · ${stamp.orchestrator || "Kubernetes"} · ${gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "Unknown"} ${reportsOnlyTpuChips(stamp) ? "TPU chips" : "GPUs"}`,
     }))
 }

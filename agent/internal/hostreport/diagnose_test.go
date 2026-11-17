@@ -20,6 +20,14 @@ func TestDiagnoseNamesTheCauseFromTheLog(t *testing.T) {
 			Pod{ContainerReason: "Error", ContainerState: "terminated", Log: "torch.OutOfMemoryError: CUDA out of memory."},
 			"GPUOutOfMemory", "max_model_len",
 		},
+		"missing TPU runtime": {
+			Pod{ContainerReason: "CrashLoopBackOff", RestartCount: 1, Log: "RuntimeError: TPU initialization failed: No ba16c7433 device found."},
+			"TPURuntimeMissing", "google.com/tpu",
+		},
+		"TPU out of memory": {
+			Pod{ContainerReason: "Error", ContainerState: "terminated", Log: "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space hbm."},
+			"TPUOutOfMemory", "more chips",
+		},
 		"image pull": {
 			Pod{ContainerState: "waiting", ContainerReason: "ImagePullBackOff"},
 			"ImagePullBackOff", "registry",

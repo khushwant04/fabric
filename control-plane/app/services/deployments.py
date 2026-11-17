@@ -434,6 +434,15 @@ async def _demand_for_spec(
             gpu_class=demand.gpu_class,
             known_gpu_classes=sorted(placement.GPU_CLASSES),
         )
+    runtime = (spec or {}).get("runtime")
+    release = runtime.get("release") if isinstance(runtime, dict) else None
+    if placement.is_tpu_class(demand.gpu_class) and placement.fp8_checkpoint(release):
+        raise BadRequest(
+            "fp8_not_supported_on_tpu",
+            "Cloud TPU serves bf16 checkpoints; deploy this model's bf16 release on a TPU class",
+            gpu_class=demand.gpu_class,
+            release=release,
+        )
     return demand
 
 

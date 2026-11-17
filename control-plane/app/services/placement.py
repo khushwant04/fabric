@@ -67,12 +67,23 @@ _CAPABILITY_TIERS: tuple[tuple[int, int], ...] = ((8, 9), (8, 0), (7, 0))
 _MEMORY_TOLERANCE = 0.9
 
 
+#: Accelerator kinds. A class of one kind is never satisfied by a stamp of the other: a CUDA
+#: image cannot run on a TPU and the TPU image cannot run on a GPU, whatever the memory says.
+GPU = "gpu"
+TPU = "tpu"
+
+
 @dataclass(frozen=True)
 class GpuClass:
-    """What a named class requires: a frame buffer and an arithmetic tier."""
+    """What a named class requires: a frame buffer and an arithmetic tier.
+
+    For a TPU class ``memory_bytes`` is HBM per chip and ``capability`` is ``(0, 0)``:
+    compute capability is a CUDA notion, and the kind is what separates the two families.
+    """
 
     memory_bytes: int
     capability: tuple[int, int]
+    kind: str = GPU
 
     @property
     def capability_floor(self) -> tuple[int, int]:
@@ -100,6 +111,13 @@ GPU_CLASSES: dict[str, GpuClass] = {
     "l40s": GpuClass(48 * _GIB, (8, 9)),
     "h100": GpuClass(80 * _GIB, (9, 0)),
     "rtx-pro-6000": GpuClass(96 * _GIB, (12, 0)),
+    # Cloud TPU, by HBM per chip. A deployment's gpu_count is chips per replica, so what it
+    # can hold is HBM x chips; the per-chip floor here is what keeps a v5e from being
+    # admitted for a deployment sized for v6e chips.
+    "tpu-v5e": GpuClass(16 * _GIB, (0, 0), TPU),
+    "tpu-v4": GpuClass(32 * _GIB, (0, 0), TPU),
+    "tpu-v6e": GpuClass(32 * _GIB, (0, 0), TPU),
+    "tpu-v5p": GpuClass(95 * _GIB, (0, 0), TPU),
 }
 
 #: Reported product strings mapped to a class, used *only* to fill in memory or capability a
@@ -122,7 +140,26 @@ _PRODUCT_CLASSES: dict[str, str] = {
     "nvidia rtx a4000": "rtx-a4000",
     "nvidia rtx pro 6000 blackwell server edition": "rtx-pro-6000",
     "nvidia rtx pro 6000 blackwell workstation edition": "rtx-pro-6000",
+    "tpu v5e": "tpu-v5e",
+    "tpu v5 lite": "tpu-v5e",
+    "tpu v6e": "tpu-v6e",
+    "tpu v5p": "tpu-v5p",
+    "tpu v4": "tpu-v4",
 }
+
+
+def is_tpu_class(gpu_class: str) -> bool:
+    """Whether a class names Cloud TPU chips."""
+    known = GPU_CLASSES.get(gpu_class)
+    return known is not None and known.kind == TPU
+
+
+def fp8_checkpoint(release: Any) -> bool:
+    """Whether a model release names an FP8 checkpoint, which the TPU backend cannot serve."""
+    if not isinstance(release, str):
+        return False
+    name = release.strip().lower().rsplit("/", 1)[-1]
+    return "fp8" in name.replace("_", "-").split("-")
 
 
 def normalise_class(value: str | None) -> str:
@@ -210,6 +247,8 @@ def _class_is_stricter(candidate: str, previous: str) -> bool:
     wanted, had = GPU_CLASSES.get(candidate), GPU_CLASSES.get(previous)
     if wanted is None or had is None:
         return True
+    if wanted.kind != had.kind:
+        return True
     return (
         wanted.minimum_memory_bytes > had.minimum_memory_bytes
         or wanted.capability_floor > had.capability_floor
@@ -277,6 +316,9 @@ class StampCapacity:
     weakest_capability: tuple[int, int] | None
     region: str | None
     last_heartbeat_at: dt.datetime | None
+    #: ``"gpu"`` or ``"tpu"`` when every reported device is of that kind, ``None`` when the
+    #: stamp reported devices of both kinds or none at all.
+    accelerator: str | None = None
 
     def used_gpus(self, committed: Mapping[str, int]) -> int:
         """Devices this stamp cannot offer, taking each deployment at its larger view.
@@ -345,13 +387,19 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
     weakest_memory: int | None = None
     weakest_capability: tuple[int, int] | None = None
     described = 0
+    kinds: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict) or _positive_int(entry.get("count")) == 0:
             # No devices of this class present, so it says nothing about what can run here.
             continue
+        kind = TPU if entry.get("accelerator") == TPU else GPU
+        kinds.add(kind)
         described += 1
         memory = _positive_int(entry.get("memory_bytes"))
         capability = _parse_capability(entry.get("compute_capability"))
+        if kind == TPU and capability is None:
+            # A TPU has no compute capability; its kind and HBM are what placement judges.
+            capability = (0, 0)
         if memory == 0 or capability is None:
             # Fall back to the product only for the part that was not reported.
             fallback = GPU_CLASSES.get(
@@ -397,6 +445,7 @@ def read_capacity(stamp: InferenceStamp) -> StampCapacity:
         weakest_capability=weakest_capability,
         region=stamp.region,
         last_heartbeat_at=stamp.last_heartbeat_at,
+        accelerator=next(iter(kinds)) if len(kinds) == 1 else None,
     )
 
 
@@ -467,6 +516,17 @@ def check_fit(
         )
 
     required = GPU_CLASSES.get(demand.gpu_class)
+    if required is not None and capacity.accelerator is not None:
+        if required.kind != capacity.accelerator:
+            # Checked before memory: an image built for one kind cannot run on the other,
+            # so no amount of memory makes the placement servable.
+            return Unfit(
+                "accelerator_kind_mismatch",
+                {
+                    "required_accelerator": required.kind,
+                    "stamp_accelerator": capacity.accelerator,
+                },
+            )
     if required is not None and capacity.describes_its_hardware:
         assert capacity.weakest_memory_bytes is not None
         assert capacity.weakest_capability is not None
@@ -474,9 +534,20 @@ def check_fit(
             capacity.weakest_memory_bytes < required.minimum_memory_bytes
             or capacity.weakest_capability < required.capability_floor
         ):
+            details: dict[str, Any] = {}
+            if required.kind == TPU:
+                # What a replica can hold is HBM x chips, so say both sides of it.
+                details = {
+                    "chips_per_replica": demand.gpus_per_replica,
+                    "required_total_hbm_bytes": required.minimum_memory_bytes
+                    * demand.gpus_per_replica,
+                    "available_total_hbm_bytes": capacity.weakest_memory_bytes
+                    * demand.gpus_per_replica,
+                }
             return Unfit(
                 "gpu_class_not_satisfied",
                 {
+                    **details,
                     "required_memory_bytes": required.minimum_memory_bytes,
                     "required_compute_capability": _format_capability(
                         required.capability_floor

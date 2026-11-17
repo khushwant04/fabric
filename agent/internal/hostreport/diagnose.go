@@ -27,6 +27,28 @@ type logPattern struct {
 // Ordered: the first match wins, so the most specific causes come first.
 var logPatterns = []logPattern{
 	{
+		regexp.MustCompile(`(?i)TPU initialization failed|No TPU devices? (were )?found|Unable to initialize backend 'tpu'|Failed to (open|get) (the )?TPU|TPU platform.*not (found|available)|The TPU is already in use`),
+		"TPURuntimeMissing",
+		"The model server cannot open the TPU chips inside its container.",
+		"On a Cloud TPU VM the model host must run privileged with the TPU device nodes " +
+			"(/dev/accel* or /dev/vfio) and request google.com/tpu: re-run the bootstrap command, " +
+			"which detects the TPU and sets the chart's TPU values. Only one process can hold the " +
+			"chips, so stop anything else using them on the VM.",
+	},
+	{
+		regexp.MustCompile(`(?i)Ran out of memory in memory space hbm|RESOURCE_EXHAUSTED.*(hbm|TPU)`),
+		"TPUOutOfMemory",
+		"The model does not fit in TPU HBM with these settings.",
+		"Lower max_model_len or max_num_seqs, use more chips (tensor parallelism spans them), or " +
+			"deploy on a TPU with more HBM per chip.",
+	},
+	{
+		regexp.MustCompile(`(?i)fp8.*not supported.*tpu|tpu.*does not support.*fp8`),
+		"QuantizationUnsupported",
+		"This checkpoint's FP8 quantization is not supported on TPU.",
+		"Deploy the model's bf16 checkpoint on a TPU stamp; FP8 checkpoints need an NVIDIA GPU.",
+	},
+	{
 		regexp.MustCompile(`(?i)failed to infer device type|no CUDA GPUs are available|Found no NVIDIA driver|libcuda\.so.*(cannot open|not found)`),
 		"GPURuntimeMissing",
 		"The model server cannot see a GPU inside its container.",

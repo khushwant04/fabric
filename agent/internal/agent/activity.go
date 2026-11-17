@@ -125,6 +125,11 @@ func (a *Agent) recordCapacity(capacity hardware.Capacity, err error) {
 	}
 	a.activity.Forget("capacity-error")
 
+	if capacity.Accelerator() == hardware.KindTPU {
+		a.recordTPUCapacity(capacity)
+		return
+	}
+
 	groups := append([]hardware.GPUGroup(nil), capacity.GPUs...)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Product < groups[j].Product })
 	parts := make([]string, 0, len(groups))
@@ -191,6 +196,91 @@ func (a *Agent) recordCapacity(capacity hardware.Capacity, err error) {
 			"allocatable_gpus": 0, "ok": false, "unequipped_nodes": capacity.UnequippedGPUNodes,
 		},
 	})
+}
+
+// recordTPUCapacity is recordCapacity for a TPU stamp: the same two entries, worded for
+// chips. The runtime check is that the node advertises its chips, which the bootstrap does
+// only after finding the TPU device nodes; there is no NVIDIA runtime to check.
+func (a *Agent) recordTPUCapacity(capacity hardware.Capacity) {
+	groups := append([]hardware.GPUGroup(nil), capacity.GPUs...)
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Product < groups[j].Product })
+	parts := make([]string, 0, len(groups))
+	details := map[string]any{"allocatable_gpus": capacity.AllocatableGPUs, "accelerator": hardware.KindTPU}
+	for index, group := range groups {
+		parts = append(parts, describeTPU(group))
+		if index == 0 {
+			details["product"] = group.Product
+			details["count"] = group.Count
+			if group.MemoryBytes > 0 {
+				details["memory_gib"] = math.Round(float64(group.MemoryBytes)/(1<<30)*10) / 10
+				details["total_hbm_gib"] = math.Round(float64(group.MemoryBytes)*float64(group.Count)/(1<<30)*10) / 10
+			}
+			if group.AcceleratorType != "" {
+				details["accelerator_type"] = group.AcceleratorType
+			}
+		}
+	}
+	if len(parts) > 0 {
+		a.activity.RecordChange("gpus", strings.Join(parts, "|"), activity.Event{
+			Kind:     activity.KindGPUsMeasured,
+			Severity: activity.Info,
+			Message:  "TPU measured: " + strings.Join(parts, ", "),
+			Details:  details,
+		})
+	}
+
+	state := gpuRuntimeMissing
+	if capacity.AllocatableGPUs > 0 {
+		state = gpuRuntimeOK
+	}
+	a.gpuRuntime = state
+	if state == gpuRuntimeOK {
+		a.activity.RecordChange("gpu-runtime", state, activity.Event{
+			Kind:     activity.KindGPURuntime,
+			Severity: activity.Success,
+			Message: fmt.Sprintf("TPU runtime OK: %d TPU chip(s) allocatable as %s",
+				capacity.AllocatableGPUs, hardware.TPUResource),
+			Details: map[string]any{
+				"allocatable_gpus": capacity.AllocatableGPUs, "ok": true, "accelerator": hardware.KindTPU,
+			},
+		})
+		return
+	}
+	a.activity.Forget("ready")
+	a.activity.RecordChange("gpu-runtime", state, activity.Event{
+		Kind:     activity.KindGPURuntime,
+		Severity: activity.Warning,
+		Message: fmt.Sprintf("TPU runtime missing: %d TPU node(s) advertise no allocatable %s",
+			capacity.UnequippedTPUNodes, hardware.TPUResource),
+		Hint: "The TPU chips are not advertised to Kubernetes. Re-run the bootstrap command on the " +
+			"TPU VM: it checks the TPU device nodes (/dev/accel* or /dev/vfio) and advertises the chips. " +
+			"Models stay Pending until this is fixed.",
+		Details: map[string]any{
+			"allocatable_gpus": 0, "ok": false, "unequipped_nodes": capacity.UnequippedTPUNodes,
+			"accelerator": hardware.KindTPU,
+		},
+	})
+}
+
+// describeTPU reads like "4 × TPU v6e (v6e-4, 32 GiB HBM per chip, 128 GiB total)".
+func describeTPU(group hardware.GPUGroup) string {
+	product := group.Product
+	if product == "" || product == "unknown" {
+		product = "unidentified TPU"
+	}
+	text := fmt.Sprintf("%d × %s", group.Count, product)
+	facts := []string{}
+	if group.AcceleratorType != "" {
+		facts = append(facts, group.AcceleratorType)
+	}
+	if group.MemoryBytes > 0 {
+		perChip := float64(group.MemoryBytes) / (1 << 30)
+		facts = append(facts, fmt.Sprintf("%.0f GiB HBM per chip, %.0f GiB total", perChip, perChip*float64(group.Count)))
+	}
+	if len(facts) > 0 {
+		text += " (" + strings.Join(facts, ", ") + ")"
+	}
+	return text
 }
 
 // describeGPU reads like "1 × NVIDIA RTX PRO 6000 Blackwell Server Edition found (96 GiB)".

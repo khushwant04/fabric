@@ -465,13 +465,19 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 
 	gpus := make([]controlplane.GPU, 0, len(a.measured.GPUs))
 	for _, group := range a.measured.GPUs {
-		gpus = append(gpus, controlplane.GPU{
+		gpu := controlplane.GPU{
 			Product:           group.Product,
 			Count:             group.Count,
 			MemoryBytes:       group.MemoryBytes,
 			ComputeCapability: group.ComputeCapability,
 			Source:            group.Source,
-		})
+		}
+		if group.IsTPU() {
+			gpu.Accelerator = hardware.KindTPU
+			gpu.Vendor = hardware.VendorGoogle
+			gpu.AcceleratorType = group.AcceleratorType
+		}
+		gpus = append(gpus, gpu)
 	}
 	capabilities.GPUs = gpus
 	capabilities.AllocatableGPUs = a.measured.AllocatableGPUs
