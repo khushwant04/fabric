@@ -21,6 +21,8 @@ import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
+from fabric_data_plane.routing_policy import PolicySet
+
 logger = logging.getLogger(__name__)
 
 #: Model names that ask the stamp to choose among the account's deployments.
@@ -88,6 +90,13 @@ class RoutingTable:
                 self._by_account.setdefault(deployment.account_id, []).append(deployment)
         if skipped:
             logger.warning("routing table: skipped %d malformed deployment entries", skipped)
+        # Published routing policies (ADR 0023). A policy that does not parse is left out,
+        # so its alias routes as if it had none; every other policy still applies.
+        self.policies, policy_errors = PolicySet.from_documents(
+            document.get("routing_policies"), revision=self.etag
+        )
+        for error in policy_errors:
+            logger.warning("routing table: ignoring routing policy %s", error)
 
     def _parse_deployment(self, raw: dict[str, Any]) -> RoutedDeployment:
         placements: list[Placement] = []
@@ -158,8 +167,16 @@ class RoutingTable:
                 return []
         return self.account_stamps(account_id)
 
+    def placements_of(self, account_id: uuid.UUID, deployment_id: str) -> list[Placement]:
+        """Where one of the account's deployments is placed; empty for anything else."""
+        for deployment in self.deployments_for(account_id):
+            if str(deployment.deployment_id) == deployment_id:
+                return sorted(deployment.placements, key=lambda item: item.stamp.stamp_id)
+        return []
+
     def model_names(self, account_id: uuid.UUID) -> list[str]:
-        return sorted({item.model_alias for item in self.deployments_for(account_id)})
+        names = {item.model_alias for item in self.deployments_for(account_id)}
+        return sorted(names | set(self.policies.aliases(str(account_id))))
 
     # -- reporting ------------------------------------------------------------
 
@@ -190,6 +207,7 @@ class RoutingTable:
             "generated_at": self.generated_at,
             "accounts": len(self._by_account),
             "deployments": deployments,
+            "routing_policies": len(self.policies),
             "stamps": sorted(per_stamp.values(), key=lambda item: item["name"]),
         }
 

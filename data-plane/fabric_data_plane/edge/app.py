@@ -38,6 +38,7 @@ from fabric_data_plane.auth import (
     verify_inference_token,
 )
 from fabric_data_plane.edge import files as file_routing
+from fabric_data_plane.edge import policy as edge_policy
 from fabric_data_plane.edge.config import EdgeSettings
 from fabric_data_plane.edge.metrics import EdgeMetrics
 from fabric_data_plane.edge.poller import (
@@ -340,17 +341,26 @@ async def forward(
     affinity_key: str | None = None,
     strict_affinity: bool = False,
     started: float,
+    ordered_candidates: list[Placement] | None = None,
+    route_headers: dict[str, str] | None = None,
 ) -> Response:
-    """Send the request to the first reachable candidate and stream its answer back."""
-    region = request.headers.get(REGION_HEADER, "").strip() or edge.settings.default_region
-    keyed = f"{principal.account_id}:{affinity_key}" if affinity_key else None
-    ordered = order_candidates(
-        candidates,
-        edge.health,
-        region=region,
-        affinity_key=keyed,
-        strict_affinity=strict_affinity,
-    )[: edge.settings.max_attempts]
+    """Send the request to the first reachable candidate and stream its answer back.
+
+    ``ordered_candidates`` are already in the order to try them (a routing policy ordered
+    them); ``route_headers`` are added to the request sent to the stamp.
+    """
+    if ordered_candidates is not None:
+        ordered = ordered_candidates[: edge.settings.max_attempts]
+    else:
+        region = request.headers.get(REGION_HEADER, "").strip() or edge.settings.default_region
+        keyed = f"{principal.account_id}:{affinity_key}" if affinity_key else None
+        ordered = order_candidates(
+            candidates,
+            edge.health,
+            region=region,
+            affinity_key=keyed,
+            strict_affinity=strict_affinity,
+        )[: edge.settings.max_attempts]
     if not ordered:
         edge.metrics.request(stamp="none", outcome="no_route")
         raise NotFound("model_not_found", "No such model is available to this account")
@@ -364,7 +374,7 @@ async def forward(
         outgoing = edge.stamp_client.build_request(
             request.method,
             url,
-            headers=forward_headers(request, extra_headers),
+            headers=forward_headers(request, {**extra_headers, **(route_headers or {})}),
             content=body,
             extensions=extensions or None,
         )
@@ -485,6 +495,44 @@ async def handle_model_request(
             body = await read_bounded(request, edge.settings.max_json_body_bytes, "JSON")
             model, payload = parse_json_model(body)
 
+        key, strict = affinity(request, payload)
+        region = request.headers.get(REGION_HEADER, "").strip() or edge.settings.default_region
+        policy_route = edge_policy.route(
+            table,
+            principal,
+            request,
+            payload,
+            model,
+            health=edge.health,
+            region=region,
+            affinity_key=f"{principal.account_id}:{key}" if key else None,
+            strict_affinity=strict,
+        )
+        if policy_route is not None:
+            ordered = policy_route.ordered
+            if request.url.path == "/v1/agent/runs" and file_routing.references_file_search(
+                payload
+            ):
+                home = file_routing.file_stamp(table, principal.account_id)
+                ordered = [
+                    c for c in ordered if home and c.stamp.stamp_id == home.stamp.stamp_id
+                ]
+            if not ordered:
+                edge.metrics.request(stamp="none", outcome="no_route")
+                raise UpstreamUnavailable(
+                    "no_stamp_for_policy",
+                    "No stamp allowed by this routing policy holds its target deployment",
+                )
+            return await forward(
+                edge,
+                request,
+                principal=principal,
+                candidates=ordered,
+                body=body,
+                started=started,
+                ordered_candidates=ordered,
+                route_headers=policy_route.headers,
+            )
         candidates = table.candidates(principal.account_id, model)
         if not candidates:
             edge.metrics.request(stamp="none", outcome="no_route")
@@ -504,7 +552,6 @@ async def handle_model_request(
                     "This account's vector stores live on a stamp that does not serve this "
                     "model; use a model deployed on that stamp",
                 )
-        key, strict = affinity(request, payload)
         return await forward(
             edge,
             request,

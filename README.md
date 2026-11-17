@@ -145,6 +145,7 @@ audio and agents.
 | A complete single-tenant install with Helm | [Single-tenant installation](docs/single-tenant-installation.md) |
 | Run components yourself, or enroll a cluster as a stamp | [Getting started](docs/getting-started.md) |
 | Put one URL in front of every stamp | [Edge gateway](docs/edge-gateway.md) |
+| Route one model name to many deployments (canary, fallback) | [Routing policies](docs/routing-policies.md) |
 | Expose a stamp's gateway over HTTPS | [Stamp endpoints](docs/stamp-native-endpoint.md) |
 | Roll a release out to existing stamps | [Release runbook](docs/demo-runbook.md) |
 
@@ -199,7 +200,8 @@ are in [Measured results](docs/measured-results.md); planned work is in the
 [Hosted tools](docs/hosted-tools.md) ·
 [File search](docs/file-search.md) ·
 [MCP connectors](docs/mcp-connectors.md) ·
-[Model cascade](docs/model-cascade.md)
+[Model cascade](docs/model-cascade.md) ·
+[Routing policies](docs/routing-policies.md)
 
 **Operating Fabric** —
 [Single-tenant installation](docs/single-tenant-installation.md) ·

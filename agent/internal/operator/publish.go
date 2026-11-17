@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -145,10 +146,24 @@ func (p *Publisher) resource(name string, deployment state.Deployment) ModelDepl
 			ToolCallParser:       deployment.ToolCallParser,
 			// Stamp-wide, carried on each resource because the operator renders the data
 			// plane's configuration from these and reads stamp state from nowhere else.
-			JWTIssuer: deployment.Verification.JWTIssuer,
-			JWKSURL:   deployment.Verification.JWKSURL,
+			JWTIssuer:       deployment.Verification.JWTIssuer,
+			JWKSURL:         deployment.Verification.JWKSURL,
+			RoutingPolicies: accountRoutingPolicies(deployment),
 		},
 	}
+}
+
+// accountRoutingPolicies renders the resource's account's share of the routing-policy
+// snapshot, or empty when the agent holds no snapshot.
+func accountRoutingPolicies(deployment state.Deployment) string {
+	if deployment.RoutingPolicies == nil {
+		return ""
+	}
+	encoded, err := json.Marshal(deployment.RoutingPolicies.ForAccount(deployment.AccountID))
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func (p *Publisher) create(ctx context.Context, name string, deployment state.Deployment) error {

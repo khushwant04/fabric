@@ -155,6 +155,8 @@ class Demo:
         self.children: list[subprocess.Popen] = []
         self.stamps: dict[str, dict] = {}
         self.deployments: dict[str, dict] = {}
+        self.key_ids: dict[str, str] = {}
+        self.routing_policies: dict[str, str] = {}
         self.account_id = ""
         self.token = ""
         self.keys: dict[str, str] = {}
@@ -249,6 +251,7 @@ class Demo:
             response = self.call("POST", self.acct("/api-keys"), body=body)
             created[name] = response
             self.keys[name] = response["secret"]
+            self.key_ids[name] = response["api_key"]["id"]
         self.call("DELETE", self.acct(f"/api-keys/{created['legacy-notebook']['api_key']['id']}"))
         self.call("DELETE", self.acct(f"/service-principals/{principals['legacy-etl']}"))
         log("service principals: 4 (1 disabled); API keys: 6 (1 revoked)")
@@ -368,6 +371,72 @@ class Demo:
         self.report_observations()
         self.report_hosts()
         self.report_activity()
+
+    # --- routing policies ----------------------------------------------------------
+
+    def seed_routing_policies(self) -> None:
+        """Routing policies (docs/routing-policies.md): one published twice with a draft on
+        top, so the editor shows a live version, history and a pending diff; one draft only."""
+        dep = {name: d["id"] for name, d in self.deployments.items()}
+
+        def target(name: str, weight: int) -> dict:
+            return {"deployment_id": dep[name], "weight": weight}
+
+        rules = [
+            {"id": "tool-calls", "name": "Tool calls",
+             "match": {"has_tools": True, "endpoints": ["chat_completions", "responses"]},
+             "targets": [target("assistant-large", 100)], "fallbacks": [dep["support-assistant"]],
+             "fallback_on": ["server_error", "timeout", "no_ready_host"],
+             "strategy": "prefix_aware", "timeout_seconds": 60},
+            {"id": "batch-key", "name": "Batch jobs",
+             "match": {"api_key_ids": [self.key_ids["batch-inference-prod"]]},
+             "targets": [target("batch-summarizer", 100)], "fallbacks": [dep["chat-fast"]],
+             "fallback_on": ["overload", "no_ready_host"]},
+            {"id": "long-prompts", "name": "Long prompts",
+             "match": {"prompt_tokens": {"min": 8000}},
+             "targets": [target("assistant-large", 100)],
+             "stamp_preference": {"mode": "prefer", "stamp_ids": [self.stamps["gcp-rtx6000"]["id"]]}},
+            {"id": "gold-tier", "name": "Gold tier",
+             "match": {"headers": [{"name": "x-tier", "op": "equals", "value": "gold"}]},
+             "targets": [target("assistant-large", 70), target("support-assistant", 30)]},
+        ]
+
+        def default(*targets: dict) -> dict:
+            return {"id": "default", "name": "Default", "targets": list(targets),
+                    "fallbacks": [dep["assistant-large"]],
+                    "fallback_on": ["server_error", "no_ready_host"]}
+
+        created = self.call("POST", self.acct("/routing-policies"), body={
+            "alias": "chat-default",
+            "description": "The model name every Northstar app calls for chat.",
+            "draft": {"rules": rules[:2], "default": default(target("support-assistant", 100))},
+        })
+        policy = self.acct(f"/routing-policies/{created['id']}")
+        self.call("POST", policy + "/publish", body={"note": "Initial rules"})
+        self.call("PUT", policy + "/draft", body={"draft": {
+            "rules": rules, "default": default(target("support-assistant", 90), target("chat-fast", 10)),
+        }})
+        self.call("POST", policy + "/publish", body={"note": "Canary chat-fast at 10%"})
+        # An edit in progress: the canary raised to 20%, not yet published.
+        self.call("PUT", policy + "/draft", body={"draft": {
+            "rules": rules, "default": default(target("support-assistant", 80), target("chat-fast", 20)),
+        }})
+        self.routing_policies["chat-default"] = created["id"]
+
+        review = self.call("POST", self.acct("/routing-policies"), body={
+            "alias": "code-review",
+            "description": "Pull-request review bot; waiting for its deployment to become ready.",
+            "draft": {"rules": [], "default": {
+                "id": "default", "name": "Default", "targets": [target("code-review-bot", 100)],
+                "fallbacks": [dep["assistant-large"]], "fallback_on": ["no_ready_host"]}},
+        })
+        self.routing_policies["code-review"] = review["id"]
+        for stamp in self.stamps.values():
+            self.run_agent(stamp)  # deliver the published policy with desired state
+        # The agent pass reports its own view of each placement; restore what the operator
+        # would observe, as create_deployments does after its own pass.
+        self.report_observations()
+        log("routing policies: chat-default (v2 live, draft pending), code-review (draft)")
 
     def placement_generation(self, deployment: dict) -> int:
         placements = self.call("GET", self.acct(f"/deployments/{deployment['id']}/placements"))
@@ -1066,6 +1135,7 @@ class Demo:
             "first_deployment_id": self.deployments["docs-qa"]["id"],
             "downloading_deployment_id": self.deployments["code-review-bot"]["id"],
             "removed_stamp_deployment_id": self.removed_deployment_id,
+            "routing_policies": self.routing_policies,
             # Where each stamp's reported gateway really listens, for the demo edge gateway's
             # address overrides: {"aks-gpu.gw.northstar-labs.example:443": "127.0.0.1:8090"}.
             "gateway_addresses": {
@@ -1134,6 +1204,7 @@ def main() -> None:
         demo.seed_people_and_account()
         demo.enroll_stamps()
         demo.create_deployments()
+        demo.seed_routing_policies()
         demo.enroll_removed_stamp()
         demo.backfill_metrics()
         demo.start_data_planes()

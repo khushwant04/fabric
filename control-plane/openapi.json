@@ -488,6 +488,94 @@
         "title": "AuditEventResponse",
         "type": "object"
       },
+      "DefaultRule": {
+        "additionalProperties": false,
+        "properties": {
+          "fallback_on": {
+            "items": {
+              "enum": [
+                "server_error",
+                "overload",
+                "timeout",
+                "no_ready_host"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Fallback On",
+            "type": "array"
+          },
+          "fallbacks": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Fallbacks",
+            "type": "array"
+          },
+          "id": {
+            "default": "default",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Name",
+            "type": "string"
+          },
+          "stamp_preference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StampPreference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "prefix_aware",
+                  "least_in_flight"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTarget"
+            },
+            "maxItems": 10,
+            "title": "Targets",
+            "type": "array"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 3600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          }
+        },
+        "title": "DefaultRule",
+        "type": "object"
+      },
       "DeploymentCreateRequest": {
         "properties": {
           "model_alias": {
@@ -1301,6 +1389,16 @@
             "title": "Max Generation",
             "type": "integer"
           },
+          "routing_policies": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingPolicySnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "stamp_id": {
             "format": "uuid",
             "title": "Stamp Id",
@@ -1509,6 +1607,14 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "routing_policies": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Routing Policies",
+            "type": "array"
           },
           "stamp_liveness_seconds": {
             "title": "Stamp Liveness Seconds",
@@ -1979,6 +2085,38 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HeaderCondition": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "op": {
+            "default": "equals",
+            "enum": [
+              "equals",
+              "regex"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 200,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "HeaderCondition",
         "type": "object"
       },
       "HeartbeatRequest": {
@@ -3280,6 +3418,19 @@
         "title": "PlacementResponse",
         "type": "object"
       },
+      "PublishRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "title": "PublishRequest",
+        "type": "object"
+      },
       "ResourceSpec": {
         "additionalProperties": false,
         "properties": {
@@ -3298,6 +3449,572 @@
           }
         },
         "title": "ResourceSpec",
+        "type": "object"
+      },
+      "RollbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "RollbackRequest",
+        "type": "object"
+      },
+      "RoutingPolicyCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+            "title": "Alias",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Description",
+            "type": "string"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingPolicyDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "title": "RoutingPolicyCreateRequest",
+        "type": "object"
+      },
+      "RoutingPolicyDocument": {
+        "additionalProperties": false,
+        "description": "The editable body of a policy: ordered rules, then the required default rule.",
+        "properties": {
+          "default": {
+            "$ref": "#/components/schemas/DefaultRule"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingRule"
+            },
+            "maxItems": 50,
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "default"
+        ],
+        "title": "RoutingPolicyDocument",
+        "type": "object"
+      },
+      "RoutingPolicyDraftUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/RoutingPolicyDocument"
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "title": "RoutingPolicyDraftUpdate",
+        "type": "object"
+      },
+      "RoutingPolicyResponse": {
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/RoutingPolicyDocument"
+          },
+          "draft_updated_at": {
+            "format": "date-time",
+            "title": "Draft Updated At",
+            "type": "string"
+          },
+          "draft_updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Updated By"
+          },
+          "has_unpublished_changes": {
+            "title": "Has Unpublished Changes",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "live": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingPolicyVersionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "live_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Version"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ValidationReport"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "alias",
+          "description",
+          "draft",
+          "draft_updated_at",
+          "draft_updated_by",
+          "live_version",
+          "live",
+          "has_unpublished_changes",
+          "validation",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RoutingPolicyResponse",
+        "type": "object"
+      },
+      "RoutingPolicySnapshot": {
+        "description": "Live policies as a stamp or the edge receives them (ADR 0023).\n\n``revision`` is a content digest: equal revisions mean equal policies, so a receiver\ncan skip work when nothing changed.",
+        "properties": {
+          "policies": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Policies",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "policies"
+        ],
+        "title": "RoutingPolicySnapshot",
+        "type": "object"
+      },
+      "RoutingPolicySummary": {
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "deployment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Deployment Ids",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_unpublished_changes": {
+            "title": "Has Unpublished Changes",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "live_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Version"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "rule_count": {
+            "title": "Rule Count",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "alias",
+          "description",
+          "live_version",
+          "published_at",
+          "has_unpublished_changes",
+          "rule_count",
+          "deployment_ids",
+          "updated_at"
+        ],
+        "title": "RoutingPolicySummary",
+        "type": "object"
+      },
+      "RoutingPolicyVersionResponse": {
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/RoutingPolicyDocument"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "published_at": {
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "published_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published By"
+          },
+          "rolled_back_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolled Back From"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "document",
+          "note",
+          "rolled_back_from",
+          "published_by",
+          "published_at"
+        ],
+        "title": "RoutingPolicyVersionResponse",
+        "type": "object"
+      },
+      "RoutingRule": {
+        "additionalProperties": false,
+        "properties": {
+          "fallback_on": {
+            "items": {
+              "enum": [
+                "server_error",
+                "overload",
+                "timeout",
+                "no_ready_host"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Fallback On",
+            "type": "array"
+          },
+          "fallbacks": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Fallbacks",
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "match": {
+            "$ref": "#/components/schemas/RuleMatch"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Name",
+            "type": "string"
+          },
+          "stamp_preference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StampPreference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "prefix_aware",
+                  "least_in_flight"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTarget"
+            },
+            "maxItems": 10,
+            "title": "Targets",
+            "type": "array"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 3600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RoutingRule",
+        "type": "object"
+      },
+      "RuleMatch": {
+        "additionalProperties": false,
+        "description": "Conditions of a rule. Every condition that is set must hold (AND).",
+        "properties": {
+          "api_key_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Api Key Ids",
+            "type": "array"
+          },
+          "endpoints": {
+            "items": {
+              "enum": [
+                "chat_completions",
+                "responses",
+                "messages",
+                "completions"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Endpoints",
+            "type": "array"
+          },
+          "has_tools": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Tools"
+          },
+          "headers": {
+            "items": {
+              "$ref": "#/components/schemas/HeaderCondition"
+            },
+            "maxItems": 10,
+            "title": "Headers",
+            "type": "array"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "principal_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Principal Ids",
+            "type": "array"
+          },
+          "prompt_tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "RuleMatch",
+        "type": "object"
+      },
+      "RuleTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "weight": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "weight"
+        ],
+        "title": "RuleTarget",
+        "type": "object"
+      },
+      "RuleTrace": {
+        "properties": {
+          "is_default": {
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "name",
+          "matched",
+          "is_default"
+        ],
+        "title": "RuleTrace",
         "type": "object"
       },
       "RuntimeSampleRequest": {
@@ -3594,6 +4311,376 @@
           "created_at"
         ],
         "title": "ServicePrincipalResponse",
+        "type": "object"
+      },
+      "SimulateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingPolicyDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request": {
+            "$ref": "#/components/schemas/SimulatedRequest"
+          },
+          "source": {
+            "default": "draft",
+            "enum": [
+              "draft",
+              "live"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "SimulateRequest",
+        "type": "object"
+      },
+      "SimulateResponse": {
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "distribution": {
+            "items": {
+              "$ref": "#/components/schemas/SimulatedShare"
+            },
+            "title": "Distribution",
+            "type": "array"
+          },
+          "fallback_chain": {
+            "items": {
+              "$ref": "#/components/schemas/SimulatedDeployment"
+            },
+            "title": "Fallback Chain",
+            "type": "array"
+          },
+          "fallback_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fallback On",
+            "type": "array"
+          },
+          "is_default": {
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "matched_rule_id": {
+            "title": "Matched Rule Id",
+            "type": "string"
+          },
+          "matched_rule_index": {
+            "title": "Matched Rule Index",
+            "type": "integer"
+          },
+          "matched_rule_name": {
+            "title": "Matched Rule Name",
+            "type": "string"
+          },
+          "routing_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Routing Key"
+          },
+          "session_target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimulatedDeployment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "stamp_preference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StampPreference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          },
+          "trace": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTrace"
+            },
+            "title": "Trace",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "alias",
+          "source",
+          "version",
+          "matched_rule_id",
+          "matched_rule_name",
+          "matched_rule_index",
+          "is_default",
+          "trace",
+          "distribution",
+          "session_target",
+          "fallback_chain",
+          "fallback_on",
+          "strategy",
+          "timeout_seconds",
+          "stamp_preference",
+          "routing_key"
+        ],
+        "title": "SimulateResponse",
+        "type": "object"
+      },
+      "SimulatedDeployment": {
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "known": {
+            "title": "Known",
+            "type": "boolean"
+          },
+          "model_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Alias"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "name",
+          "model_alias",
+          "known",
+          "ready"
+        ],
+        "title": "SimulatedDeployment",
+        "type": "object"
+      },
+      "SimulatedRequest": {
+        "additionalProperties": false,
+        "description": "A description of a request: what a rule can match on, without any prompt.",
+        "properties": {
+          "api_key_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Id"
+          },
+          "endpoint": {
+            "default": "chat_completions",
+            "enum": [
+              "chat_completions",
+              "responses",
+              "messages",
+              "completions"
+            ],
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "has_tools": {
+            "default": false,
+            "title": "Has Tools",
+            "type": "boolean"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 32,
+            "title": "Headers",
+            "type": "object"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "principal_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal Id"
+          },
+          "prompt_tokens": {
+            "default": 0,
+            "maximum": 10000000.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "session_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Key"
+          }
+        },
+        "title": "SimulatedRequest",
+        "type": "object"
+      },
+      "SimulatedShare": {
+        "properties": {
+          "deployment_id": {
+            "format": "uuid",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "known": {
+            "title": "Known",
+            "type": "boolean"
+          },
+          "model_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Alias"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "percent": {
+            "title": "Percent",
+            "type": "number"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "name",
+          "model_alias",
+          "known",
+          "ready",
+          "percent"
+        ],
+        "title": "SimulatedShare",
         "type": "object"
       },
       "StampCapabilities": {
@@ -4275,6 +5362,36 @@
         "title": "StampMetricsResponse",
         "type": "object"
       },
+      "StampPreference": {
+        "additionalProperties": false,
+        "description": "``prefer`` tries these stamps first; ``pin`` sends only to them (edge only).",
+        "properties": {
+          "mode": {
+            "default": "prefer",
+            "enum": [
+              "prefer",
+              "pin"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "stamp_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Stamp Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stamp_ids"
+        ],
+        "title": "StampPreference",
+        "type": "object"
+      },
       "StampResponse": {
         "properties": {
           "account_id": {
@@ -4559,6 +5676,39 @@
           "accepted_at"
         ],
         "title": "StatusReportResponse",
+        "type": "object"
+      },
+      "TokenRange": {
+        "additionalProperties": false,
+        "properties": {
+          "max": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          }
+        },
+        "title": "TokenRange",
         "type": "object"
       },
       "TokenRequest": {
@@ -4891,6 +6041,73 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationIssue": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "code",
+          "message"
+        ],
+        "title": "ValidationIssue",
+        "type": "object"
+      },
+      "ValidationReport": {
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "valid",
+          "errors",
+          "warnings"
+        ],
+        "title": "ValidationReport",
         "type": "object"
       },
       "VerificationConfig": {
@@ -6697,6 +7914,658 @@
         "summary": "Register or replace this account's identity provider",
         "tags": [
           "identity-providers"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies": {
+      "get": {
+        "operationId": "list_all_v1_accounts__account_id__routing_policies_get",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RoutingPolicySummary"
+                  },
+                  "title": "Response List All V1 Accounts  Account Id  Routing Policies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List routing policies",
+        "tags": [
+          "routing-policies"
+        ]
+      },
+      "post": {
+        "operationId": "create_v1_accounts__account_id__routing_policies_post",
+        "parameters": [
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutingPolicyCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a routing policy with a draft",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}": {
+      "delete": {
+        "operationId": "delete_v1_accounts__account_id__routing_policies__policy_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a routing policy (its alias stops routing)",
+        "tags": [
+          "routing-policies"
+        ]
+      },
+      "get": {
+        "operationId": "read_one_v1_accounts__account_id__routing_policies__policy_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a routing policy",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/draft": {
+      "put": {
+        "operationId": "save_draft_v1_accounts__account_id__routing_policies__policy_id__draft_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutingPolicyDraftUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace the draft (does not change what is live)",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/publish": {
+      "post": {
+        "operationId": "publish_v1_accounts__account_id__routing_policies__policy_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish the draft as a new immutable version",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/rollback": {
+      "post": {
+        "operationId": "rollback_v1_accounts__account_id__routing_policies__policy_id__rollback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Republish an earlier version as a new version",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/simulate": {
+      "post": {
+        "operationId": "simulate_v1_accounts__account_id__routing_policies__policy_id__simulate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Show which rule a described request matches and where it would go",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/validate": {
+      "post": {
+        "operationId": "validate_v1_accounts__account_id__routing_policies__policy_id__validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutingPolicyDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate a document against this account without saving it",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/versions": {
+      "get": {
+        "operationId": "versions_v1_accounts__account_id__routing_policies__policy_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RoutingPolicyVersionResponse"
+                  },
+                  "title": "Response Versions V1 Accounts  Account Id  Routing Policies  Policy Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List published versions, newest first",
+        "tags": [
+          "routing-policies"
+        ]
+      }
+    },
+    "/v1/accounts/{account_id}/routing-policies/{policy_id}/versions/{version}": {
+      "get": {
+        "operationId": "version_v1_accounts__account_id__routing_policies__policy_id__versions__version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Account identifier",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "description": "Account identifier",
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPolicyVersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read one published version",
+        "tags": [
+          "routing-policies"
         ]
       }
     },

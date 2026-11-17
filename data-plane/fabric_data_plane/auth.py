@@ -34,6 +34,8 @@ STRIPPED_REQUEST_HEADERS = (
     "x-fabric-run-budget-tokens",
     "x-fabric-run-budget-steps",
     "x-fabric-tool-guard",
+    # The edge's routing-policy key (routing_policy.ROUTE_KEY_HEADER) is for this gateway.
+    "x-fabric-route-key",
 )
 
 
@@ -46,6 +48,9 @@ class InferencePrincipal:
     scopes: frozenset[str]
     key_id: str | None
     token_id: str | None
+    #: The API key the token was exchanged from, when it came from one. Routing policies
+    #: can match on it; it grants nothing.
+    api_key_id: str | None = None
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -124,6 +129,7 @@ def verify_inference_token(
         scopes=scopes,
         key_id=key_id,
         token_id=claims.get("jti"),
+        api_key_id=str(claims["key_id"]) if isinstance(claims.get("key_id"), str) else None,
     )
 
 

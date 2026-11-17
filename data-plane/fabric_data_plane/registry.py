@@ -31,6 +31,7 @@ from fabric_data_plane.pool import (
     BackendHealth,
     BackendPool,
 )
+from fabric_data_plane.routing_policy import EMPTY_POLICY_SET, PolicySet
 from fabric_data_plane.verification import Verification, verification_from_payload
 
 logger = logging.getLogger(__name__)
@@ -137,8 +138,12 @@ class DeploymentRegistry:
         *,
         revision: str = "",
         verification: Verification | None = None,
+        routing_policies: PolicySet | None = None,
     ) -> None:
         self.revision = revision
+        # Published routing policies (ADR 0023), parsed once per document. Requests read
+        # them from here and never ask the control plane.
+        self.routing_policies = routing_policies or EMPTY_POLICY_SET
         # Stamp-wide rather than per-deployment: one control plane mints every token this
         # stamp serves. None means the document did not carry one, which the policy reads
         # as "keep what is in force".
@@ -168,7 +173,21 @@ class DeploymentRegistry:
             deployments,
             revision=str(payload.get("revision") or ""),
             verification=verification_from_payload(payload),
+            routing_policies=cls._policies_from_payload(payload),
         )
+
+    @staticmethod
+    def _policies_from_payload(payload: dict[str, Any]) -> PolicySet:
+        section = payload.get("routing_policies")
+        if not isinstance(section, dict):
+            return EMPTY_POLICY_SET
+        policies, errors = PolicySet.from_documents(
+            section.get("policies"), revision=str(section.get("revision") or "")
+        )
+        for error in errors:
+            # Only that alias is affected: it routes as if it had no policy.
+            logger.warning("ignoring routing policy %s", error)
+        return policies
 
     @staticmethod
     def _deployment_from_entry(entry: dict[str, Any]) -> Deployment:
@@ -307,6 +326,10 @@ class DeploymentRegistry:
         """The stamp-wide verification contract this document carried, if any."""
         return self.verification
 
+    def policies(self) -> PolicySet:
+        """Routing policies this document carried; empty when it carried none."""
+        return self.routing_policies
+
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         """Deployments this account may list."""
         return sorted(
@@ -419,6 +442,9 @@ class ReloadingRegistry:
     def for_account(self, account_id: uuid.UUID) -> list[Deployment]:
         return self._current().for_account(account_id)
 
+    def policies(self) -> PolicySet:
+        return self._current().policies()
+
     def __len__(self) -> int:
         return len(self._current())
 
@@ -427,6 +453,8 @@ class ReloadingRegistry:
         with self._lock:
             return {
                 "revision": self._registry.revision,
+                "routing_policies_revision": self._registry.routing_policies.revision,
+                "routing_policies": len(self._registry.routing_policies),
                 "path": str(self._path),
                 "deployments": len(self._registry),
                 "reloads": self._reloads,
