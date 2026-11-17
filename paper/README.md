@@ -5,7 +5,7 @@ Technical papers on Fabric, grounded in the repository and the dated evidence re
 
 | Paper | Topic |
 |---|---|
-| [Fabric: Two-Clock Governance for Multi-Stamp, Agentic LLM Serving](arxiv/) | November 2026 arXiv manuscript (cs.DC, IEEEtran conference format, 14 pages): edge tier, prefix-aware routing, routing policies, agent governance, NVIDIA/Cloud TPU accelerator abstraction with the first TPU v6e-1 bring-up. Build with `make -C paper/arxiv`; see [`arxiv/README.md`](arxiv/README.md) |
+| [Agent Fabric: A Fluid Inference System for Agentic Workloads](arxiv/) | November 2026 arXiv manuscript (cs.DC, IEEEtran conference format, 14 pages): edge tier, prefix-aware routing, routing policies, agent governance, NVIDIA/Cloud TPU accelerator abstraction with the first TPU v6e-1 bring-up. Build with `make -C paper/arxiv`; see [`arxiv/README.md`](arxiv/README.md) |
 | [Between Intent and Tokens](two-clock-governance.md) | Two-clock governance for a managed inference platform: the code-grounded research paper |
 | [Fabric technical paper (LaTeX)](fabric-technical-paper.md) | The original LaTeX manuscript; copy its `latex` block into a `.tex` file to build it |
 | [Kernel substitution direction](kernel-substitution-direction.md) | Proposed research programme: safe, workload-adaptive GPU kernel substitution |
