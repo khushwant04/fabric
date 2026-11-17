@@ -33,7 +33,7 @@ main() {
 
 REPOSITORY=https://github.com/khushwant04/fabric
 # Chart and images come from the same commit. CI publishes images for every commit on main.
-DEFAULT_RELEASE=6e8199737e76245cef21def1906c68d589b164b9
+DEFAULT_RELEASE=57b0fdb73e6de28d020a5530cc42ac5ce38defba
 DEFAULT_REGISTRY=public.ecr.aws/hexelstudio/fabric
 CERT_MANAGER_VERSION=v1.17.2
 NAMESPACE=fabric-stamp

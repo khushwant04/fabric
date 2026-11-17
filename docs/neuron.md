@@ -115,13 +115,12 @@ with `sudo`:
 curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh \
   | sudo bash -s -- \
   --name inf2-01 --control-plane https://api.example.com --token '<token>' \
-  --host inf2-01.stamps.example.com --email ops@example.com \
-  --release <commit with Neuron support>
+  --host inf2-01.stamps.example.com --email ops@example.com
 ```
 
-Until the bootstrap's default release is moved to a commit that includes Neuron support, pass
-`--release` with such a commit (its images must have been published by CI). An older release is
-refused with a message saying so. Add `--neuron inf2.xlarge` only when instance metadata cannot be
+The command is the same as on a GPU or TPU VM: the bootstrap's default release (`57b0fdb` or
+later) includes Neuron support. A `--release` older than that is refused with a message saying so.
+Add `--neuron inf2.xlarge` only when instance metadata cannot be
 read.
 
 Step 1 prints `1 × Inferentia2 (inf2.xlarge, 32 GiB HBM, 2 NeuronCores)`. Step 3, *Neuron
