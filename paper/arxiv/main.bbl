@@ -1,0 +1,276 @@
+\begin{thebibliography}{10}
+
+\bibitem{infercept}
+Reyna Abhyankar, Zijian He, Vikranth Srivatsa, Hao Zhang, and Yiying Zhang.
+\newblock {InferCept}: Efficient intercept support for augmented large language
+  model inference.
+\newblock In {\em Proceedings of the 41st International Conference on Machine
+  Learning (ICML)}, volume 235 of {\em Proceedings of Machine Learning
+  Research}, 2024.
+
+\bibitem{firecracker}
+Alexandru Agache, Marc Brooker, Andreea Florescu, Alexandra Iordache, Anthony
+  Liguori, Rolf Neugebauer, Phil Piwonka, and Diana-Maria Popa.
+\newblock Firecracker: Lightweight virtualization for serverless applications.
+\newblock In {\em 17th USENIX Symposium on Networked Systems Design and
+  Implementation (NSDI 20)}, pages 419--434. USENIX Association, 2020.
+
+\bibitem{sarathi}
+Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra,
+  Bhargav~S. Gulavani, Alexey Tumanov, and Ramachandran Ramjee.
+\newblock Taming throughput-latency tradeoff in {LLM} inference with
+  {Sarathi-Serve}.
+\newblock In {\em 18th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 24)}. USENIX Association, 2024.
+
+\bibitem{anthropicapi}
+{Anthropic}.
+\newblock Messages {API}.
+\newblock \url{https://docs.anthropic.com/en/api/messages}.
+\newblock Accessed November 2026.
+
+\bibitem{priorpaper}
+{Author Name}.
+\newblock Between intent and tokens: Two-clock governance for managed
+  language-model serving.
+\newblock Technical manuscript, September 2026; included in the source
+  repository under \texttt{paper/}, 2026.
+
+\bibitem{borgomegak8s}
+Brendan Burns, Brian Grant, David Oppenheimer, Eric Brewer, and John Wilkes.
+\newblock Borg, {Omega}, and {Kubernetes}.
+\newblock {\em Communications of the ACM}, 59(5):50--57, 2016.
+
+\bibitem{frugalgpt}
+Lingjiao Chen, Matei Zaharia, and James Zou.
+\newblock {FrugalGPT}: How to use large language models while reducing cost and
+  improving performance, 2023.
+
+\bibitem{clipper}
+Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael~J. Franklin, Joseph~E.
+  Gonzalez, and Ion Stoica.
+\newblock Clipper: A low-latency online prediction serving system.
+\newblock In {\em 14th USENIX Symposium on Networked Systems Design and
+  Implementation (NSDI 17)}, pages 613--627. USENIX Association, 2017.
+
+\bibitem{serverlessllm}
+Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii Ustiugov,
+  Yuvraj Patel, and Luo Mai.
+\newblock {ServerlessLLM}: Low-latency serverless inference for large language
+  models.
+\newblock In {\em 18th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 24)}. USENIX Association, 2024.
+
+\bibitem{clockwork}
+Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine Kaufmann, Ymir
+  Vigfusson, and Jonathan Mace.
+\newblock Serving {DNNs} like clockwork: Performance predictability from the
+  bottom up.
+\newblock In {\em 14th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 20)}, pages 443--462. USENIX Association, 2020.
+
+\bibitem{rfc7517}
+Michael~B. Jones.
+\newblock {JSON Web Key (JWK)}.
+\newblock RFC 7517, IETF, 2015.
+
+\bibitem{rfc7519}
+Michael~B. Jones, John Bradley, and Nat Sakimura.
+\newblock {JSON Web Token (JWT)}.
+\newblock RFC 7519, IETF, 2015.
+
+\bibitem{rfc8693}
+Michael~B. Jones, Anthony Nadalin, Brian Campbell, John Bradley, and Chuck
+  Mortimore.
+\newblock {OAuth 2.0 Token Exchange}.
+\newblock RFC 8693, IETF, 2020.
+
+\bibitem{karger}
+David Karger, Eric Lehman, Tom Leighton, Rina Panigrahy, Matthew Levine, and
+  Daniel Lewin.
+\newblock Consistent hashing and random trees: Distributed caching protocols
+  for relieving hot spots on the {World Wide Web}.
+\newblock In {\em Proceedings of the 29th Annual ACM Symposium on Theory of
+  Computing (STOC)}, pages 654--663, 1997.
+
+\bibitem{vllm}
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody~Hao Yu,
+  Joseph~E. Gonzalez, Hao Zhang, and Ion Stoica.
+\newblock Efficient memory management for large language model serving with
+  {PagedAttention}.
+\newblock In {\em Proceedings of the 29th Symposium on Operating Systems
+  Principles (SOSP '23)}, pages 611--626. ACM, 2023.
+
+\bibitem{alpaserve}
+Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng, Xin Jin,
+  Yanping Huang, Zhifeng Chen, Hao Zhang, Joseph~E. Gonzalez, and Ion Stoica.
+\newblock {AlpaServe}: Statistical multiplexing with model parallelism for deep
+  learning serving.
+\newblock In {\em 17th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 23)}. USENIX Association, 2023.
+
+\bibitem{parrot}
+Chaofan Lin, Zhenhua Han, Chengruidong Zhang, Yuqing Yang, Fan Yang, Chen Chen,
+  and Lili Qiu.
+\newblock Parrot: Efficient serving of {LLM-based} applications with semantic
+  variable.
+\newblock In {\em 18th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 24)}. USENIX Association, 2024.
+
+\bibitem{stamps}
+{Microsoft}.
+\newblock Deployment stamps pattern.
+\newblock Azure Architecture Center,
+  \url{https://learn.microsoft.com/azure/architecture/patterns/deployment-stamp}.
+\newblock Accessed November 2026.
+
+\bibitem{boundedloads}
+Vahab Mirrokni, Mikkel Thorup, and Morteza Zadimoghaddam.
+\newblock Consistent hashing with bounded loads.
+\newblock In {\em Proceedings of the 29th Annual ACM-SIAM Symposium on Discrete
+  Algorithms (SODA)}, pages 587--604, 2018.
+
+\bibitem{mcp}
+{Model Context Protocol Authors}.
+\newblock Model context protocol specification.
+\newblock \url{https://modelcontextprotocol.io/specification}.
+\newblock Accessed November 2026.
+
+\bibitem{routellm}
+Isaac Ong, Amjad Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph~E.
+  Gonzalez, M.~Waleed Kadous, and Ion Stoica.
+\newblock {RouteLLM}: Learning to route {LLMs} with preference data, 2024.
+
+\bibitem{openaiapi}
+{OpenAI}.
+\newblock {API} reference: Chat completions and responses.
+\newblock \url{https://platform.openai.com/docs/api-reference}.
+\newblock Accessed November 2026.
+
+\bibitem{splitwise}
+Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, {\'I}{\~n}igo Goiri,
+  Saeed Maleki, and Ricardo Bianchini.
+\newblock Splitwise: Efficient generative {LLM} inference using phase
+  splitting.
+\newblock In {\em Proceedings of the 51st ACM/IEEE Annual International
+  Symposium on Computer Architecture (ISCA)}, 2024.
+
+\bibitem{gorilla}
+Shishir~G. Patil, Tianjun Zhang, Xin Wang, and Joseph~E. Gonzalez.
+\newblock Gorilla: Large language model connected with massive {APIs}, 2023.
+
+\bibitem{pgrls}
+{PostgreSQL Global Development Group}.
+\newblock Row security policies.
+\newblock PostgreSQL documentation,
+  \url{https://www.postgresql.org/docs/current/ddl-rowsecurity.html}.
+\newblock Accessed November 2026.
+
+\bibitem{infaas}
+Francisco Romero, Qian Li, Neeraja~J. Yadwadkar, and Christos Kozyrakis.
+\newblock {INFaaS}: Automated model-less inference serving.
+\newblock In {\em 2021 USENIX Annual Technical Conference (USENIX ATC 21)},
+  pages 397--411. USENIX Association, 2021.
+
+\bibitem{nistzt}
+Scott Rose, Oliver Borchert, Stu Mitchell, and Sean Connelly.
+\newblock Zero trust architecture.
+\newblock NIST Special Publication 800-207, National Institute of Standards and
+  Technology, 2020.
+
+\bibitem{toolformer}
+Timo Schick, Jane Dwivedi-Yu, Roberto Dess{\`\i}, Roberta Raileanu, Maria
+  Lomeli, Eric Hambro, Luke Zettlemoyer, Nicola Cancedda, and Thomas Scialom.
+\newblock Toolformer: Language models can teach themselves to use tools.
+\newblock In {\em Advances in Neural Information Processing Systems (NeurIPS)},
+  volume~36, 2023.
+
+\bibitem{rfc8725}
+Yaron Sheffer, Dick Hardt, and Michael~B. Jones.
+\newblock {JSON Web Token Best Current Practices}.
+\newblock RFC 8725, IETF, 2020.
+
+\bibitem{preble}
+Vikranth Srivatsa, Zijian He, Reyna Abhyankar, Dongming Li, and Yiying Zhang.
+\newblock Preble: Efficient distributed prompt scheduling for {LLM} serving,
+  2024.
+
+\bibitem{llumnix}
+Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang, Yong Li, and Wei
+  Lin.
+\newblock Llumnix: Dynamic scheduling for large language model serving.
+\newblock In {\em 18th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 24)}. USENIX Association, 2024.
+
+\bibitem{rendezvous}
+David~G. Thaler and Chinya~V. Ravishankar.
+\newblock Using name-based mappings to increase hit rates.
+\newblock {\em IEEE/ACM Transactions on Networking}, 6(1):1--14, 1998.
+
+\bibitem{gvisor}
+{The gVisor Authors}.
+\newblock {gVisor}: The container security platform.
+\newblock \url{https://gvisor.dev/}.
+\newblock Accessed November 2026.
+
+\bibitem{k8scontroller}
+{The Kubernetes Authors}.
+\newblock Controllers.
+\newblock \url{https://kubernetes.io/docs/concepts/architecture/controller/}.
+\newblock Accessed November 2026.
+
+\bibitem{k8soperator}
+{The Kubernetes Authors}.
+\newblock Operator pattern.
+\newblock
+  \url{https://kubernetes.io/docs/concepts/extend-kubernetes/operator/}.
+\newblock Accessed November 2026.
+
+\bibitem{borg}
+Abhishek Verma, Luis Pedrosa, Madhukar Korupolu, David Oppenheimer, Eric Tune,
+  and John Wilkes.
+\newblock Large-scale cluster management at {Google} with {Borg}.
+\newblock In {\em Proceedings of the Tenth European Conference on Computer
+  Systems (EuroSys)}, 2015.
+
+\bibitem{vllmdocs}
+{vLLM Team}.
+\newblock {vLLM} documentation: Tool calling and structured outputs.
+\newblock \url{https://docs.vllm.ai/}.
+\newblock Accessed November 2026.
+
+\bibitem{outlines}
+Brandon~T. Willard and R{\'e}mi Louf.
+\newblock Efficient guided generation for large language models, 2023.
+
+\bibitem{react}
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan,
+  and Yuan Cao.
+\newblock {ReAct}: Synergizing reasoning and acting in language models.
+\newblock In {\em International Conference on Learning Representations (ICLR)},
+  2023.
+
+\bibitem{orca}
+Gyeong-In Yu, Joo~Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun.
+\newblock Orca: A distributed serving system for {Transformer-Based} generative
+  models.
+\newblock In {\em 16th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 22)}, pages 521--538. USENIX Association, 2022.
+
+\bibitem{sglang}
+Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff Huang, Cody~Hao
+  Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica, Joseph~E. Gonzalez, Clark
+  Barrett, and Ying Sheng.
+\newblock {SGLang}: Efficient execution of structured language model programs.
+\newblock In {\em Advances in Neural Information Processing Systems (NeurIPS)},
+  volume~37, 2024.
+
+\bibitem{distserve}
+Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xuanzhe Liu, Xin
+  Jin, and Hao Zhang.
+\newblock {DistServe}: Disaggregating prefill and decoding for
+  goodput-optimized large language model serving.
+\newblock In {\em 18th USENIX Symposium on Operating Systems Design and
+  Implementation (OSDI 24)}. USENIX Association, 2024.
+
+\end{thebibliography}
