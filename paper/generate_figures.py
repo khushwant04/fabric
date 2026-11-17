@@ -13,6 +13,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
 
 ROOT = Path(__file__).resolve().parent
@@ -405,6 +406,169 @@ def cost_capacity() -> None:
     save(fig, "cost_capacity")
 
 
+# --------------------------------------------------------------------------- arXiv paper figures
+# Sized for a two-column page (full width about 7 in, one column about 3.35 in).
+
+REPO = ROOT.parent
+STRATEGIES = [
+    ("round_robin", "round robin", GRAY, "s"),
+    ("least_in_flight", "least in flight", BLUE, "o"),
+    ("session_affinity", "session affinity", ORANGE, "^"),
+    ("prefix_aware ×1.1", "prefix-aware (bound 1.1)", GREEN, "D"),
+]
+
+
+def _routing_runs(sweep: str) -> list[dict[str, Any]]:
+    root = REPO / DATA["routing_benchmark"]["artifact_root"] / sweep / "results.json"
+    artifact = json.loads(root.read_text())
+    assert artifact["citable_as_hardware_measurement"] is False
+    return artifact["runs"]
+
+
+def _group(runs: list[dict[str, Any]], strategy: str, rate: float) -> list[dict[str, Any]]:
+    return [r["summary"] for r in runs if r["strategy"] == strategy and r["workload"]["rate"] == rate]
+
+
+def _stat(rows: list[dict[str, Any]], getter: Any) -> tuple[float, float, float]:
+    values = [getter(r) for r in rows]
+    return sum(values) / len(values), min(values), max(values)
+
+
+def _small_rc() -> dict[str, Any]:
+    return {"font.size": 7.5, "axes.titlesize": 8.5, "axes.labelsize": 7.5, "legend.fontsize": 7,
+            "xtick.labelsize": 7, "ytick.labelsize": 7}
+
+
+def routing_sweep() -> None:
+    """Cache hits, TTFT p95 and goodput per strategy and offered load (mean over seeds, min-max bars)."""
+    panels = [
+        ("final-mixed", "Mixed traffic"),
+        ("final-multi_turn", "Multi-turn chat"),
+        ("final-shared64", "64 shared system prompts"),
+    ]
+    metrics = [
+        ("cache_hit", "prompt tokens\nserved from cache (%)", lambda r: r["cache_hit_rate"] * 100),
+        ("ttft", "TTFT p95 (ms,\nsimulated clock)", lambda r: r["ttft_ms"]["p95"]),
+        ("goodput", "goodput (% of requests\nmeeting both SLOs)", lambda r: r["goodput_fraction"] * 100),
+    ]
+    rates = [1.0, 2.0, 4.0]
+    with plt.rc_context(_small_rc()):
+        fig, axes = plt.subplots(len(metrics), len(panels), figsize=(7.0, 5.0), sharex=True)
+        for col, (sweep, title) in enumerate(panels):
+            runs = _routing_runs(sweep)
+            for row, (key, ylabel, getter) in enumerate(metrics):
+                ax = axes[row][col]
+                for offset, (strategy, label, color, marker) in enumerate(STRATEGIES):
+                    xs, means, lows, highs = [], [], [], []
+                    for rate in rates:
+                        rows = _group(runs, strategy, rate)
+                        if not rows:
+                            continue
+                        mean, low, high = _stat(rows, getter)
+                        xs.append(rates.index(rate) + (offset - 1.5) * 0.06)
+                        means.append(mean)
+                        lows.append(mean - low)
+                        highs.append(high - mean)
+                    ax.errorbar(xs, means, yerr=[lows, highs], color=color, marker=marker, markersize=3.2,
+                                linewidth=1.1, elinewidth=0.6, capsize=1.5, label=label)
+                ax.set_xticks(range(len(rates)), ["1", "2", "4"])
+                ax.set_xlim(-0.35, len(rates) - 0.65)
+                ax.grid(alpha=0.2)
+                if key == "ttft":
+                    ax.set_yscale("log")
+                    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+                    ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: f"{v:g}" if str(int(v))[0] in "2357" else ""))
+                    if sweep == "final-shared64":
+                        ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: f"{v:g}" if int(v) % 100 == 0 else ""))
+                    ax.axhline(DATA["routing_benchmark"]["slo"]["ttft_ms"], color=RED, linewidth=0.7, linestyle=":")
+                if row == 0:
+                    ax.set_title(title, weight="bold")
+                if col == 0:
+                    ax.set_ylabel(ylabel)
+                if row == len(metrics) - 1:
+                    ax.set_xlabel("offered load (sessions/s)")
+        handles, labels = axes[0][0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False, bbox_to_anchor=(0.5, 1.02))
+        fig.tight_layout(rect=(0, 0, 1, 0.965))
+        save(fig, "routing_sweep")
+
+
+def routing_bound() -> None:
+    """Load-bound sensitivity at 4 sessions/s, mixed traffic (sens-mixed, 5 seeds)."""
+    runs = _routing_runs("sens-mixed")
+    factors = [1.0, 1.1, 1.25, 1.5]
+    names = {1.0: "prefix_aware ×1", 1.1: "prefix_aware ×1.1", 1.25: "prefix_aware ×1.25", 1.5: "prefix_aware ×1.5"}
+    hit = [_stat(_group(runs, names[f], 4.0), lambda r: r["cache_hit_rate"] * 100)[0] for f in factors]
+    p95 = [_stat(_group(runs, names[f], 4.0), lambda r: r["ttft_ms"]["p95"])[0] for f in factors]
+    p99 = [_stat(_group(runs, names[f], 4.0), lambda r: r["ttft_ms"]["p99"])[0] for f in factors]
+    refs = {
+        "least in flight": (BLUE, _group(runs, "least_in_flight", 4.0)),
+        "session affinity": (ORANGE, _group(runs, "session_affinity", 4.0)),
+    }
+    with plt.rc_context(_small_rc()):
+        fig, (left, right) = plt.subplots(1, 2, figsize=(3.4, 2.0))
+        left.plot(factors, hit, color=GREEN, marker="D", markersize=3.2, linewidth=1.1)
+        right.plot(factors, p95, color=GREEN, marker="D", markersize=3.2, linewidth=1.1, label="p95")
+        right.plot(factors, p99, color=GREEN, marker="D", markersize=3.2, linewidth=1.1, linestyle="--", label="p99")
+        for label, (color, rows) in refs.items():
+            left.axhline(_stat(rows, lambda r: r["cache_hit_rate"] * 100)[0], color=color, linewidth=0.8, linestyle=":")
+            right.axhline(_stat(rows, lambda r: r["ttft_ms"]["p99"])[0], color=color, linewidth=0.8, linestyle=":")
+            left.text(0.99, _stat(rows, lambda r: r["cache_hit_rate"] * 100)[0], label, color=color, fontsize=6, va="center", ha="left",
+                      bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.3})
+        left.set_ylabel("cache hits (%)")
+        right.set_ylabel("TTFT (ms)")
+        right.set_yscale("log")
+        right.minorticks_off()
+        right.set_yticks([300, 600, 1000, 2000, 3000], ["300", "600", "1000", "2000", "3000"])
+        for ax in (left, right):
+            ax.set_xticks(factors, ["1.0", "1.1", "1.25", "1.5"])
+            ax.set_xlabel("load bound")
+            ax.grid(alpha=0.2)
+        right.legend(frameon=False, loc="upper left", fontsize=6, bbox_to_anchor=(0.0, 0.93))
+        fig.tight_layout(w_pad=0.6)
+        save(fig, "routing_bound")
+
+
+def _seconds(clock: str) -> int:
+    h, m, s = (int(part) for part in clock.split(":"))
+    return h * 3600 + m * 60 + s
+
+
+def cold_start() -> None:
+    """Configuration-clock cost of one cold model host on T4, from recorded timestamps."""
+    t = DATA["t4_startup_stages"]["timestamps_utc"]
+    edges = [
+        ("waiting for a schedulable GPU", "first_failed_scheduling", "scheduled", "#C9D3DD"),
+        ("image pull (8.9 GB)", "image_pull_started", "image_pull_finished", ORANGE),
+        ("start + weights", "image_pull_finished", "weights_loaded", PURPLE),
+        ("engine profile, KV, warmup", "weights_loaded", "engine_warmup_finished", BLUE),
+        ("frontend warmup + listen", "engine_warmup_finished", "api_listening", GREEN),
+    ]
+    origin = _seconds(t["first_failed_scheduling"])
+    validation = DATA["t4_text_only_validation"]
+    with plt.rc_context(_small_rc()):
+        fig, ax = plt.subplots(figsize=(3.4, 1.75))
+        for label, start, end, color in edges:
+            left = _seconds(t[start]) - origin
+            width = _seconds(t[end]) - _seconds(t[start])
+            ax.barh(1, width, left=left, color=color, height=0.5, label=f"{label} ({width} s)")
+        engine = validation["engine_profile_kv_warmup_seconds"]
+        total = validation["process_start_to_health_seconds"]
+        ax.barh(0, engine, left=0, color=BLUE, height=0.5)
+        ax.barh(0, total - engine, left=engine, color="#9DB7CF", height=0.5)
+        ax.text(total + 12, 0, f"{total:.0f} s to /health", va="center", fontsize=6.5, color=INK)
+        end_all = _seconds(t["api_listening"]) - origin
+        ax.text(end_all - 6, 1.36, f"{end_all} s = 15m22s", va="center", ha="right", fontsize=6.5, color=INK)
+        ax.set_yticks([0, 1], ["isolated\ntext-only run", "retained\nevents"])
+        ax.set_xlabel("seconds")
+        ax.set_xlim(0, 1000)
+        ax.set_ylim(-0.45, 1.6)
+        ax.grid(axis="x", alpha=0.2)
+        ax.legend(frameon=False, fontsize=5.6, loc="upper center", bbox_to_anchor=(0.5, -0.42), ncol=2,
+                  handlelength=1.0, columnspacing=0.8)
+        save(fig, "cold_start")
+
+
 def main() -> None:
     cloud_architecture()
     fleet_evolution()
@@ -412,7 +576,10 @@ def main() -> None:
     admission_outcome()
     kernel_crossover()
     cost_capacity()
-    print(f"Generated 6 PDF and 6 PNG figures in {OUT}")
+    routing_sweep()
+    routing_bound()
+    cold_start()
+    print(f"Generated 9 PDF and 9 PNG figures in {OUT}")
 
 
 if __name__ == "__main__":

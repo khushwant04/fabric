@@ -83,5 +83,78 @@
     "gpu_nodes": [0, 2, 4, 5, 6, 7, 8],
     "hourly_usd": [1.01, 2.67, 4.32, 5.145, 5.98, 6.80, 7.63],
     "current_five_node_caveat": "The five-node point reuses the earlier non-GPU fixed-cost assumption although PostgreSQL was later observed on a different SKU."
+  },
+  "t4_startup_stages": {
+    "date": "2026-10-06",
+    "evidence": "retained Kubernetes events and container logs for one Qwen3.5-0.8B model host on an AKS T4 node (docs/model-startup-diagnosis.md); stage boundaries are the recorded UTC timestamps",
+    "model": "Qwen/Qwen3.5-0.8B",
+    "serving_settings": "FP16, context 4096, max-num-seqs 8, gpu-memory-utilization 0.85, eager execution, vLLM 0.26.0",
+    "timestamps_utc": {
+      "first_failed_scheduling": "12:45:52",
+      "scheduled": "12:51:26",
+      "image_pull_started": "12:51:27",
+      "image_pull_finished": "12:53:13",
+      "weights_loaded": "12:55:04",
+      "engine_warmup_finished": "13:00:34",
+      "frontend_warmup_finished": "13:01:11",
+      "api_listening": "13:01:14"
+    },
+    "image_bytes": 8914143213,
+    "image_pull_seconds": 105.929,
+    "engine_reported_seconds": 329.81,
+    "weights_download_seconds": 10.76,
+    "weights_gpu_gib": 1.72,
+    "other_engine_init_seconds": {"Qwen3.5-2B": 350.88, "Qwen3.5-4B": 355.38, "phi4-mini and coder model": 21}
+  },
+  "t4_text_only_validation": {
+    "date": "2026-10-06",
+    "evidence": "isolated validation Job on a spare T4 (docs/model-startup-diagnosis.md); node caches and CPU reservations differed from the retained run, so the difference is not an isolated speedup",
+    "engine_profile_kv_warmup_seconds": 313.38,
+    "process_start_to_health_seconds": 404.09,
+    "first_request_seconds": 6.427,
+    "second_request_seconds": 0.756,
+    "third_request_seconds": 0.750
+  },
+  "routing_benchmark": {
+    "date": "2026-11-05",
+    "evidence": "simulated model hosts behind the production gateway; citable_as_hardware_measurement is false in every artifact",
+    "artifact_root": "docs/benchmarks/routing-2026-11-05",
+    "sweeps": {
+      "final-mixed": "6c52f95",
+      "final-multi_turn": "6c52f95",
+      "final-shared64": "6c52f95",
+      "sens-mixed": "d7504ff",
+      "sens-multi_turn": "d7504ff",
+      "final-nouser": "8bf0312",
+      "baseline": "8fc7646"
+    },
+    "host_model": "4 backends; 2048 blocks x 16 tokens of LRU prefix cache per host; prefill 0.25 ms per uncached token plus 5 ms; decode 16 ms plus 1 ms per running sequence; at most 16 running sequences; time scale 0.25",
+    "slo": {"ttft_ms": 500, "tpot_ms": 60},
+    "note": "Figures read results.json in each sweep directory directly and aggregate per-seed summaries exactly as data-plane/benchmarks/routing/report.py does (arithmetic mean over seeds)."
+  },
+  "live_observations_2026_11_16": {
+    "date": "2026-11-16",
+    "scope": "point-in-time live check",
+    "rtx_pro_6000_stamp": {
+      "gpu": "NVIDIA RTX PRO 6000 Blackwell (96 GiB)",
+      "enrollment": "one-command bootstrap on a single GPU VM running k3s",
+      "model": "Qwen/Qwen3.6-35B-A3B-FP8",
+      "context_tokens": 65536,
+      "outcome": "Ready",
+      "image_pull_seconds": 244,
+      "weights_gb_approx": 37.5
+    },
+    "structured_output_with_tools_trials": {"passed": 3, "total": 3},
+    "openai_agents_sdk_smoke_checks": {"passed": 8, "total": 8},
+    "tool_call_parser_incident": {
+      "model": "Qwen3.5-2B",
+      "symptom": "HTTP 400 on tool-calling requests until a tool-call parser preset was added",
+      "model_host_restart_seconds": 71
+    },
+    "demo_lineup": [
+      {"gpu": "NVIDIA T4", "model": "Qwen3.5-2B"},
+      {"gpu": "NVIDIA A10", "model": "Qwen3.5-9B", "context_tokens": 8192},
+      {"gpu": "NVIDIA RTX PRO 6000", "model": "Qwen3.6-35B-A3B-FP8"}
+    ]
   }
 }
