@@ -12,7 +12,7 @@ import { StatusBadge } from "@/components/console/status-badge"
 import { TruncatedText } from "@/components/console/truncated-text"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { describeAccelerator, isTpuEntry, stampAcceleratorKind } from "@/lib/fabric/accelerators"
+import { describeAccelerator, deviceNoun, isNeuronEntry, isTpuEntry, stampAcceleratorKind } from "@/lib/fabric/accelerators"
 import { getStampEvents, listDeployments, listStamps } from "@/lib/fabric/data"
 import { publicGatewayBase } from "@/lib/fabric/inference-endpoints"
 import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
@@ -33,7 +33,7 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
   const gone = stamp ? isRemoved(stamp) : Boolean(events?.revoked_at)
   const state = stamp ? (gone ? { status: "removed", detail: `Removed ${formatRelative(stamp.revoked_at)}; its credentials are revoked and its agent no longer syncs.` } : stampState(stamp)) : null
   const gpus = Array.isArray(stamp?.capabilities.gpus) ? stamp.capabilities.gpus as Array<Record<string, unknown>> : []
-  const tpu = stampAcceleratorKind(stamp?.capabilities) === "tpu"
+  const acceleratorKind = stampAcceleratorKind(stamp?.capabilities)
   const endpoint = publicGatewayBase(stamp?.capabilities.inference_url)
   // Names for the GPUs the metrics attribute to a deployment (docs/serving-metrics.md).
   const deploymentNames = Object.fromEntries((deploymentResult.status === "fulfilled" ? deploymentResult.value : []).map((deployment) => [deployment.id, deployment.name]))
@@ -50,7 +50,7 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
       </Section>
       {stamp ? <Section title="Stamp" description="As last reported by its agent.">
         <dl className="flex flex-col border-t border-border text-sm">
-          <StackField label={tpu ? "TPU chips" : "GPUs"}>{gpus.length ? <ul className="flex flex-col gap-1">{gpus.map((gpu, index) => isTpuEntry(gpu) ? <li key={index}>{describeAccelerator(gpu)}{typeof gpu.accelerator_type === "string" ? ` · ${gpu.accelerator_type}` : ""}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB HBM per chip</span> : null}</li> : <li key={index}><span className="tabular-nums">{gpuCapacity(gpu.count) ?? "?"} ×</span> {typeof gpu.product === "string" ? gpu.product : "Unknown GPU"}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground tabular-nums"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB</span> : null}</li>)}</ul> : <span className="text-muted-foreground">None reported</span>}</StackField>
+          <StackField label={deviceNoun(acceleratorKind)}>{gpus.length ? <ul className="flex flex-col gap-1">{gpus.map((gpu, index) => isTpuEntry(gpu) ? <li key={index}>{describeAccelerator(gpu)}{typeof gpu.accelerator_type === "string" ? ` · ${gpu.accelerator_type}` : ""}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB HBM per chip</span> : null}</li> : isNeuronEntry(gpu) ? <li key={index}>{describeAccelerator(gpu)}{typeof gpu.accelerator_type === "string" ? ` · ${gpu.accelerator_type}` : ""}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB HBM per device</span> : null}</li> : <li key={index}><span className="tabular-nums">{gpuCapacity(gpu.count) ?? "?"} ×</span> {typeof gpu.product === "string" ? gpu.product : "Unknown GPU"}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground tabular-nums"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB</span> : null}</li>)}</ul> : <span className="text-muted-foreground">None reported</span>}</StackField>
           <StackField label="GPU capacity"><span className="tabular-nums">{gpuCapacity(stamp.capabilities.requested_gpus) ?? "—"} requested</span><span className="text-muted-foreground tabular-nums"> of {gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "—"} allocatable</span></StackField>
           <StackField label="Orchestrator">{orchestratorLabel(stamp.orchestrator)}<span className="text-muted-foreground"> · {stamp.region || "no region"}</span></StackField>
           <StackField label="Last heartbeat"><time dateTime={stamp.last_heartbeat_at ?? undefined} title={formatDate(stamp.last_heartbeat_at)}>{formatRelative(stamp.last_heartbeat_at)}</time></StackField>

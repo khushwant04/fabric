@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Standalone VM setup: this file can be downloaded without cloning Fabric.
-# Installs k3s/Helm and, on request, NVIDIA container support for existing drivers or the
-# Kubernetes advertisement of a Cloud TPU VM's chips.
+# Installs k3s/Helm and, on request, NVIDIA container support for existing drivers, the
+# Kubernetes advertisement of a Cloud TPU VM's chips, or the Neuron device plugin on an AWS
+# Inferentia2/Trainium instance.
 set -Eeuo pipefail
 umask 077
 
@@ -16,12 +17,18 @@ TPU_TYPE=""
 TPU_RESOURCE=google.com/tpu
 TPU_ADVERTISER=/usr/local/sbin/fabric-tpu-advertise
 TPU_UNIT=/etc/systemd/system/fabric-tpu-advertise.service
+NEURON_TYPE=""
+NEURON_RESOURCE=aws.amazon.com/neuron
+# The official Neuron device plugin (aws-neuron-sdk src/k8, Neuron SDK 2.28 manifests).
+NEURON_DEVICE_PLUGIN_IMAGE=public.ecr.aws/neuron/neuron-device-plugin:2.22.4.0
+NEURON_ADVERTISER=/usr/local/sbin/fabric-neuron-advertise
+NEURON_UNIT=/etc/systemd/system/fabric-neuron-advertise.service
 WORK=""
 TOOLKIT_PACKAGES=(nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1)
 
 usage() {
     cat <<'EOF'
-Usage: sudo bash bootstrap-k3s.sh [--node-name NAME] [--nvidia | --tpu ACCELERATOR_TYPE]
+Usage: sudo bash bootstrap-k3s.sh [--node-name NAME] [--nvidia | --tpu ACCELERATOR_TYPE | --neuron INSTANCE_TYPE]
 
 Create a single-server k3s cluster on an Ubuntu 22.04/24.04 VM and install Helm
 when absent. New servers use k3s v1.36.5+k3s1, Traefik, ServiceLB, local-path
@@ -37,6 +44,14 @@ Cloud TPU VM: it counts the TPU device nodes (/dev/accel* or /dev/vfio/N), label
 the node accelerator=tpu with its accelerator type, and advertises the chips as
 the google.com/tpu extended resource, re-applied by fabric-tpu-advertise.service
 whenever k3s starts. No NVIDIA software, RuntimeClass or device plugin is used.
+
+--neuron INSTANCE_TYPE (for example inf2.xlarge, trn1.32xlarge or trn2.48xlarge)
+prepares an AWS Inferentia2/Trainium instance whose Neuron driver is installed (the
+Neuron Deep Learning AMI ships it): it counts /dev/neuron*, labels the node
+accelerator=neuron with its instance type, and installs the Neuron device plugin
+(neuron-device-plugin 2.22.4.0), which advertises aws.amazon.com/neuron devices and
+aws.amazon.com/neuroncore cores. If the plugin cannot start, the devices are advertised
+as aws.amazon.com/neuron instead, re-applied by fabric-neuron-advertise.service.
 
 An existing single-node local k3s server is reused without changing its version,
 service settings, or containerd configuration. If NVIDIA support needs a server
@@ -62,6 +77,9 @@ while [ "$#" -gt 0 ]; do
         --tpu)
             [ "$#" -ge 2 ] && [ -n "$2" ] || die '--tpu requires the accelerator type, e.g. v6e-4'
             TPU_TYPE=$2; shift 2 ;;
+        --neuron)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || die '--neuron requires the instance type, e.g. inf2.xlarge'
+            NEURON_TYPE=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -74,6 +92,12 @@ if [ -n "$TPU_TYPE" ]; then
     [ "$ENABLE_NVIDIA" -eq 0 ] || die '--nvidia and --tpu are mutually exclusive'
     [[ "$TPU_TYPE" =~ ^(v4|v5p|v5e|v5litepod|v6e)-[0-9]+$ ]] \
         || die "--tpu must be a supported accelerator type such as v6e-4, v5litepod-4, v5p-8 or v4-8 (got $TPU_TYPE)"
+fi
+if [ -n "$NEURON_TYPE" ]; then
+    [ "$ENABLE_NVIDIA" -eq 0 ] || die '--nvidia and --neuron are mutually exclusive'
+    [ -z "$TPU_TYPE" ] || die '--tpu and --neuron are mutually exclusive'
+    [[ "$NEURON_TYPE" =~ ^(inf2|trn1|trn1n|trn2|trn2u)\.[a-z0-9]+$ ]] \
+        || die "--neuron must be an Inferentia2 or Trainium instance type such as inf2.xlarge, trn1.32xlarge or trn2.48xlarge (got $NEURON_TYPE)"
 fi
 [ "$(id -u)" -eq 0 ] || die 'run with sudo on the VM that will host k3s'
 [ "$(uname -s)" = Linux ] || die 'requires Linux'
@@ -171,6 +195,14 @@ if [ -n "$TPU_TYPE" ]; then
         die "$TPU_TYPE has $TPU_EXPECTED chips but this host sees $TPU_CHIPS: multi-host TPU slices are not supported; use a single-host type such as v6e-4 or v5litepod-4"
     fi
     log "$TPU_CHIPS TPU chips found for $TPU_TYPE"
+fi
+
+if [ -n "$NEURON_TYPE" ]; then
+    NEURON_NODES=$(ls -1d /dev/neuron[0-9]* 2>/dev/null || true)
+    NEURON_COUNT=$(printf '%s\n' "$NEURON_NODES" | awk 'NF {count++} END {print count+0}')
+    [ "$NEURON_COUNT" -gt 0 ] \
+        || die "no Neuron devices (/dev/neuron*) on this instance; install the Neuron driver (aws-neuronx-dkms) or use the Neuron Deep Learning AMI ($NEURON_TYPE)"
+    log "$NEURON_COUNT Neuron devices found for $NEURON_TYPE"
 fi
 
 export DEBIAN_FRONTEND=noninteractive
@@ -487,6 +519,177 @@ EOF
         sleep 2
     done
     log "$ALLOCATABLE TPU chips are allocatable. Model pods must request $TPU_RESOURCE and run privileged with the TPU devices."
+fi
+
+if [ -n "$NEURON_TYPE" ]; then
+    LABELS=(accelerator=neuron "fabric.khushwant.dev/neuron-instance-type=$NEURON_TYPE")
+    EXISTING_ACCELERATOR=$("${KUBECTL[@]}" get node "$LOCAL_NODE" -o jsonpath='{.metadata.labels.accelerator}')
+    [ -z "$EXISTING_ACCELERATOR" ] || [ "$EXISTING_ACCELERATOR" = neuron ] \
+        || die "node $LOCAL_NODE is labelled accelerator=$EXISTING_ACCELERATOR; review it before preparing it as a Neuron node"
+    "${KUBECTL[@]}" label node "$LOCAL_NODE" --overwrite "${LABELS[@]}"
+
+    # The official Neuron device plugin, as AWS publishes it, except that it is selected by
+    # Fabric's node label: the upstream manifest selects nodes by their EC2 instance-type
+    # label, which k3s sets to "k3s", and reads a kubelet kubeconfig path k3s does not have,
+    # so it uses its ServiceAccount instead.
+    "${KUBECTL[@]}" apply -f - <<EOF
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: neuron-device-plugin
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [update, patch, get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes/status]
+    verbs: [patch, update]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: neuron-device-plugin
+  namespace: kube-system
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: neuron-device-plugin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: neuron-device-plugin
+subjects:
+  - kind: ServiceAccount
+    name: neuron-device-plugin
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: neuron-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: neuron-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: neuron-device-plugin-ds
+    spec:
+      serviceAccountName: neuron-device-plugin
+      priorityClassName: system-node-critical
+      nodeSelector:
+        accelerator: neuron
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: aws.amazon.com/neuron
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: neuron-device-plugin
+          image: $NEURON_DEVICE_PLUGIN_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: infa-map
+              mountPath: /run
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: infa-map
+          hostPath:
+            path: /run
+EOF
+    NEURON_PLUGIN_OK=0
+    if "${KUBECTL[@]}" -n kube-system rollout status daemonset/neuron-device-plugin-daemonset --timeout=300s; then
+        for attempt in $(seq 1 60); do
+            ALLOCATABLE=$("${KUBECTL[@]}" get node "$LOCAL_NODE" -o jsonpath='{.status.allocatable.aws\.amazon\.com/neuron}')
+            if [ "$ALLOCATABLE" = "$NEURON_COUNT" ]; then NEURON_PLUGIN_OK=1; break; fi
+            sleep 2
+        done
+    fi
+    if [ "$NEURON_PLUGIN_OK" -eq 1 ]; then
+        # A previous fallback is no longer needed once the plugin owns the resource.
+        if [ -f "$NEURON_UNIT" ]; then
+            systemctl disable fabric-neuron-advertise.service >/dev/null 2>&1 || true
+            rm -f "$NEURON_UNIT" "$NEURON_ADVERTISER"
+            systemctl daemon-reload
+        fi
+        log "$ALLOCATABLE Neuron devices are allocatable through the Neuron device plugin. Model pods must request $NEURON_RESOURCE."
+    else
+        # Fallback, as on a TPU VM: advertise the devices on the node's status and re-apply it
+        # whenever k3s starts. Nothing injects the devices then, so model pods must run
+        # privileged with /dev/neuron* mounted.
+        log "WARNING: the Neuron device plugin did not advertise $NEURON_COUNT devices; advertising $NEURON_RESOURCE directly"
+        "${KUBECTL[@]}" -n kube-system get pods -l name=neuron-device-plugin-ds -o wide || true
+        PATCH="{\"status\":{\"capacity\":{\"$NEURON_RESOURCE\":\"$NEURON_COUNT\"}}}"
+        K3S_BIN=$(command -v k3s)
+        [ ! -L "$NEURON_ADVERTISER" ] && [ ! -L "$NEURON_UNIT" ] || die 'the Neuron advertisement files must not be symlinks'
+        cat > "$WORK/fabric-neuron-advertise" <<EOF
+#!/bin/sh
+# Advertises this instance's Neuron devices to k3s. Written by Fabric's bootstrap-k3s.sh --neuron
+# because the Neuron device plugin could not run.
+set -eu
+for attempt in \$(seq 1 90); do
+    if $K3S_BIN kubectl --kubeconfig $KUBECONFIG_PATH patch node $LOCAL_NODE --subresource=status --type=merge -p '$PATCH' >/dev/null 2>&1; then
+        exit 0
+    fi
+    sleep 2
+done
+echo "could not advertise $NEURON_COUNT $NEURON_RESOURCE on node $LOCAL_NODE" >&2
+exit 1
+EOF
+        install -m 0755 "$WORK/fabric-neuron-advertise" "$NEURON_ADVERTISER"
+        cat > "$WORK/fabric-neuron-advertise.service" <<EOF
+[Unit]
+Description=Advertise AWS Neuron devices to k3s (Fabric)
+After=k3s.service
+PartOf=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=$NEURON_ADVERTISER
+
+[Install]
+WantedBy=k3s.service
+EOF
+        install -m 0644 "$WORK/fabric-neuron-advertise.service" "$NEURON_UNIT"
+        systemctl daemon-reload
+        systemctl enable fabric-neuron-advertise.service
+        "$NEURON_ADVERTISER" || die "could not advertise $NEURON_RESOURCE on node $LOCAL_NODE; inspect journalctl -u k3s"
+        for attempt in $(seq 1 60); do
+            ALLOCATABLE=$("${KUBECTL[@]}" get node "$LOCAL_NODE" -o jsonpath='{.status.allocatable.aws\.amazon\.com/neuron}')
+            [ "$ALLOCATABLE" = "$NEURON_COUNT" ] && break
+            [ "$attempt" -lt 60 ] || die "allocatable Neuron devices are ${ALLOCATABLE:-0}, found $NEURON_COUNT; inspect journalctl -u k3s"
+            sleep 2
+        done
+        log "$ALLOCATABLE Neuron devices are allocatable. Model pods must request $NEURON_RESOURCE and run privileged with /dev/neuron*."
+    fi
 fi
 
 if command -v helm >/dev/null 2>&1; then

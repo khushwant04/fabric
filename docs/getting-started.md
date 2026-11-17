@@ -87,6 +87,7 @@ no new token is needed. Other options:
 - `--dtype`: override the automatic choice
 - `--no-gpu`: install without GPU support
 - `--tpu TYPE`: Cloud TPU accelerator type, when the metadata server cannot be read
+- `--neuron TYPE`: AWS Inferentia2/Trainium instance type, when EC2 instance metadata cannot be read
 - `--release`: install a different release
 - `--dry-run`: print the plan without changing anything
 
@@ -94,6 +95,12 @@ On a single-host Google Cloud TPU VM (for example `v6e-4` or `v5litepod-4`), run
 command. It detects the TPU from the GCP metadata server, skips the NVIDIA pieces, advertises the
 chips to Kubernetes, and serves models with the vLLM TPU image. See [Cloud TPU stamps](tpu.md) for
 creating the VM, quota, DNS and caveats.
+
+On an AWS Inferentia2 or Trainium instance (`inf2`, `trn1`, `trn2`) running the Neuron Deep
+Learning AMI, run the same command. It detects the instance type from EC2 instance metadata, skips
+the NVIDIA pieces, installs the Neuron device plugin, and serves models with vLLM on Neuron. See
+[AWS Neuron stamps](neuron.md) for choosing the instance, quota, the AMI, the security group, DNS
+and caveats.
 
 ## Bootstrap a Kubernetes stamp
 

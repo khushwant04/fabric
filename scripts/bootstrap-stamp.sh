@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One command to turn an Ubuntu GPU VM, or a single-host Cloud TPU VM, into a Fabric inference
-# stamp.
+# One command to turn an Ubuntu GPU VM, a single-host Cloud TPU VM, or an AWS Inferentia2 or
+# Trainium instance, into a Fabric inference stamp.
 #
 #   curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/bootstrap-stamp.sh \
 #     | sudo bash -s -- --name gpu-01 --control-plane https://api.example.com --token '<token>' \
@@ -16,6 +16,10 @@
 # On a Cloud TPU VM (detected from the GCP metadata server) it installs no NVIDIA software:
 # it advertises the TPU chips to Kubernetes and sets the chart's TPU values instead, so models
 # are served by the vLLM TPU image (docs/tpu.md).
+#
+# On an AWS inf2, trn1 or trn2 instance (detected from EC2 instance metadata) it installs no
+# NVIDIA software either: it installs the Neuron device plugin and sets the chart's Neuron
+# values, so models are served by vLLM on Neuron (docs/neuron.md).
 #
 # Nothing is pre-pulled: the customer picks a model in the console and watches the model
 # runtime image and the weights download live in the deployment's Logs tab.
@@ -39,10 +43,12 @@ KUBECONFIG_PATH=/etc/rancher/k3s/k3s.yaml
 WORK_ROOT=/opt/fabric
 LOG_FILE=/var/log/fabric-stamp-bootstrap.log
 TPU_METADATA_URL=http://metadata.google.internal/computeMetadata/v1/instance/attributes/accelerator-type
+EC2_METADATA_URL=http://169.254.169.254/latest
 
 NAME="" CONTROL_PLANE="" ISSUER_URL="" TOKEN="${FABRIC_ENROLLMENT_TOKEN:-}" HOST="" EMAIL=""
 REGION="" RELEASE="$DEFAULT_RELEASE" REGISTRY="$DEFAULT_REGISTRY" GPU=auto DTYPE="" PREPULL=""
 CONSOLE_URL="${FABRIC_CONSOLE_URL:-}" DRY_RUN=0 VERBOSE=1 TPU_TYPE="" TPU_DEVICES=""
+NEURON_TYPE="" NEURON_DEVICES=""
 
 usage() {
     cat <<'EOF'
@@ -65,6 +71,8 @@ Optional:
   --no-gpu                install without NVIDIA or TPU support (control and testing only)
   --tpu TYPE              Cloud TPU accelerator type, e.g. v6e-4; only needed when the GCP
                           metadata server cannot be read (it is detected automatically)
+  --neuron TYPE           AWS Inferentia2/Trainium instance type, e.g. inf2.xlarge; only needed
+                          when EC2 instance metadata cannot be read (it is detected automatically)
   --issuer URL            JWT issuer, when it differs from --control-plane
   --release SHA           Fabric commit whose chart and images to install (default: pinned)
   --registry REGISTRY     image registry (default: public.ecr.aws/hexelstudio/fabric)
@@ -75,9 +83,19 @@ Steps: 1 Checking GPU, 2 Installing k3s, 3 GPU runtime, 4 TLS, 5 Enrolling, 6 Do
 Detailed output goes to /var/log/fabric-stamp-bootstrap.log.
 
 Requirements: Ubuntu 22.04/24.04 on x86_64 with systemd; for GPUs, a working NVIDIA driver
-(nvidia-smi); for Cloud TPU, a single-host TPU VM (v4, v5e, v5p, v6e) on a TPU Ubuntu image.
+(nvidia-smi); for Cloud TPU, a single-host TPU VM (v4, v5e, v5p, v6e) on a TPU Ubuntu image;
+for AWS Neuron, an inf2, trn1 or trn2 instance on the Neuron Deep Learning AMI (Ubuntu).
 Outbound HTTPS to the control plane, GitHub, the registry and Hugging Face.
 EOF
+}
+
+# Reads one EC2 instance metadata path with IMDSv2 (a session token first, as instances that
+# require IMDSv2 refuse plain reads). Prints nothing and fails off EC2.
+ec2_metadata() {
+    local token
+    token=$(curl -fsS -m 2 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' "$EC2_METADATA_URL/api/token" 2>/dev/null) || return 1
+    [ -n "$token" ] || return 1
+    curl -fsS -m 2 -H "X-aws-ec2-metadata-token: $token" "$EC2_METADATA_URL/meta-data/$1" 2>/dev/null
 }
 
 # --------------------------------------------------------------------------- output
@@ -149,6 +167,7 @@ while [ "$#" -gt 0 ]; do
         --registry) need_value "$@"; REGISTRY=${2%/}; shift 2 ;;
         --no-gpu) GPU=off; shift ;;
         --tpu) need_value "$@"; TPU_TYPE=$2; GPU=tpu; shift 2 ;;
+        --neuron) need_value "$@"; NEURON_TYPE=$2; GPU=neuron; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --quiet) VERBOSE=0; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -178,6 +197,8 @@ fi
     || die '--prepull must be comma-separated repositories such as Qwen/Qwen3.5-4B'
 [ -z "$TOKEN" ] || [[ "$TOKEN" != *[[:space:]]* ]] || die 'the enrollment token must not contain whitespace'
 [ -z "$TPU_TYPE" ] || [[ "$TPU_TYPE" =~ ^[a-z0-9]+-[0-9]+$ ]] || die '--tpu must be an accelerator type such as v6e-4'
+[ -z "$NEURON_TYPE" ] || [[ "$NEURON_TYPE" =~ ^[a-z0-9]+\.[a-z0-9]+$ ]] || die '--neuron must be an EC2 instance type such as inf2.xlarge'
+[ -z "$TPU_TYPE" ] || [ -z "$NEURON_TYPE" ] || die '--tpu and --neuron are mutually exclusive'
 
 printf '%sFabric stamp %s%s → %s\n' "$BOLD" "$NAME" "$RESET" "$CONTROL_PLANE"
 
@@ -205,6 +226,7 @@ if [ -n "$HOST" ]; then
         http://169.254.169.254/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null \
         || curl -fsS -m 3 -H 'Metadata: true' \
         'http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text' 2>/dev/null \
+        || ec2_metadata public-ipv4 \
         || true)
     if [ -z "$RESOLVED" ]; then
         warn "$HOST does not resolve yet. Create a DNS A record for it${PUBLIC_IP:+ pointing at $PUBLIC_IP}; the TLS certificate is issued once it resolves."
@@ -223,6 +245,12 @@ if [ "$GPU" = auto ]; then
         # A Cloud TPU VM has no NVIDIA driver; its metadata names the TPU slice, e.g. v6e-4.
         TPU_TYPE=$(curl -fsS -m 3 -H 'Metadata-Flavor: Google' "$TPU_METADATA_URL" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)
         if [[ "$TPU_TYPE" =~ ^[a-z0-9]+-[0-9]+$ ]]; then GPU=tpu; else TPU_TYPE=""; GPU=off; fi
+        if [ "$GPU" = off ]; then
+            # An AWS Inferentia2 or Trainium instance has no NVIDIA driver either; EC2 instance
+            # metadata names its instance type, e.g. inf2.xlarge.
+            NEURON_TYPE=$(ec2_metadata instance-type | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)
+            if [[ "$NEURON_TYPE" =~ ^(inf2|trn1|trn1n|trn2|trn2u)\.[a-z0-9]+$ ]]; then GPU=neuron; else NEURON_TYPE=""; fi
+        fi
     fi
 fi
 if [ "$GPU" = tpu ]; then
@@ -254,6 +282,42 @@ if [ "$GPU" = tpu ]; then
     DTYPE=bfloat16
     ok "$TPU_CHIPS × $TPU_PRODUCT ($TPU_TYPE, $TPU_HBM_GIB GiB HBM per chip, $(( TPU_CHIPS * TPU_HBM_GIB )) GiB total)"
     ok "model dtype: ${DTYPE} (Cloud TPU serves bf16 checkpoints; FP8 models need an NVIDIA GPU)"
+elif [ "$GPU" = neuron ]; then
+    NEURON_TYPE=$(printf '%s' "$NEURON_TYPE" | tr '[:upper:]' '[:lower:]')
+    # Per device: HBM, physical NeuronCores, and the NeuronCores vLLM sees at the runtime's
+    # default logical-core setting (Trainium2 pairs its eight cores into four, LNC=2).
+    case "${NEURON_TYPE%%.*}" in
+        inf2) NEURON_PRODUCT="Inferentia2" NEURON_HBM_GIB=32 NEURON_CORES=2 NEURON_TP_CORES=2 ;;
+        trn1|trn1n) NEURON_PRODUCT="Trainium" NEURON_HBM_GIB=32 NEURON_CORES=2 NEURON_TP_CORES=2 ;;
+        trn2|trn2u) NEURON_PRODUCT="Trainium2" NEURON_HBM_GIB=96 NEURON_CORES=8 NEURON_TP_CORES=4 ;;
+        inf1) die "Inferentia1 ($NEURON_TYPE) has no vLLM backend; use an inf2, trn1 or trn2 instance" ;;
+        *) die "AWS instance type $NEURON_TYPE is not a supported Neuron instance; use inf2, trn1 or trn2" ;;
+    esac
+    case "$NEURON_TYPE" in
+        inf2.xlarge|inf2.8xlarge|trn1.2xlarge|trn2.3xlarge) NEURON_EXPECTED=1 ;;
+        inf2.24xlarge) NEURON_EXPECTED=6 ;;
+        inf2.48xlarge) NEURON_EXPECTED=12 ;;
+        trn1.32xlarge|trn1n.32xlarge|trn2.48xlarge|trn2u.48xlarge) NEURON_EXPECTED=16 ;;
+        *) NEURON_EXPECTED=0 ;;
+    esac
+    # The Neuron driver (aws-neuronx-dkms, shipped on the Neuron Deep Learning AMI) creates
+    # one /dev/neuronN per device.
+    NEURON_NODES=$(ls -1d /dev/neuron[0-9]* 2>/dev/null | sort -V || true)
+    NEURON_COUNT=$(printf '%s\n' "$NEURON_NODES" | awk 'NF {n++} END {print n + 0}')
+    [ "$NEURON_COUNT" -gt 0 ] \
+        || die "this is an AWS $NEURON_TYPE instance but no Neuron devices are visible (/dev/neuron*). Use the Deep Learning AMI Neuron (Ubuntu 22.04 or 24.04), which ships the aws-neuronx-dkms driver, or install the Neuron driver; or pass --no-gpu"
+    NEURON_DEVICES=$(printf '%s\n' "$NEURON_NODES" | paste -sd, -)
+    if [ "$NEURON_EXPECTED" -gt 0 ] && [ "$NEURON_COUNT" -ne "$NEURON_EXPECTED" ]; then
+        warn "$NEURON_TYPE has $NEURON_EXPECTED Neuron devices, but this host sees $NEURON_COUNT; check neuron-ls"
+    fi
+    [ -z "$DTYPE" ] || [ "$DTYPE" = bfloat16 ] || die "--dtype $DTYPE is not supported on AWS Neuron stamps, which serve bfloat16"
+    DTYPE=bfloat16
+    if [ "$NEURON_COUNT" -eq 1 ]; then
+        ok "1 × $NEURON_PRODUCT ($NEURON_TYPE, $NEURON_HBM_GIB GiB HBM, $NEURON_CORES NeuronCores)"
+    else
+        ok "$NEURON_COUNT × $NEURON_PRODUCT ($NEURON_TYPE, $NEURON_HBM_GIB GiB HBM per device, $(( NEURON_COUNT * NEURON_HBM_GIB )) GiB total, $(( NEURON_COUNT * NEURON_CORES )) NeuronCores)"
+    fi
+    ok "model dtype: ${DTYPE} (Neuron stamps serve bf16 checkpoints; FP8 models need an NVIDIA GPU)"
 elif [ "$GPU" = on ]; then
     GPU_REPORT=$(timeout 20s nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv,noheader,nounits 2>/dev/null) \
         || die 'nvidia-smi failed; repair the NVIDIA driver first, or pass --no-gpu'
@@ -305,6 +369,12 @@ elif [ "$GPU" = tpu ]; then
     # privileged, with these device nodes. The bootstrap labels the TPU node accelerator=tpu.
     HELM_ARGS+=(--set-string accelerator.type=tpu --set-string gpu.nodeSelector.accelerator=tpu
         --set "accelerator.tpu.devices={$TPU_DEVICES}")
+elif [ "$GPU" = neuron ]; then
+    # No RuntimeClass or DCGM exporter: the chart runs vLLM on Neuron and requests
+    # aws.amazon.com/neuron devices from the Neuron device plugin, which bootstrap-k3s.sh
+    # installs. The bootstrap labels the Neuron node accelerator=neuron.
+    HELM_ARGS+=(--set-string accelerator.type=neuron --set-string gpu.nodeSelector.accelerator=neuron
+        --set "accelerator.neuron.coresPerDevice=$NEURON_TP_CORES")
 fi
 if [ -n "$PREPULL" ]; then
     HELM_ARGS+=(--set operator.managedModelHost.prepull.enabled=true
@@ -357,12 +427,16 @@ fi
 if [ "$GPU" = tpu ] && ! grep -q -- '--tpu' "$RELEASE_DIR/scripts/bootstrap-k3s.sh"; then
     die "release ${RELEASE:0:12} predates Cloud TPU support. Pass --release with a newer commit of $REPOSITORY (docs/tpu.md)"
 fi
+if [ "$GPU" = neuron ] && ! grep -q -- '--neuron' "$RELEASE_DIR/scripts/bootstrap-k3s.sh"; then
+    die "release ${RELEASE:0:12} predates AWS Neuron support. Pass --release with a newer commit of $REPOSITORY (docs/neuron.md)"
+fi
 
 K3S_ARGS=()
 # Name the node only on a fresh install: an existing server keeps its node name.
 systemctl cat k3s.service >/dev/null 2>&1 || K3S_ARGS+=(--node-name "$NAME")
 [ "$GPU" = on ] && K3S_ARGS+=(--nvidia)
 [ "$GPU" = tpu ] && K3S_ARGS+=(--tpu "$TPU_TYPE")
+[ "$GPU" = neuron ] && K3S_ARGS+=(--neuron "$NEURON_TYPE")
 if ! quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"; then
     # A brand-new server needs a few seconds after it reports Ready before its node and the
     # nvidia RuntimeClass exist; older pinned releases check only once. Wait, then retry.
@@ -376,6 +450,7 @@ if ! quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"; then
     K3S_ARGS=()
     [ "$GPU" = on ] && K3S_ARGS+=(--nvidia)
     [ "$GPU" = tpu ] && K3S_ARGS+=(--tpu "$TPU_TYPE")
+    [ "$GPU" = neuron ] && K3S_ARGS+=(--neuron "$NEURON_TYPE")
     quiet bash "$RELEASE_DIR/scripts/bootstrap-k3s.sh" "${K3S_ARGS[@]}"
 fi
 KUBECTL=(k3s kubectl --kubeconfig "$KUBECONFIG_PATH")
@@ -383,7 +458,7 @@ HELM=(helm --kubeconfig "$KUBECONFIG_PATH" --kube-context default)
 ok "k3s $("${KUBECTL[@]}" version -o json 2>/dev/null | sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | tail -1) is running"
 
 # --------------------------------------------------------------------------- 3. GPU runtime
-if [ "$GPU" = tpu ]; then step "TPU runtime"; else step "GPU runtime"; fi
+if [ "$GPU" = tpu ]; then step "TPU runtime"; elif [ "$GPU" = neuron ]; then step "Neuron runtime"; else step "GPU runtime"; fi
 GPUS=0
 GPU_RUNTIME_OK=0
 if [ "$GPU" = tpu ]; then
@@ -400,6 +475,32 @@ if [ "$GPU" = tpu ]; then
     else
         fail "no allocatable google.com/tpu: the TPU chips are not advertised to Kubernetes"
         note "Check: sudo systemctl status fabric-tpu-advertise; ls /dev/accel* /dev/vfio"
+        note "then re-run this command. Continuing so the stamp enrolls;"
+        note "the console's stamp page shows the same warning until this is fixed."
+    fi
+elif [ "$GPU" = neuron ]; then
+    # bootstrap-k3s.sh installed the Neuron device plugin, or advertised the devices itself
+    # when the plugin could not run.
+    for _ in $(seq 1 36); do
+        GPUS=$("${KUBECTL[@]}" get nodes -o jsonpath='{range .items[*]}{.status.allocatable.aws\.amazon\.com/neuron}{"\n"}{end}' | awk '{s += $1} END {print s + 0}')
+        [ "$GPUS" -gt 0 ] && break
+        sleep 5
+    done
+    PLUGIN_READY=$("${KUBECTL[@]}" -n kube-system get daemonset neuron-device-plugin-daemonset -o jsonpath='{.status.numberReady}' 2>/dev/null || true)
+    if [ "$GPUS" -gt 0 ] && [ "${PLUGIN_READY:-0}" -gt 0 ]; then
+        GPU_RUNTIME_OK=1
+        ok "$GPUS aws.amazon.com/neuron allocatable to Kubernetes (Neuron device plugin)"
+        note "models run vLLM on Neuron; the device plugin hands each model host its devices"
+    elif [ "$GPUS" -gt 0 ]; then
+        GPU_RUNTIME_OK=1
+        # Without the plugin nothing injects the devices, so the model host opens them itself.
+        HELM_ARGS+=(--set accelerator.neuron.privileged=true --set "accelerator.neuron.devices={$NEURON_DEVICES}")
+        warn "$GPUS aws.amazon.com/neuron advertised without the Neuron device plugin (fabric-neuron-advertise)"
+        note "models run vLLM on Neuron, privileged, with ${NEURON_DEVICES//,/ }"
+        note "Check: sudo k3s kubectl -n kube-system get pods | grep neuron-device-plugin"
+    else
+        fail "no allocatable aws.amazon.com/neuron: the Neuron devices are not advertised to Kubernetes"
+        note "Check: ls /dev/neuron*; neuron-ls; sudo k3s kubectl -n kube-system get pods | grep neuron"
         note "then re-run this command. Continuing so the stamp enrolls;"
         note "the console's stamp page shows the same warning until this is fixed."
     fi
@@ -570,6 +671,9 @@ trap - ERR
 if [ "$GPU" = tpu ]; then
     if [ "$GPU_RUNTIME_OK" -eq 1 ]; then ok "stamp $NAME is enrolled and ready for deployments ($GPUS × $TPU_PRODUCT)"
     else fail "stamp $NAME is enrolled, but no TPU chip is allocatable yet (see step 3)"; fi
+elif [ "$GPU" = neuron ]; then
+    if [ "$GPU_RUNTIME_OK" -eq 1 ]; then ok "stamp $NAME is enrolled and ready for deployments ($GPUS × $NEURON_PRODUCT)"
+    else fail "stamp $NAME is enrolled, but no Neuron device is allocatable yet (see step 3)"; fi
 elif [ "$GPU" != on ]; then ok "stamp $NAME is enrolled without GPUs"
 elif [ "$GPU_RUNTIME_OK" -eq 1 ]; then ok "stamp $NAME is enrolled and ready for deployments ($GPUS GPU(s))"
 else fail "stamp $NAME is enrolled, but no GPU is allocatable yet (see step 3)"; fi
@@ -588,6 +692,23 @@ if [ "$GPU" = tpu ]; then
                and choose infrastructure "$NAME". The first deployment downloads the vLLM TPU image
                once (several GB) and the weights, then compiles the model with XLA for several
                minutes before it answers; later starts reuse the compilation cache.
+  Status:      sudo k3s kubectl -n $NAMESPACE get pods
+  Details:     $LOG_FILE
+  Re-run this command at any time to upgrade or repair the stamp; no new token is needed.
+EOF
+    return 0
+fi
+if [ "$GPU" = neuron ]; then
+    cat <<EOF
+
+  Stamp page:  $STAMP_PAGE
+               Its Activity log shows: Enrolled → Neuron measured → Neuron runtime → Ready for deployments.
+  Endpoint:    ${HOST:+https://$HOST}${HOST:-none (add --host for edge routing)}
+  Next:        Deployments → Create, pick a model marked for AWS Neuron (bf16; FP8 models need a GPU),
+               and choose infrastructure "$NAME". The first deployment downloads the vLLM Neuron
+               image once (over 10 GB) and the weights, then compiles the model with the Neuron
+               compiler, which can take tens of minutes; later starts reuse the compiled model
+               kept on this instance.
   Status:      sudo k3s kubectl -n $NAMESPACE get pods
   Details:     $LOG_FILE
   Re-run this command at any time to upgrade or repair the stamp; no new token is needed.

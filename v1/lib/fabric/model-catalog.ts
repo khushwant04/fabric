@@ -1,4 +1,4 @@
-import { describeAccelerator, isTpuClass, isTpuEntry, reportedAccelerators, type AcceleratorKind } from "./accelerators"
+import { classKind, describeAccelerator, entryKind, reportedAccelerators, type AcceleratorKind } from "./accelerators"
 import type { DeploymentStampOption } from "./resource-state"
 import { deploymentStampOptions } from "./resource-state"
 import type { Stamp } from "./types"
@@ -16,13 +16,13 @@ export type CatalogModel = {
   modelAlias: string
   /** Parameter count as people say it. */
   size: string
-  /** Minimum GPU class, posted as gpuClass. A tpu-* class asks for Cloud TPU chips. */
+  /** Minimum GPU class, posted as gpuClass. A tpu-* class asks for Cloud TPU chips, a neuron-* class for AWS Neuron devices. */
   gpuClass: string
-  /** Devices per replica, posted as gpuCount; on TPU this is the tensor-parallel chip count. */
+  /** Devices per replica, posted as gpuCount; on TPU this is the tensor-parallel chip count, on Neuron whole devices (their NeuronCores are the tensor-parallel size). */
   gpuCount: number
   /** The GPU (or TPU slice) it is sized for, in words. */
   gpu: string
-  /** Checkpoint precision. Cloud TPU serves bf16 only, so an FP8 checkpoint needs a GPU. */
+  /** Checkpoint precision. Cloud TPU and AWS Neuron stamps serve bf16 only, so an FP8 checkpoint needs a GPU. */
   precision: "bf16" | "fp8"
   contextLength: number
   maxNumSeqs: number
@@ -123,10 +123,40 @@ export const modelCatalog: readonly CatalogModel[] = [
     execution: "default",
     strength: "bf16 on a single-host TPU VM; tensor parallel across 4 chips.",
   },
+  {
+    // One Inferentia2 device (32 GB HBM, 2 NeuronCores) holds the 8 GB of bf16 weights and the
+    // KV cache, so the smallest inf2 instance (inf2.xlarge) can serve it; the class floor is
+    // Inferentia2, so Trainium instances satisfy it too. A dense Qwen3 model rather than
+    // Qwen3.5: vLLM on Neuron serves the standard transformer architectures, and Qwen3.5's
+    // hybrid linear-attention layers are not among them. A short context and a small batch
+    // keep the ahead-of-time Neuron compilation and the inf2.xlarge's 16 GB of host memory
+    // within reach.
+    id: "qwen3-4b-neuron",
+    name: "Qwen3 4B on AWS Inferentia2",
+    modelRef: "Qwen/Qwen3-4B",
+    modelAlias: "qwen3-4b-neuron",
+    size: "4B",
+    gpuClass: "neuron-inf2",
+    gpuCount: 1,
+    gpu: "inf2.xlarge or larger · 1 device (2 NeuronCores)",
+    precision: "bf16",
+    contextLength: 4096,
+    maxNumSeqs: 4,
+    toolCalling: true,
+    toolCallParser: "hermes",
+    // Compiled ahead of time by the Neuron compiler; there is no eager mode to choose.
+    execution: "default",
+    strength: "bf16 on one Inferentia2 device; the smallest inf2 instance can serve it.",
+  },
 ]
 
 /** Whether a catalog model can be served on Cloud TPU: bf16 checkpoints only. */
 export function tpuCompatible(model: Pick<CatalogModel, "precision">): boolean {
+  return model.precision === "bf16"
+}
+
+/** Whether a catalog model can be served on AWS Neuron (Inferentia2, Trainium): bf16 checkpoints only. */
+export function neuronCompatible(model: Pick<CatalogModel, "precision">): boolean {
   return model.precision === "bf16"
 }
 
@@ -146,6 +176,7 @@ export function suggestedDeploymentName(model: Pick<CatalogModel, "modelAlias">)
 const classMemoryGiB: Record<string, number> = {
   t4: 14, v100: 14, "rtx-a4000": 14, l4: 21, a10: 21, a10g: 21, a100: 38, l40s: 44, "a100-80gb": 76, h100: 76, "rtx-pro-6000": 90,
   "tpu-v5e": 15, "tpu-v6e": 30, "tpu-v4": 30, "tpu-v5p": 90,
+  "neuron-inf2": 30, "neuron-trn1": 30, "neuron-trn2": 90,
 }
 
 export function gpuClassMemoryGiB(gpuClass: string): number | null {
@@ -154,13 +185,13 @@ export function gpuClassMemoryGiB(gpuClass: string): number | null {
 
 /** A stamp option with what its GPUs are, for the picker's infrastructure choice. */
 export type DeploymentStampChoice = DeploymentStampOption & {
-  /** e.g. "2 × NVIDIA A10, 1 × Tesla T4" or "4× TPU v6e"; null when the stamp reported no GPUs. */
+  /** e.g. "2 × NVIDIA A10, 1 × Tesla T4", "4× TPU v6e" or "1× Inferentia2"; null when the stamp reported no GPUs. */
   gpus?: string | null
   /** The largest per-GPU (per-chip HBM) memory the stamp reported, in GiB; null when unreported. */
   memoryGiB?: number | null
-  /** "tpu" for a Cloud TPU stamp, "gpu" for GPUs; null when unreported or mixed. */
+  /** "tpu" for a Cloud TPU stamp, "neuron" for AWS Neuron, "gpu" for GPUs; null when unreported or mixed. */
   accelerator?: AcceleratorKind | null
-  /** The most devices of one kind the stamp reported; on a TPU VM, its chips. */
+  /** The most devices of one kind the stamp reported; on a TPU VM, its chips; on Neuron, its devices. */
   devices?: number | null
 }
 
@@ -174,9 +205,10 @@ export function deploymentStampChoices(stamps: Stamp[], now = Date.now()): Deplo
       gpus: gpus.length ? gpus.map(describeAccelerator).join(", ") : null,
       memoryGiB: memories.length ? Math.max(...memories) : null,
     }
-    // Only TPU stamps gain fields, so a GPU stamp's choice is exactly what it was.
-    if (gpus.some(isTpuEntry)) {
-      choice.accelerator = gpus.every(isTpuEntry) ? "tpu" : null
+    // Only TPU and Neuron stamps gain fields, so a GPU stamp's choice is exactly what it was.
+    const kinds = new Set(gpus.map(entryKind))
+    if (kinds.has("tpu") || kinds.has("neuron")) {
+      choice.accelerator = kinds.size === 1 ? [...kinds][0] : null
       choice.devices = Math.max(...gpus.map((gpu) => typeof gpu.count === "number" ? gpu.count : 0))
     }
     return choice
@@ -187,14 +219,16 @@ export function deploymentStampChoices(stamps: Stamp[], now = Date.now()): Deplo
  * Whether a stamp has a GPU big enough for the class: true or false from its reported
  * memory, null when it reported none (it may still fit; the control plane decides).
  *
- * A TPU class never fits a GPU stamp and a GPU class never fits a TPU stamp: the images
- * differ, whatever the memory says. On a TPU stamp a model also needs `devices` chips.
+ * A class of one accelerator kind never fits a stamp of another (GPU, Cloud TPU, AWS Neuron):
+ * the images differ, whatever the memory says. On a TPU or Neuron stamp a model also needs
+ * `devices` chips or devices.
  */
 export function stampFitsClass(choice: DeploymentStampChoice, gpuClass: string, devices = 1): boolean | null {
-  const tpu = isTpuClass(gpuClass)
-  if (choice.accelerator === "tpu" && !tpu) return false
-  if (tpu) {
-    if (choice.accelerator !== "tpu") return choice.gpus ? false : null
+  const kind = classKind(gpuClass)
+  const stampKind = choice.accelerator
+  if ((stampKind === "tpu" || stampKind === "neuron") && kind !== stampKind) return false
+  if (kind !== "gpu") {
+    if (stampKind !== kind) return choice.gpus ? false : null
     if (typeof choice.devices === "number" && choice.devices < devices) return false
   }
   const needed = gpuClassMemoryGiB(gpuClass)

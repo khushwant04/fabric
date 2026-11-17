@@ -16,7 +16,7 @@ true
 {{- define "fabric-stamp.dcgmExporterEnabled" -}}
 {{- $gpu := .Values.gpuMetrics | default dict -}}
 {{- $exporter := $gpu.dcgmExporter | default dict -}}
-{{- if and (include "fabric-stamp.reportsMetrics" .) $exporter.enabled (not (include "fabric-stamp.isTPU" .)) -}}
+{{- if and (include "fabric-stamp.reportsMetrics" .) $exporter.enabled (not (include "fabric-stamp.isNotNVIDIA" .)) -}}
 true
 {{- end -}}
 {{- end -}}
@@ -24,7 +24,7 @@ true
 {{- define "fabric-stamp.dcgmExternalEnabled" -}}
 {{- $gpu := .Values.gpuMetrics | default dict -}}
 {{- $external := $gpu.external | default dict -}}
-{{- if and (include "fabric-stamp.reportsMetrics" .) $external.enabled $external.namespace $external.service (not (include "fabric-stamp.isTPU" .)) -}}
+{{- if and (include "fabric-stamp.reportsMetrics" .) $external.enabled $external.namespace $external.service (not (include "fabric-stamp.isNotNVIDIA" .)) -}}
 true
 {{- end -}}
 {{- end -}}

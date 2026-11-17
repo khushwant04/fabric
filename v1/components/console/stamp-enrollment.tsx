@@ -156,13 +156,13 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
               <div className="space-y-3">
                 <h4 className="text-sm font-medium">One command sets up the whole VM</h4>
                 <p className="text-xs leading-5 text-muted-foreground">After you generate a token, you get a single command. It installs k3s with GPU support, TLS for the public hostname and the Fabric stamp, then waits until the stamp has enrolled. Re-running it later upgrades or repairs the stamp without a new token.</p>
-                <label className="flex items-center gap-2 text-xs"><Checkbox checked={nvidia} disabled={pending} onCheckedChange={(checked) => { setNvidia(checked === true); update("runtimeClass", checked === true ? "nvidia" : "") }} />This VM has NVIDIA GPUs or Cloud TPU chips</label>
+                <label className="flex items-center gap-2 text-xs"><Checkbox checked={nvidia} disabled={pending} onCheckedChange={(checked) => { setNvidia(checked === true); update("runtimeClass", checked === true ? "nvidia" : "") }} />This VM has NVIDIA GPUs, Cloud TPU chips or AWS Neuron devices</label>
               </div>
               <div className="overflow-hidden rounded-xl border border-border">
                 <p className="border-b border-border/60 px-3 py-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">Before you run it</p>
                 <ul className="divide-y divide-border/60 text-xs">
                   <li className="px-3 py-2">Ubuntu 22.04 or 24.04 on x86_64, with systemd.</li>
-                  {nvidia ? <li className="px-3 py-2">The NVIDIA driver is installed and <code>nvidia-smi</code> works. vLLM 0.26 needs driver R580 or newer. On a single-host Cloud TPU VM (for example v6e-4) no NVIDIA driver is needed: the command detects the TPU and serves models with the vLLM TPU image.</li> : null}
+                  {nvidia ? <li className="px-3 py-2">The NVIDIA driver is installed and <code>nvidia-smi</code> works. vLLM 0.26 needs driver R580 or newer. On a single-host Cloud TPU VM (for example v6e-4) no NVIDIA driver is needed: the command detects the TPU and serves models with the vLLM TPU image. On an AWS inf2, trn1 or trn2 instance running the Neuron Deep Learning AMI, it detects the Inferentia2 or Trainium devices, installs the Neuron device plugin and serves models with vLLM on Neuron.</li> : null}
                   <li className="px-3 py-2">For public inference: a DNS A record for the stamp hostname pointing at the VM, and inbound ports 80 and 443 open.</li>
                   <li className="px-3 py-2">Outbound HTTPS to the control plane, GitHub, the image registry and Hugging Face.</li>
                 </ul>

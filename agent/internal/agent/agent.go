@@ -484,6 +484,11 @@ func (a *Agent) reportedCapabilities() controlplane.Capabilities {
 			gpu.Vendor = hardware.VendorGoogle
 			gpu.AcceleratorType = group.AcceleratorType
 		}
+		if group.IsNeuron() {
+			gpu.Accelerator = hardware.KindNeuron
+			gpu.Vendor = hardware.VendorAWS
+			gpu.AcceleratorType = group.AcceleratorType
+		}
 		gpus = append(gpus, gpu)
 	}
 	capabilities.GPUs = gpus
