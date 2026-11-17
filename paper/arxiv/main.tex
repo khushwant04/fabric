@@ -18,6 +18,7 @@
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
 \usepackage{url}
 \usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={Agent Fabric: A Fluid Inference System for Agentic Workloads},pdfauthor={Khushwant Sanwalot, Harshil V Makhija, B R Zoya Parveen, Durga Sri B, Nandeeswar S B}}
 \usepackage[capitalise]{cleveref}
 
 % ---------------------------------------------------------------- reference names (IEEE style)
@@ -71,7 +72,7 @@
 
 \begin{document}
 
-\title{Fabric: Two-Clock Governance for\\Multi-Stamp, Agentic LLM Serving}
+\title{Agent Fabric: A Fluid Inference System\\for Agentic Workloads}
 
 \author{%
 \IEEEauthorblockN{Khushwant Sanwalot}
@@ -97,7 +98,8 @@
 A managed language-model service runs on two clocks: a \emph{configuration clock} that moves
 account intent through placement, reconciliation and minutes-long cold starts, and a
 \emph{generation clock} that authenticates, admits and streams each request token by token.
-\sys{} is an implemented, Kubernetes-based serving platform organised around one rule:
+Agent Fabric (\sys{}) is an implemented, Kubernetes-based inference system organised around
+one rule:
 \emph{state lives with the clock that reads it on the hot path}. Configuration reaches serving
 components only as versioned, cached snapshots; generation state stays where it is consumed,
 which fixes the affinity, retry and metering obligations of every router in front of it. We
