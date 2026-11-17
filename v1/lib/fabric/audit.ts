@@ -72,11 +72,52 @@ export function auditActionLabel(action: string) {
   return AUDIT_ACTIONS[action] ?? action
 }
 
+const AUDIT_ACTORS: Record<string, string> = {
+  user: "Member",
+  service: "Service principal",
+  principal: "Principal",
+  stamp: "Stamp",
+  system: "System",
+  edge: "Edge gateway",
+  fabric_operator: "Fabric operator",
+}
+
+const AUDIT_RESOURCES: Record<string, string> = {
+  account: "Account",
+  api_key: "API key",
+  audit_events: "Audit trail",
+  deployment: "Deployment",
+  edge_routing_table: "Edge routing table",
+  inference_stamp: "Stamp",
+  membership: "Membership",
+  oidc_provider: "Identity provider",
+  placement: "Placement",
+  service_principal: "Service principal",
+  stamp_enrollment_token: "Enrollment token",
+  user: "User",
+}
+
+function humanize(value: string) {
+  const words = value.replaceAll("_", " ")
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** Who acted, as a person would say it ("Member", "Stamp"), for an audit row. */
+export function auditActorLabel(type: string) {
+  return AUDIT_ACTORS[type] ?? humanize(type)
+}
+
+/** What was changed, as a person would say it ("API key", "Stamp"), for an audit row. */
+export function auditResourceLabel(type: string) {
+  return AUDIT_RESOURCES[type] ?? humanize(type)
+}
+
 // One line summarising an event's metadata. Values are shown as recorded; the control
-// plane never writes credentials, prompts or responses into audit metadata.
+// plane never writes credentials, prompts or responses into audit metadata. Keys read as
+// words and lists of plain values as comma-separated text.
 export function summarizeAuditMetadata(metadata: Record<string, unknown>) {
   return Object.entries(metadata)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
+    .map(([key, value]) => `${key.replaceAll("_", " ")}: ${Array.isArray(value) && value.every((item) => typeof item !== "object") ? value.join(", ") : typeof value === "object" ? JSON.stringify(value) : String(value)}`)
     .join(" · ")
 }

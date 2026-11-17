@@ -85,6 +85,25 @@ export const modelCatalog: readonly CatalogModel[] = [
     strength: "Flagship agent model; mixture of experts, fast.",
   },
   {
+    // Fits one v6e chip (32 GB HBM) with room for the KV cache, so a v6e-1 TPU VM can serve it;
+    // larger v6e slices satisfy the class too.
+    id: "qwen3.5-4b-tpu",
+    name: "Qwen3.5 4B on Cloud TPU",
+    modelRef: "Qwen/Qwen3.5-4B",
+    modelAlias: "qwen3.5-4b-tpu",
+    size: "4B",
+    gpuClass: "tpu-v6e",
+    gpuCount: 1,
+    gpu: "TPU v6e-1 or larger · 1 chip",
+    precision: "bf16",
+    contextLength: 8192,
+    maxNumSeqs: 16,
+    toolCalling: true,
+    toolCallParser: "qwen3_xml",
+    execution: "default",
+    strength: "bf16 on a single TPU v6e chip; the smallest Cloud TPU VM can serve it.",
+  },
+  {
     // The same bf16 checkpoint as the A10 entry, sharded across four chips. The class floor is
     // a v5e chip (16 GB HBM), so a v6e-4 (32 GB per chip) satisfies it too.
     id: "qwen3.5-9b-tpu",

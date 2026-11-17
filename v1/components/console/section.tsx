@@ -52,15 +52,15 @@ export function SectionEmpty({ className, action, children, ...props }: Componen
 
 /** A row of headline-number cards. */
 export function MetricGrid({ className, ...props }: ComponentProps<"div">) {
-  return <div className={cn("grid gap-4", className)} {...props} />
+  return <div className={cn("grid gap-3 sm:gap-4", className)} {...props} />
 }
 
 export function Metric({ label, value, detail, icon, children }: { label: ReactNode; value: ReactNode; detail?: ReactNode; icon?: ReactNode; children?: ReactNode }) {
-  return <div className="flex min-w-0 flex-col gap-2 rounded-2xl border border-border bg-card p-5 shadow-[0_1px_2px_rgb(0_0_0/0.025)]">
+  return <div className="flex min-w-0 flex-col gap-1.5 rounded-2xl border border-border bg-card p-4 shadow-[0_1px_2px_rgb(0_0_0/0.025)] sm:gap-2 sm:p-5">
     <span className="flex items-center justify-between gap-2 text-sm text-muted-foreground [&_svg]:size-4">{label}{icon}</span>
-    <span className="font-heading text-[28px] leading-9 font-semibold tracking-[-0.02em] tabular-nums">{value}</span>
+    <span className="font-heading text-2xl leading-8 font-semibold tracking-[-0.02em] tabular-nums sm:text-[28px] sm:leading-9">{value}</span>
     {children}
-    {detail ? <span className="truncate text-[13px] text-muted-foreground">{detail}</span> : null}
+    {detail ? <span className="truncate text-[13px] text-muted-foreground" title={typeof detail === "string" ? detail : undefined}>{detail}</span> : null}
   </div>
 }
 

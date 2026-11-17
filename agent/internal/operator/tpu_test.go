@@ -24,6 +24,8 @@ type renderedPod struct {
 	Template struct {
 		Spec struct {
 			RuntimeClassName string `json:"runtimeClassName"`
+			HostNetwork      bool   `json:"hostNetwork"`
+			DNSPolicy        string `json:"dnsPolicy"`
 			Containers       []struct {
 				Image           string   `json:"image"`
 				Command         []string `json:"command"`
@@ -101,6 +103,10 @@ func TestATPUHostRequestsChipsAndRunsPrivilegedWithTheDevices(t *testing.T) {
 	if container.SecurityContext == nil || !container.SecurityContext.Privileged {
 		t.Fatal("a TPU host must be privileged to open the chips")
 	}
+	if !pod.Template.Spec.HostNetwork || pod.Template.Spec.DNSPolicy != "ClusterFirstWithHostNet" {
+		t.Fatalf("a TPU host must share the VM's network so libtpu reaches its local runtime: hostNetwork=%v dnsPolicy=%q",
+			pod.Template.Spec.HostNetwork, pod.Template.Spec.DNSPolicy)
+	}
 	if container.StartupProbe.FailureThreshold != tpuStartupFailureThreshold ||
 		tpuStartupFailureThreshold <= startupFailureThreshold {
 		t.Fatalf("startup budget = %d, want the longer TPU budget", container.StartupProbe.FailureThreshold)
@@ -152,6 +158,9 @@ func TestAGPUHostIsUnchangedByTPUSupport(t *testing.T) {
 	}
 	if container.StartupProbe.FailureThreshold != startupFailureThreshold {
 		t.Fatalf("gpu startup budget changed: %d", container.StartupProbe.FailureThreshold)
+	}
+	if pod.Template.Spec.HostNetwork || pod.Template.Spec.DNSPolicy != "" {
+		t.Fatal("a GPU host must keep the pod network")
 	}
 	for _, env := range container.Env {
 		if env.Name == "VLLM_XLA_CACHE_PATH" {

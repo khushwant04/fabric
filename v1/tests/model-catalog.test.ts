@@ -11,6 +11,7 @@ test("the catalog offers the curated models with their serving settings", () => 
     ["Qwen/Qwen3.5-2B", "qwen3.5-2b", "t4", 1, 4096, 8, true, "qwen3_xml", "eager"],
     ["Qwen/Qwen3.5-9B", "qwen3.5-9b", "a10", 1, 8192, 8, true, "qwen3_xml", "eager"],
     ["Qwen/Qwen3.6-35B-A3B-FP8", "qwen3.6-35b", "rtx-pro-6000", 1, 65536, 16, true, "qwen3_xml", "eager"],
+    ["Qwen/Qwen3.5-4B", "qwen3.5-4b-tpu", "tpu-v6e", 1, 8192, 16, true, "qwen3_xml", "default"],
     ["Qwen/Qwen3.5-9B", "qwen3.5-9b-tpu", "tpu-v5e", 4, 8192, 16, true, "qwen3_xml", "default"],
   ])
   assert.equal(new Set(modelCatalog.map((model) => model.id)).size, modelCatalog.length)
@@ -74,6 +75,10 @@ test("TPU stamps read as chips, and FP8 models are not TPU-compatible", () => {
   assert.equal(stampFitsClass(v6e, "tpu-v5e", 8), false)
   assert.equal(stampFitsClass(v5e, "tpu-v6e", 4), false)
   assert.equal(stampFitsClass(v6e, "tpu-v6e", 4), true)
+  // The single-chip preset fits any v6e VM, including a v6e-1, but not a v5e.
+  const small = catalogModel("qwen3.5-4b-tpu")!
+  assert.equal(stampFitsClass(v6e, small.gpuClass, small.gpuCount), true)
+  assert.equal(stampFitsClass(v5e, small.gpuClass, small.gpuCount), false)
   // GPU classes never fit TPU stamps.
   assert.equal(stampFitsClass(v6e, "t4"), false)
   assert.equal(stampFitsClass(a10, "a10"), true)

@@ -264,3 +264,17 @@ export function runsResponseError(status: number, body: unknown): AgentRunsError
   if (status === 429) return new AgentRunsError(429, "The inference gateway is rate limiting this account. Try again shortly.")
   return new AgentRunsError(502, `The inference gateway could not return run traces (${status}).`)
 }
+
+const FINISH_REASONS: Record<string, string> = {
+  stop: "Stop",
+  length: "Length limit",
+  tool_calls: "Tool calls",
+  function_call: "Tool calls",
+  content_filter: "Content filter",
+}
+
+/** An OpenAI finish reason as a label ("Tool calls", "Length limit"), or the raw value if unknown. */
+export function finishReasonLabel(reason: string | null | undefined) {
+  if (!reason) return null
+  return FINISH_REASONS[reason] ?? reason.charAt(0).toUpperCase() + reason.slice(1).replaceAll("_", " ")
+}

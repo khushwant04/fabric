@@ -1,7 +1,7 @@
 import { AlertTriangleIcon, CircleCheckIcon, CircleXIcon, RadioIcon, ShieldCheckIcon, WrenchIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import type { RunStep } from "@/lib/fabric/agent-runs"
+import { finishReasonLabel, type RunStep } from "@/lib/fabric/agent-runs"
 import { formatNumber } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -64,7 +64,7 @@ export function RunStepTimeline({ steps, dropped }: { steps: RunStep[]; dropped:
               <div><dt className="text-xs text-muted-foreground">Output</dt><dd className="tabular-nums">{formatNumber(step.outputTokens)}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Charged</dt><dd className="tabular-nums">{formatNumber(step.chargedTokens)}{step.usageEstimated ? <span className="text-muted-foreground"> est.</span> : null}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Latency</dt><dd className="tabular-nums">{formatLatency(step.latencyMs)}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Finish</dt><dd>{step.finishReason ?? "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Finish</dt><dd>{finishReasonLabel(step.finishReason) ?? "—"}</dd></div>
             </dl>
             {step.toolCalls.length ? <div className="flex flex-wrap gap-1.5">{step.toolCalls.map((call, index) => <ToolCallBadge key={`${call.name}-${index}`} name={call.name} valid={call.argumentsValid} guard={step.toolGuard?.status ?? null} errors={step.toolGuard?.errors ?? []} />)}</div> : null}
             {step.toolGuard?.errors.length ? <div className="rounded-lg border border-status-warning/30 bg-status-warning/5 px-3 py-2 text-xs">

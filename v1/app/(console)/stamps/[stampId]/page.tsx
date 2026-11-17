@@ -7,17 +7,18 @@ import { PageContainer, PageHeader } from "@/components/console/page-header"
 import { StampActivity } from "@/components/console/stamp-activity"
 import { StampMetricsView } from "@/components/console/serving-metrics/stamp-metrics"
 import { RemoveStampButton } from "@/components/console/stamp-remove"
+import { Section, SectionBody } from "@/components/console/section"
 import { StatusBadge } from "@/components/console/status-badge"
+import { TruncatedText } from "@/components/console/truncated-text"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { describeAccelerator, isTpuEntry, stampAcceleratorKind } from "@/lib/fabric/accelerators"
 import { getStampEvents, listDeployments, listStamps } from "@/lib/fabric/data"
 import { publicGatewayBase } from "@/lib/fabric/inference-endpoints"
 import { gpuCapacity, stampState } from "@/lib/fabric/resource-state"
 import { isRemoved, isStampId } from "@/lib/fabric/stamp-activity"
 import { getConsoleContext, hasScope } from "@/lib/fabric/session"
-import { formatDate, formatRelative } from "@/lib/format"
+import { formatDate, formatRelative, orchestratorLabel } from "@/lib/format"
 
 export default async function StampDetailPage({ params }: PageProps<"/stamps/[stampId]">) {
   const { stampId } = await params
@@ -39,31 +40,35 @@ export default async function StampDetailPage({ params }: PageProps<"/stamps/[st
 
   return <PageContainer>
     <PageHeader title={name} description="Registration, hardware, the live activity log and serving metrics reported by this stamp's agent." actions={<><Button variant="outline" render={<Link href="/stamps" />}><ArrowLeftIcon /> All stamps</Button>{stamp && !gone ? <RemoveStampButton stampId={stamp.id} name={stamp.name} disabled={!canWrite} size="default" variant="destructive" label="Remove stamp" /> : null}</>}>
-      {state ? <div className="flex flex-wrap items-center gap-2 pt-1"><StatusBadge status={state.status} /><span className="text-xs text-muted-foreground">{state.detail}</span></div> : null}
+      {state ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-border bg-muted/40 px-4 py-3"><StatusBadge status={state.status} /><span className="min-w-0 text-sm text-muted-foreground">{state.detail}</span></div> : null}
     </PageHeader>
     {stampResult.status === "rejected" ? <Alert variant="destructive"><TriangleAlertIcon /><AlertTitle>Stamp details are unavailable</AlertTitle><AlertDescription>Refresh to try again. The activity log below still updates.</AlertDescription></Alert> : null}
     {state?.status === "stale" && stamp ? <Alert><TriangleAlertIcon /><AlertTitle>No heartbeat for over 5 minutes</AlertTitle><AlertDescription><p>The machine may be off or offline, or its agent stopped. Deployments placed here are not served until it reports again. If you no longer use this machine, remove it.</p>{canWrite ? <div className="mt-2"><RemoveStampButton stampId={stamp.id} name={stamp.name} size="xs" /></div> : null}</AlertDescription></Alert> : null}
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-      <Card>
-        <CardHeader><CardTitle>Activity</CardTitle><CardDescription>Enrollment, hardware checks, credential rotations, applied generations, image pulls and errors. Newest first.</CardDescription></CardHeader>
-        <CardContent><StampActivity stampId={stampId} initial={events} initialError={eventResult.status === "rejected" ? "Activity could not be read." : null} /></CardContent>
-      </Card>
-      {stamp ? <Card>
-        <CardHeader><CardTitle>Stamp</CardTitle><CardDescription>As last reported by its agent.</CardDescription></CardHeader>
-        <CardContent>
-          <dl className="grid gap-4 text-sm">
-            <div><dt className="text-xs text-muted-foreground">{tpu ? "TPU chips" : "GPUs"}</dt><dd className="mt-1 space-y-1">{gpus.length ? gpus.map((gpu, index) => isTpuEntry(gpu) ? <div key={index}>{describeAccelerator(gpu)}{typeof gpu.accelerator_type === "string" ? ` · ${gpu.accelerator_type}` : ""}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? ` · ${Math.round(gpu.memory_bytes / 1024 ** 3)} GiB HBM per chip` : ""}</div> : <div key={index}>{gpuCapacity(gpu.count) ?? "?"} × {typeof gpu.product === "string" ? gpu.product : "Unknown GPU"}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? ` · ${Math.round(gpu.memory_bytes / 1024 ** 3)} GiB` : ""}</div>) : <span className="text-muted-foreground">None reported</span>}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Allocatable · requested</dt><dd className="mt-1 tabular-nums">{gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "—"} · {gpuCapacity(stamp.capabilities.requested_gpus) ?? "—"}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Orchestrator · region</dt><dd className="mt-1"><span className="capitalize">{stamp.orchestrator || "Unknown"}</span> · {stamp.region || "no region"}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Last heartbeat</dt><dd className="mt-1">{formatRelative(stamp.last_heartbeat_at)}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Enrolled</dt><dd className="mt-1">{formatDate(stamp.created_at)}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Inference gateway</dt><dd className="mt-1 break-all font-mono text-xs">{endpoint ?? "Not reported"}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Stamp ID</dt><dd className="mt-1 break-all font-mono text-xs">{stamp.id}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Machine credentials</dt><dd className="mt-1 space-y-2"><p>Version {stamp.credential_version ?? 1} · {stamp.credentials_rotated_at ? `rotated ${formatRelative(stamp.credentials_rotated_at)}` : "never rotated"}</p>{gone ? null : <CredentialRotationButton stampId={stamp.id} pending={Boolean(stamp.credential_rotation_requested_at)} disabled={!canWrite} />}</dd></div>
-          </dl>
-        </CardContent>
-      </Card> : null}
+    <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <Section title="Activity" description="Enrollment, hardware checks, credential rotations, applied generations, image pulls and errors.">
+        <SectionBody><StampActivity stampId={stampId} initial={events} initialError={eventResult.status === "rejected" ? "Activity could not be read." : null} /></SectionBody>
+      </Section>
+      {stamp ? <Section title="Stamp" description="As last reported by its agent.">
+        <dl className="flex flex-col border-t border-border text-sm">
+          <StackField label={tpu ? "TPU chips" : "GPUs"}>{gpus.length ? <ul className="flex flex-col gap-1">{gpus.map((gpu, index) => isTpuEntry(gpu) ? <li key={index}>{describeAccelerator(gpu)}{typeof gpu.accelerator_type === "string" ? ` · ${gpu.accelerator_type}` : ""}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB HBM per chip</span> : null}</li> : <li key={index}><span className="tabular-nums">{gpuCapacity(gpu.count) ?? "?"} ×</span> {typeof gpu.product === "string" ? gpu.product : "Unknown GPU"}{typeof gpu.memory_bytes === "number" && gpu.memory_bytes > 0 ? <span className="text-muted-foreground tabular-nums"> · {Math.round(gpu.memory_bytes / 1024 ** 3)} GiB</span> : null}</li>)}</ul> : <span className="text-muted-foreground">None reported</span>}</StackField>
+          <StackField label="GPU capacity"><span className="tabular-nums">{gpuCapacity(stamp.capabilities.requested_gpus) ?? "—"} requested</span><span className="text-muted-foreground tabular-nums"> of {gpuCapacity(stamp.capabilities.allocatable_gpus) ?? "—"} allocatable</span></StackField>
+          <StackField label="Orchestrator">{orchestratorLabel(stamp.orchestrator)}<span className="text-muted-foreground"> · {stamp.region || "no region"}</span></StackField>
+          <StackField label="Last heartbeat"><time dateTime={stamp.last_heartbeat_at ?? undefined} title={formatDate(stamp.last_heartbeat_at)}>{formatRelative(stamp.last_heartbeat_at)}</time></StackField>
+          <StackField label="Enrolled">{formatDate(stamp.created_at)}</StackField>
+          <StackField label="Inference gateway">{endpoint ? <TruncatedText text={endpoint} className="font-mono text-[13px]" /> : <span className="text-muted-foreground">Not reported</span>}</StackField>
+          <StackField label="Stamp ID"><TruncatedText text={stamp.id} className="font-mono text-[13px]" /></StackField>
+          <StackField label="Machine credentials"><p>Version {stamp.credential_version ?? 1}<span className="text-muted-foreground"> · {stamp.credentials_rotated_at ? `rotated ${formatRelative(stamp.credentials_rotated_at)}` : "never rotated"}</span></p>{gone ? null : <div className="mt-2.5"><CredentialRotationButton stampId={stamp.id} pending={Boolean(stamp.credential_rotation_requested_at)} disabled={!canWrite} /></div>}</StackField>
+        </dl>
+      </Section> : null}
     </div>
     <StampMetricsView stampId={stampId} deploymentNames={deploymentNames} />
   </PageContainer>
+}
+
+/** A label above its value, for the narrow stamp card. */
+function StackField({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="flex min-w-0 flex-col gap-1 border-b border-border px-6 py-3.5 last:border-b-0">
+    <dt className="text-[13px] text-muted-foreground">{label}</dt>
+    <dd className="min-w-0">{children}</dd>
+  </div>
 }

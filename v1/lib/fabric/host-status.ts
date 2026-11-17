@@ -216,6 +216,16 @@ function probeFailures(host: HostSnapshot) {
   return host.events.filter((event) => event.type === "Warning" && event.reason === "Unhealthy").reduce((total, event) => total + Math.max(1, event.count), 0)
 }
 
+const FAILURE_LABELS: Record<StageKey, string> = {
+  queued: "Placement failed",
+  scheduled: "Could not be scheduled",
+  pulling: "Image pull failed",
+  downloading: "Weight download failed",
+  loading: "Weight loading failed",
+  compiling: "Failed while warming up",
+  ready: "Stopped after start",
+}
+
 /** The status line: a tone, a short label, and the most useful sentence of detail. */
 export function hostSummary(host: HostSnapshot): HostSummary {
   if (host.terminating) return { tone: "neutral", label: "Terminating", detail: null }
@@ -223,7 +233,7 @@ export function hostSummary(host: HostSnapshot): HostSummary {
   const failed = stages.find((stage) => stage.state === "failed")
   if (failed) {
     const diagnosis = diagnoseHost(host)
-    return { tone: "critical", label: `${host.container_reason || "Failed"} · ${failed.label}`, detail: diagnosis?.title ?? (host.container_message || lastWarning(host)?.message || null) }
+    return { tone: "critical", label: FAILURE_LABELS[failed.key], detail: diagnosis?.title ?? (host.container_message || lastWarning(host)?.message || null) }
   }
   if (host.ready) return { tone: "good", label: "Ready", detail: host.restart_count ? `Restarted ${host.restart_count} time${host.restart_count === 1 ? "" : "s"}` : null }
   const current = stages.find((stage) => stage.state === "current")
@@ -282,7 +292,35 @@ export function formatBytes(bytes: number | null | undefined) {
 }
 
 export type LogLevel = "all" | "problems"
-export type LogLine = { number: number; text: string; level: "error" | "warning" | "info" }
+export type LogLine = {
+  number: number
+  text: string
+  level: "error" | "warning" | "info"
+  /** The line split into the columns the log viewer shows, when its prefix is recognised. */
+  time: string | null
+  severity: string | null
+  source: string | null
+  message: string
+}
+
+// vLLM's logger: "INFO 11-17 11:19:05 [api_server.py:1351] message". Also an ISO timestamp
+// with an optional level ("2026-11-17T11:19:05.123Z WARN message"), as other servers print.
+const VLLM_PREFIX = /^(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL|FATAL)\s+(\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)?\s+(?:\[([^\]]+)\]\s?)?(.*)$/
+const ISO_PREFIX = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+(?:(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL|FATAL)\s+)?(.*)$/
+
+function severityLabel(value: string | undefined) {
+  if (!value) return null
+  return value === "WARNING" ? "WARN" : value
+}
+
+/** Splits one log line into time, severity, source and message; an unrecognised line is all message. */
+export function parseLogLine(text: string): Pick<LogLine, "time" | "severity" | "source" | "message"> {
+  const vllm = text.match(VLLM_PREFIX)
+  if (vllm) return { severity: severityLabel(vllm[1]), time: vllm[2], source: vllm[3] ?? null, message: vllm[4] }
+  const iso = text.match(ISO_PREFIX)
+  if (iso) return { severity: severityLabel(iso[3]), time: `${iso[1].slice(5)} ${iso[2]}`, source: null, message: iso[4] }
+  return { severity: null, time: null, source: null, message: text }
+}
 
 const ERROR_LINE = /\b(ERROR|CRITICAL|FATAL)\b|Traceback|Exception|Error:|\[line removed/
 const WARNING_LINE = /\bWARN(ING)?\b/
@@ -295,6 +333,7 @@ export function logLines(text: string, query = "", level: LogLevel = "all"): Log
     number: index + 1,
     text: line,
     level: ERROR_LINE.test(line) ? "error" : WARNING_LINE.test(line) ? "warning" : "info",
+    ...parseLogLine(line),
   })).filter((line) => (level === "all" || line.level !== "info") && (!needle || line.text.toLowerCase().includes(needle)))
 }
 
