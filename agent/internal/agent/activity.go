@@ -129,6 +129,10 @@ func (a *Agent) recordCapacity(capacity hardware.Capacity, err error) {
 		a.recordTPUCapacity(capacity)
 		return
 	}
+	if capacity.Accelerator() == hardware.KindNeuron {
+		a.recordNeuronCapacity(capacity)
+		return
+	}
 
 	groups := append([]hardware.GPUGroup(nil), capacity.GPUs...)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Product < groups[j].Product })
@@ -260,6 +264,105 @@ func (a *Agent) recordTPUCapacity(capacity hardware.Capacity) {
 			"accelerator": hardware.KindTPU,
 		},
 	})
+}
+
+// recordNeuronCapacity is recordCapacity for an AWS Neuron stamp: the same two entries,
+// worded for Neuron devices. The runtime check is that the Neuron device plugin advertises the
+// devices, which it does only once the Neuron driver exposes /dev/neuron*.
+func (a *Agent) recordNeuronCapacity(capacity hardware.Capacity) {
+	groups := append([]hardware.GPUGroup(nil), capacity.GPUs...)
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Product < groups[j].Product })
+	parts := make([]string, 0, len(groups))
+	details := map[string]any{"allocatable_gpus": capacity.AllocatableGPUs, "accelerator": hardware.KindNeuron}
+	for index, group := range groups {
+		parts = append(parts, describeNeuron(group))
+		if index == 0 {
+			details["product"] = group.Product
+			details["count"] = group.Count
+			if group.MemoryBytes > 0 {
+				details["memory_gib"] = math.Round(float64(group.MemoryBytes)/(1<<30)*10) / 10
+				details["total_hbm_gib"] = math.Round(float64(group.MemoryBytes)*float64(group.Count)/(1<<30)*10) / 10
+			}
+			if group.NeuronCores > 0 {
+				details["neuron_cores"] = group.NeuronCores * group.Count
+			}
+			if group.AcceleratorType != "" {
+				details["accelerator_type"] = group.AcceleratorType
+			}
+		}
+	}
+	if len(parts) > 0 {
+		a.activity.RecordChange("gpus", strings.Join(parts, "|"), activity.Event{
+			Kind:     activity.KindGPUsMeasured,
+			Severity: activity.Info,
+			Message:  "Neuron measured: " + strings.Join(parts, ", "),
+			Details:  details,
+		})
+	}
+
+	state := gpuRuntimeMissing
+	if capacity.AllocatableGPUs > 0 {
+		state = gpuRuntimeOK
+	}
+	a.gpuRuntime = state
+	if state == gpuRuntimeOK {
+		a.activity.RecordChange("gpu-runtime", state, activity.Event{
+			Kind:     activity.KindGPURuntime,
+			Severity: activity.Success,
+			Message: fmt.Sprintf("Neuron runtime OK: %d Neuron device(s) allocatable as %s",
+				capacity.AllocatableGPUs, hardware.NeuronResource),
+			Details: map[string]any{
+				"allocatable_gpus": capacity.AllocatableGPUs, "ok": true, "accelerator": hardware.KindNeuron,
+			},
+		})
+		return
+	}
+	a.activity.Forget("ready")
+	a.activity.RecordChange("gpu-runtime", state, activity.Event{
+		Kind:     activity.KindGPURuntime,
+		Severity: activity.Warning,
+		Message: fmt.Sprintf("Neuron runtime missing: %d Neuron node(s) advertise no allocatable %s",
+			capacity.UnequippedNeuronNodes, hardware.NeuronResource),
+		Hint: "The Neuron devices are not advertised to Kubernetes. Check the Neuron driver on the " +
+			"instance (ls /dev/neuron*, neuron-ls) and the neuron-device-plugin pods in kube-system; " +
+			"on k3s, re-run the bootstrap command, which installs the device plugin. " +
+			"Models stay Pending until this is fixed.",
+		Details: map[string]any{
+			"allocatable_gpus": 0, "ok": false, "unequipped_nodes": capacity.UnequippedNeuronNodes,
+			"accelerator": hardware.KindNeuron,
+		},
+	})
+}
+
+// describeNeuron reads like "1 × Inferentia2 (inf2.xlarge, 32 GiB HBM, 2 NeuronCores)" for
+// one device and "12 × Inferentia2 (inf2.48xlarge, 32 GiB HBM per device, 384 GiB total,
+// 24 NeuronCores)" for several.
+func describeNeuron(group hardware.GPUGroup) string {
+	product := group.Product
+	if product == "" || product == "unknown" || product == "unknown Neuron" {
+		product = "unidentified Neuron device"
+	}
+	text := fmt.Sprintf("%d × %s", group.Count, product)
+	facts := []string{}
+	if group.AcceleratorType != "" {
+		facts = append(facts, group.AcceleratorType)
+	}
+	if group.MemoryBytes > 0 {
+		perDevice := float64(group.MemoryBytes) / (1 << 30)
+		if group.Count == 1 {
+			facts = append(facts, fmt.Sprintf("%.0f GiB HBM", perDevice))
+		} else {
+			facts = append(facts, fmt.Sprintf("%.0f GiB HBM per device, %.0f GiB total",
+				perDevice, perDevice*float64(group.Count)))
+		}
+	}
+	if group.NeuronCores > 0 {
+		facts = append(facts, fmt.Sprintf("%d NeuronCores", group.NeuronCores*group.Count))
+	}
+	if len(facts) > 0 {
+		text += " (" + strings.Join(facts, ", ") + ")"
+	}
+	return text
 }
 
 // describeTPU reads like "4 × TPU v6e (v6e-4, 32 GiB HBM per chip, 128 GiB total)".

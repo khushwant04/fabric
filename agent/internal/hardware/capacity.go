@@ -53,13 +53,21 @@ type GPUGroup struct {
 	Source            string
 	// Kind is KindTPU for TPU chips, empty for GPUs. MemoryBytes is then HBM per chip.
 	Kind string
-	// AcceleratorType is the TPU slice type when every node in the group agrees on one.
+	// AcceleratorType is the TPU slice type, or the Neuron node's EC2 instance type, when
+	// every node in the group agrees on one.
 	AcceleratorType string
+	// NeuronCores is physical NeuronCores per device for a Neuron group, zero otherwise.
+	NeuronCores int
 }
 
 // IsTPU reports whether the group is TPU chips.
 func (g GPUGroup) IsTPU() bool {
 	return g.Kind == KindTPU
+}
+
+// IsNeuron reports whether the group is AWS Neuron devices.
+func (g GPUGroup) IsNeuron() bool {
+	return g.Kind == KindNeuron
 }
 
 // Capacity is what one stamp can offer, as measured.
@@ -106,6 +114,10 @@ type Capacity struct {
 	// UnequippedTPUNodes counts ready nodes labelled as TPU nodes that advertise no
 	// allocatable google.com/tpu: the bootstrap's advertisement is missing.
 	UnequippedTPUNodes int
+	// UnequippedNeuronNodes counts ready Neuron nodes (labelled, or of a Neuron instance
+	// type) that advertise no allocatable aws.amazon.com/neuron: the Neuron device plugin or
+	// driver is missing.
+	UnequippedNeuronNodes int
 	// PodClaimsError explains a missing claim measurement, for the caller to log. Held as a
 	// string rather than an error because Measure's error return is reserved for a failure
 	// that makes the whole result unusable.
@@ -141,7 +153,7 @@ type container struct {
 // The limit is read first because Kubernetes requires request and limit to be equal for an
 // extended resource, and a manifest that sets only one of them commonly sets the limit.
 func (c container) gpus() int {
-	return c.devices(GPUResource) + c.devices(TPUResource)
+	return c.devices(GPUResource) + c.devices(TPUResource) + c.devices(NeuronResource)
 }
 
 // devices returns how many of one extended resource this container claims.
@@ -281,6 +293,7 @@ func Measure(ctx context.Context, client Getter, selector map[string]string) (Ca
 	capacity := Capacity{
 		Measured: true, Profiles: profiles, GPUs: groupProfiles(profiles),
 		UnequippedGPUNodes: unequipped.gpu, UnequippedTPUNodes: unequipped.tpu,
+		UnequippedNeuronNodes: unequipped.neuron,
 	}
 	onNodes := make(map[string]bool, len(profiles))
 	for _, profile := range profiles {
@@ -336,6 +349,7 @@ type aggregate struct {
 	kind            string
 	acceleratorType string
 	typeMixed       bool
+	neuronCores     int
 }
 
 func (a *aggregate) add(profile Profile) {
@@ -355,6 +369,7 @@ func (a *aggregate) add(profile Profile) {
 	}
 	a.count += profile.Count
 	a.kind = profile.Kind
+	a.neuronCores = profile.NeuronCores
 
 	if profile.MemoryMiB <= 0 {
 		a.memoryKnown = false
@@ -384,6 +399,8 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 			product = "unknown"
 			if profile.IsTPU() {
 				product = "unknown TPU"
+			} else if profile.IsNeuron() {
+				product = "unknown Neuron"
 			}
 		}
 		if _, present := byProduct[product]; !present {
@@ -398,7 +415,10 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 	groups := make([]GPUGroup, 0, len(order))
 	for _, product := range order {
 		entry := byProduct[product]
-		group := GPUGroup{Product: product, Count: entry.count, Source: entry.source, Kind: entry.kind}
+		group := GPUGroup{
+			Product: product, Count: entry.count, Source: entry.source, Kind: entry.kind,
+			NeuronCores: entry.neuronCores,
+		}
 		if !entry.typeMixed {
 			group.AcceleratorType = entry.acceleratorType
 		}
@@ -416,20 +436,27 @@ func groupProfiles(profiles []Profile) []GPUGroup {
 	return groups
 }
 
-// Accelerator is KindTPU when the stamp's devices are TPU chips, and "" otherwise, which is
-// how an NVIDIA stamp has always read. A stamp with no devices yet is a TPU stamp when only
-// TPU-labelled nodes are missing their advertisement.
+// Accelerator is KindTPU when the stamp's devices are TPU chips, KindNeuron when they are
+// AWS Neuron devices, and "" otherwise, which is how an NVIDIA stamp has always read. A stamp
+// with no devices yet takes the kind of its unequipped nodes when only one kind is missing.
 func (c Capacity) Accelerator() string {
 	if len(c.GPUs) == 0 {
-		if c.UnequippedTPUNodes > 0 && c.UnequippedGPUNodes == 0 {
+		switch {
+		case c.UnequippedTPUNodes > 0 && c.UnequippedGPUNodes == 0 && c.UnequippedNeuronNodes == 0:
 			return KindTPU
+		case c.UnequippedNeuronNodes > 0 && c.UnequippedGPUNodes == 0 && c.UnequippedTPUNodes == 0:
+			return KindNeuron
 		}
 		return ""
 	}
+	kind := c.GPUs[0].Kind
+	if kind != KindTPU && kind != KindNeuron {
+		return ""
+	}
 	for _, group := range c.GPUs {
-		if !group.IsTPU() {
+		if group.Kind != kind {
 			return ""
 		}
 	}
-	return KindTPU
+	return kind
 }
