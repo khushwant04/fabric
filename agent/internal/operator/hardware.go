@@ -113,6 +113,19 @@ func applyProfile(host ModelHost, profiles []GPUProfile) (ModelHost, []Adjustmen
 		host.DType = "bfloat16"
 	}
 
+	if host.IsNeuron() && host.DType != "" && !strings.EqualFold(host.DType, "bfloat16") &&
+		!strings.EqualFold(host.DType, "auto") {
+		// Fabric serves bf16 checkpoints on Neuron. FP8 support differs by generation and
+		// needs Neuron-specific quantization settings, so it is not offered.
+		adjustments = append(adjustments, Adjustment{
+			Setting: "dtype",
+			From:    host.DType,
+			To:      "bfloat16",
+			Reason:  "AWS Neuron stamps serve bfloat16; " + host.DType + " is not supported on Neuron",
+		})
+		host.DType = "bfloat16"
+	}
+
 	if adjusted, change := clampMemoryUtilization(host.GPUMemoryUtilization, smallest); change != nil {
 		adjustments = append(adjustments, *change)
 		host.GPUMemoryUtilization = adjusted

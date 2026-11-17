@@ -102,9 +102,11 @@ func main() {
 		hostRuntimeClass = flag.String("model-host-runtime-class",
 			envOr("FABRIC_OPERATOR_RUNTIME_CLASS", ""), "RuntimeClass for GPU nodes")
 		hostAccelerator = flag.String("model-host-accelerator", "",
-			"device the model host runs on: empty for NVIDIA GPUs, tpu for Cloud TPU chips")
+			"device the model host runs on: empty for NVIDIA GPUs, tpu for Cloud TPU chips, neuron for AWS Inferentia/Trainium")
 		hostPrivileged = flag.Bool("model-host-privileged", false,
 			"run the model-host container privileged; Cloud TPU VMs need it to open the chips")
+		hostNeuronCores = flag.Int("model-host-neuron-cores-per-device", 0,
+			"NeuronCores per Neuron device (2 on inf2/trn1, 4 on trn2); tensor parallelism is devices times this")
 		hostCommand = flag.String("model-host-command", "",
 			"space-separated command replacing the model-host image entrypoint, e.g. \"vllm serve\"")
 		hostSpread = flag.Bool("model-host-spread-across-nodes", false,
@@ -189,9 +191,11 @@ func main() {
 		Privileged:           *hostPrivileged,
 		DevicePaths:          deviceEntries,
 		Command:              strings.Fields(*hostCommand),
+		NeuronCoresPerDevice: *hostNeuronCores,
 	}
-	if host.Accelerator != "" && host.Accelerator != operator.AcceleratorTPU {
-		log.Error("--model-host-accelerator must be empty or tpu", "value", host.Accelerator)
+	if host.Accelerator != "" && host.Accelerator != operator.AcceleratorTPU &&
+		host.Accelerator != operator.AcceleratorNeuron {
+		log.Error("--model-host-accelerator must be empty, tpu or neuron", "value", host.Accelerator)
 		os.Exit(1)
 	}
 	for _, path := range host.DevicePaths {
