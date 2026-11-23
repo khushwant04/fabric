@@ -176,7 +176,7 @@
         "fix": "TPU model hosts run with hostNetwork and ClusterFirstWithHostNet DNS; GPU hosts keep the pod network"
       }
     ],
-    "end_to_end_serving": "not yet confirmed (pending)",
+    "end_to_end_serving": "confirmed after the host-networking fix: the TPU deployment reached Ready and served requests (reported by the authors after re-running the bootstrap on release 57b0fdb; no timing recorded)",
     "not_measured": "throughput, latency, XLA compilation time"
   },
   "routing_policy_split_check": {

@@ -114,7 +114,8 @@ least-in-flight below saturation while keeping its tail. A deterministic check o
 policy code found no edge/stamp disagreement in 200{,}000 subset trials. Point-in-time live
 checks show a one-command bootstrap enrolling a 96\,GiB Blackwell stamp that served a 35B FP8
 mixture-of-experts model, and enrolling a Cloud TPU v6e-1 VM whose first bring-up surfaced two
-portability defects that we fixed. We make no hardware throughput claims.
+portability defects; once fixed, the TPU deployment served end to end. We make no hardware
+throughput claims.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -315,7 +316,7 @@ outbound only; (6) administrators reach the console through OIDC sign-in. Dashed
 configuration-clock exchanges (routing table, desired state). Each stamp's accelerator node pool
 shows the three accelerator families the abstraction of \cref{sec:accel} admits, not the hardware
 installed in that stamp. All three paths are implemented and covered by the automated suites;
-NVIDIA results are measured, and the Cloud TPU path has a first v6e-1 bring-up. Kernel labels refer to an optional model-host setting on which no result in this paper
+NVIDIA results are measured, and the Cloud TPU path has served end to end on a v6e-1 VM. Kernel labels refer to an optional model-host setting on which no result in this paper
 depends (\cref{sec:limits}).}
 \label{fig:arch}
 \end{figure*}
@@ -478,7 +479,8 @@ network lacks. TPU model hosts now run with host networking (and cluster-first D
 networking), as the TPU image's own instructions do; one host owns a TPU VM's chips, so its
 port cannot collide with another's. GPU hosts keep the pod network.
 
-Both fixes ship in the released stamp; we report no TPU latency, throughput or compilation-time
+With both fixes in the released stamp, the re-run bootstrap brought the TPU deployment to Ready
+and it served requests end to end; we report no TPU latency, throughput or compilation-time
 figures here. The episode
 illustrates a recurring lesson (\cref{sec:lessons}): CI renders and unit tests verified every
 TPU manifest, yet the two defects concerned a fit between catalogue and slice and a network
@@ -914,7 +916,7 @@ Class & Meaning and claims \\
 \Simulated{} & Production gateway, simulated hosts; compares strategies, not absolute latency. Routing study, 5~Nov 2026 \\
 \Computed{} & Deterministic run of shipped code on synthetic keys. Policy split, 17~Nov 2026 \\
 \Tested{} & Automated suites at \commit{}. Edge, policies, guard, runs, prefix routing, agent SDK, Go agent and operator, TPU and Neuron paths \\
-\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up \\
+\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up, then end-to-end serving after the fix \\
 \Measured{} & Retained logs from a named run. 6~Oct: T4 cold-start stages \\
 \DevOnly{} & Kernel microbenchmarks; not in serving \\
 \Designed{} & Specified, not yet exercised on target: production edge failover, GPU sharing \\
@@ -1061,7 +1063,8 @@ RTX PRO 6000. We did not measure throughput or latency on these stamps.
 \paragraph*{Cloud TPU v6e-1 (\PointInTime{}, 17~Nov 2026)}
 As reported in \cref{sec:tpu-bringup}, the same bootstrap detected the TPU, advertised one chip,
 the agent measured it and a deployment was placed; the bring-up exposed a catalogue preset sized
-for four chips and libtpu's dependence on IPv6 loopback, both fixed in the released stamp.
+for four chips and libtpu's dependence on IPv6 loopback, both fixed in the released stamp, after
+which the deployment reached Ready and served requests.
 
 \paragraph*{Where cold-start time goes (\Measured{}, 6~Oct 2026)}
 \Cref{fig:coldstart} decomposes the retained events of one Qwen3.5-0.8B host on a managed T4
