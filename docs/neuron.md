@@ -118,8 +118,9 @@ curl -fsSL https://raw.githubusercontent.com/khushwant04/fabric/main/scripts/boo
   --host inf2-01.stamps.example.com --email ops@example.com
 ```
 
-The command is the same as on a GPU or TPU VM: the bootstrap's default release (`57b0fdb` or
-later) includes Neuron support. A `--release` older than that is refused with a message saying so.
+The command is the same as on a GPU or TPU VM: the bootstrap's default release (`c0c7149` or
+later) includes Neuron support and starts vLLM with prefix caching off, which the Neuron plugin
+requires unless a block size is configured. A `--release` older than that is refused with a message saying so.
 Add `--neuron inf2.xlarge` only when instance metadata cannot be
 read.
 
