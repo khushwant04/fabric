@@ -2,7 +2,7 @@ import "server-only"
 
 import { controlPlaneRequest, FabricApiError } from "@/lib/fabric/client"
 import { getDeploymentStatuses, listDeployments, listPlacements, listStamps } from "@/lib/fabric/data"
-import { deploymentState } from "@/lib/fabric/resource-state"
+import { deploymentState, servesTraffic } from "@/lib/fabric/resource-state"
 import type { DeploymentOption, PolicyVersion, RoutingPolicy, RoutingPolicySummary } from "@/lib/fabric/routing-policy"
 import { getConsoleContext, getFabricAccessToken, hasScope } from "@/lib/fabric/session"
 
@@ -41,7 +41,8 @@ export async function routingDeploymentOptions(): Promise<DeploymentOption[]> {
     let ready = false
     try {
       const [statuses, placements] = await Promise.all([getDeploymentStatuses(item.id), listPlacements(item.id)])
-      ready = deploymentState(item, statuses, placements, stamps).status === "ready"
+      // "Ready" here means the edge can route to it: at least one ready replica.
+      ready = servesTraffic(deploymentState(item, statuses, placements, stamps))
     } catch {
       ready = false
     }
