@@ -2,6 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["bom1"],
   "env": {
-    "FABRIC_INFERENCE_ALLOWED_ORIGINS": "https://inference.hexelstudio.com"
+    "FABRIC_EDGE_INFERENCE_URL": "https://inference.nscale.host",
+    "FABRIC_INFERENCE_ALLOWED_ORIGINS": "https://inference.nscale.host,https://inference.hexelstudio.com"
   }
 }
