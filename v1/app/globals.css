@@ -99,6 +99,10 @@
   /* Small corners: controls 4px, the base radius 6px, cards 8px. */
   --radius: 0.375rem;
   --bracket: color-mix(in oklab, var(--foreground) 55%, transparent);
+  /* Menus and dialogs lift only slightly: their hairline border does the work. */
+  --surface-shadow-small: none;
+  --surface-shadow-menu: 0 4px 14px rgb(0 0 0 / 0.06);
+  --surface-shadow-dialog: 0 10px 30px rgb(0 0 0 / 0.08);
   --sidebar: oklch(0.975 0.003 95);
   --sidebar-foreground: oklch(0.2 0.005 90);
   --sidebar-primary: oklch(0.2 0.005 90);
@@ -298,6 +302,9 @@
   --chart-4: oklch(0.82 0.14 95);
   --chart-5: oklch(0.7 0.17 30);
   --bracket: oklch(1 0 0 / 50%);
+  --surface-shadow-small: none;
+  --surface-shadow-menu: 0 4px 14px rgb(0 0 0 / 0.35);
+  --surface-shadow-dialog: 0 10px 30px rgb(0 0 0 / 0.4);
   --sidebar: oklch(0.185 0.004 90);
   --sidebar-foreground: oklch(0.95 0.003 95);
   --sidebar-primary: oklch(0.95 0.003 95);

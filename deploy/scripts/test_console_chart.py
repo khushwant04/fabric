@@ -120,6 +120,34 @@ class ConsoleChartTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("without a port", result.stderr)
 
+    def test_istio_exposes_console_over_https_only(self):
+        result = render(CONSOLE_VALUES | {
+            "console.istio.enabled": "true",
+            "console.istio.tls.credentialName": "console-tls",
+            "istio.gatewaySelector.istio": "ingressgateway",
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resources = [item for item in yaml.safe_load_all(result.stdout) if item]
+        console = [item for item in resources
+                   if item["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "console"]
+        gateway = next(item for item in console if item["kind"] == "Gateway")
+        service = next(item for item in console if item["kind"] == "VirtualService")
+        https, http = gateway["spec"]["servers"]
+        self.assertEqual(https["hosts"], ["console.example.com"])
+        self.assertEqual(https["tls"], {"mode": "SIMPLE", "credentialName": "console-tls"})
+        self.assertTrue(http["tls"]["httpsRedirect"])
+        self.assertEqual(gateway["spec"]["selector"], {"istio": "ingressgateway"})
+        route = service["spec"]["http"][0]["route"][0]["destination"]
+        self.assertEqual(route["host"], "fabric-fabric-control-plane-console.default.svc.cluster.local")
+
+    def test_istio_requires_a_tls_credential(self):
+        result = render(CONSOLE_VALUES | {
+            "console.istio.enabled": "true",
+            "istio.gatewaySelector.istio": "ingressgateway",
+        })
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("console.istio.tls.credentialName is required", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

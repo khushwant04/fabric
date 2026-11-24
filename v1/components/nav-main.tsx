@@ -37,8 +37,8 @@ export function NavMain({
   const { isMobile, setOpenMobile } = useSidebar()
 
   return (
-    // Plain hover and active states, no gliding highlight. The active page carries an ink
-    // bar on its left edge.
+    // Plain hover and active states, no gliding highlight. The active page sits on a paper
+    // tile with a hairline border, like a selected tab.
     <nav className="flex flex-col gap-4" aria-label="Fabric navigation">
       {sections.map((section, sectionIndex) => {
         const items = section.items.filter(
@@ -67,7 +67,7 @@ export function NavMain({
                         render={<Link href={item.url} prefetch={false} />}
                         isActive={isActive}
                         tooltip={item.title}
-                        className="h-8 gap-2.5 rounded-sm px-3 text-[14px] font-normal text-sidebar-foreground/80 transition-none hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground data-active:shadow-[inset_2px_0_0_var(--sidebar-foreground)] [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0!"
+                        className="h-8 gap-2.5 rounded-sm px-3 text-[14px] font-normal text-sidebar-foreground/80 transition-none hover:bg-sidebar-accent/70 hover:text-sidebar-foreground data-active:bg-card data-active:font-medium data-active:text-sidebar-foreground data-active:ring-1 data-active:ring-border data-active:hover:bg-card [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0!"
                         onClick={() => { if (isMobile) setOpenMobile(false) }}
                         // Warm only the destination the user is about to open.
                         onMouseEnter={() => { if (!isActive) router.prefetch(item.url) }}
