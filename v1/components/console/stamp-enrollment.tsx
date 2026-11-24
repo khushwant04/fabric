@@ -30,8 +30,8 @@ type SetupPanel = "cluster" | "enrollment" | "runtime"
 
 const panels = [
   { id: "cluster", title: "Prepare cluster", description: "VM setup or existing Kubernetes", icon: ServerIcon },
-  { id: "enrollment", title: "Enroll stamp", description: "Connect the Fabric operator", icon: KeyRoundIcon },
   { id: "runtime", title: "Runtime & gateway", description: "GPU runtime, hostname and TLS", icon: Settings2Icon },
+  { id: "enrollment", title: "Enroll stamp", description: "Generate the token and command", icon: KeyRoundIcon },
 ] as const
 
 function CopyCommand({ command, label }: { command: string; label: string }) {
@@ -125,7 +125,7 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
         <nav aria-label="Stamp setup steps" className="shrink-0 border-b border-border/60 px-3 py-2 sm:px-4">
           <ol className="grid grid-cols-3 gap-1">
             {panels.map((item, index) => {
-              const done = item.id === "cluster" ? panel !== "cluster" : item.id === "enrollment" ? !!state.enrollmentToken : false
+              const done = item.id === "cluster" ? panel !== "cluster" : item.id === "runtime" ? panel === "enrollment" : !!state.enrollmentToken
               return <li key={item.id} className="min-w-0">
                 <button type="button" disabled={pending} aria-current={panel === item.id ? "step" : undefined} onClick={() => setPanel(item.id)} className={cn(
                   "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:px-3",
@@ -177,14 +177,14 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
             <p className="text-sm leading-6 text-muted-foreground">{k3s ? "Run one command on the VM. It prepares the machine, installs the stamp and joins it to this account." : "Install the Fabric Helm chart on your cluster. Its operator joins this account and reconciles the models you deploy."}</p>
             <Field><FieldLabel htmlFor={`${id}-control`}>Control-plane address</FieldLabel><Input id={`${id}-control`} type="url" value={setup.controlPlaneUrl} onChange={(event) => update("controlPlaneUrl", event.target.value)} placeholder="https://control.your-domain.com" disabled={pending} /><FieldDescription>The HTTPS address reachable from your cluster.</FieldDescription></Field>
             <div className="rounded-md border border-border px-4 py-3 text-xs"><p className="font-medium">Release</p><p className="mt-1 font-mono text-[11px] text-muted-foreground">{STAMP_RELEASE.slice(0, 12)} · chart, agent, gateway and model host</p></div>
-            {k3s ? <p className="text-xs leading-5 text-muted-foreground">{setup.gatewayHost ? <>Public endpoint: <code>https://{setup.gatewayHost}</code> with a Let&apos;s Encrypt certificate.</> : <>No public hostname yet: the stamp enrolls, but the edge gateway cannot route to it. Add one in Runtime &amp; gateway.</>}</p> : null}
+            {k3s ? <p className="text-xs leading-5 text-muted-foreground">{setup.gatewayHost ? <>Public endpoint: <code>https://{setup.gatewayHost}</code> with a Let&apos;s Encrypt certificate.</> : <>No public hostname: the stamp enrolls, but the edge gateway cannot route to it. Go back to Runtime &amp; gateway to add one.</>}</p> : null}
             {state.enrollmentToken ? <>
               <Alert><KeyRoundIcon /><AlertTitle>{k3s ? "Setup command ready" : "Enrollment command ready"}</AlertTitle><AlertDescription>Copy it and run it {k3s ? "on the VM" : "against your cluster"}. It carries a single-use token, valid until {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "its expiry"}, and is not shown again after you finish.</AlertDescription></Alert>
               {commandError ? <FieldError>{commandError}</FieldError> : null}
               {command ? <CopyCommand command={command} label={k3s ? "Run on the VM" : "Helm enrollment command"} /> : null}
               <p className="text-xs leading-5 text-muted-foreground">{k3s ? "Takes a few minutes and finishes when the stamp has enrolled. The first model you deploy also pulls the model-host image once." : "Run once for a new stamp. Helm stores the token in its release and enrollment Secret; the agent retains its identity on persistent storage."}</p>
               <ol className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/30 px-4 py-3 text-xs leading-5"><li className="font-medium">What happens next</li><li className="text-muted-foreground">1. Run the command. {k3s ? "It installs k3s, the GPU runtime and the stamp." : "Helm installs the stamp operator."}</li><li className="text-muted-foreground">2. The stamp appears under Inference stamps and turns Active within a few minutes.</li><li className="text-muted-foreground">3. Deploy a model; Fabric places it on the stamp.</li></ol>
-              {setup.gatewayHost ? <p className="text-xs leading-5 text-muted-foreground">Ready placements report <code>https://{setup.gatewayHost}</code>. Approve this origin in the console gateway configuration so the console can reach it.</p> : <p className="text-xs leading-5 text-muted-foreground">Public inference also needs a gateway hostname and TLS. You can configure these in Runtime &amp; gateway.</p>}
+              {setup.gatewayHost ? <p className="text-xs leading-5 text-muted-foreground">Ready placements report <code>https://{setup.gatewayHost}</code>. Approve this origin in the console gateway configuration so the console can reach it.</p> : <p className="text-xs leading-5 text-muted-foreground">Public inference also needs a gateway hostname and TLS, set in Runtime &amp; gateway.</p>}
             </> : <>
               <Field><FieldLabel htmlFor={`${id}-expiry`}>Token lifetime (minutes)</FieldLabel><Input id={`${id}-expiry`} type="number" min={5} max={1440} value={expiresInMinutes} onChange={(event) => { setDirty(true); setExpiresInMinutes(event.target.value) }} disabled={pending} /><FieldDescription>Generate after your cluster is ready. Valid for 5 minutes to 24 hours.</FieldDescription></Field>
               <div className="rounded-md bg-muted/40 px-4 py-3"><p className="flex items-center gap-2 text-xs font-medium"><TerminalIcon className="size-3.5 text-muted-foreground" />{k3s ? "Your setup command will appear here" : "Your Helm command will appear here"}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">Generate a token to fill the command with your stamp name, cluster settings and account credential.</p></div>
@@ -228,12 +228,12 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
         <FormDrawerFooter>
           <div className="mr-auto flex min-w-0 items-center gap-2">
             <Button type="button" variant="ghost" size="icon-sm" className="hidden md:inline-flex" aria-label={expanded ? "Restore drawer width" : "Widen drawer"} aria-pressed={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? <Minimize2Icon /> : <Maximize2Icon />}</Button>
-            <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{panel === "cluster" ? "Prepare your infrastructure" : panel === "runtime" ? (k3s ? "Settings apply to the setup command" : "Settings apply to the Helm command") : state.enrollmentToken ? "Run the command, then finish" : "Enroll when your cluster is ready"}</span>
+            <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{panel === "cluster" ? "Prepare your infrastructure" : panel === "runtime" ? "Set the GPU runtime, hostname and TLS" : state.enrollmentToken ? "Run the command, then finish" : "Enroll when your cluster is ready"}</span>
           </div>
           {finished ? null : <Button type="button" variant="outline" disabled={pending} onClick={() => request()}>Cancel</Button>}
           {/* Distinct keys keep each step button its own DOM node: reusing one node would let
               the click that switches to the enrollment step also submit the form. */}
-          {panel === "cluster" ? <Button key="continue" type="button" disabled={pending} onClick={() => setPanel("enrollment")}>Continue<ArrowRightIcon /></Button> : panel === "runtime" ? <Button key="back" type="button" disabled={pending} onClick={() => setPanel("enrollment")}><ArrowLeftIcon />Enrollment</Button> : finished ? <Button key="done" type="button" onClick={() => request()}><CheckIcon />Done</Button> : <Button key="generate" type="submit" disabled={pending || !!generationError}>{pending ? <Spinner /> : <KeyRoundIcon />}{pending ? "Generating…" : "Generate token"}</Button>}
+          {panel === "cluster" ? <Button key="continue" type="button" disabled={pending} onClick={() => setPanel("runtime")}>Continue<ArrowRightIcon /></Button> : panel === "runtime" ? <><Button key="back" type="button" variant="outline" disabled={pending} onClick={() => setPanel("cluster")}><ArrowLeftIcon />Back</Button><Button key="to-enroll" type="button" disabled={pending} onClick={() => setPanel("enrollment")}>Continue<ArrowRightIcon /></Button></> : finished ? <Button key="done" type="button" onClick={() => request()}><CheckIcon />Done</Button> : <Button key="generate" type="submit" disabled={pending || !!generationError}>{pending ? <Spinner /> : <KeyRoundIcon />}{pending ? "Generating…" : "Generate token"}</Button>}
         </FormDrawerFooter>
       </form>
     </DrawerPanel>
