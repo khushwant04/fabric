@@ -163,3 +163,11 @@ test("a GPU host without libcuda is still reported as a missing GPU runtime", ()
   const gpu = host({ phase: "Running", conditions: [{ type: "PodScheduled", status: "True" }], events: [event("Scheduled"), event("Pulled"), event("Started")], container_state: "waiting", container_reason: "CrashLoopBackOff", log_tail: "RuntimeError: Failed to infer device type" })
   assert.equal(diagnoseHost(gpu)!.title, "GPU runtime missing: the model server cannot see a GPU")
 })
+
+test("an eviction for disk is diagnosed as out of disk, and the tainted node as such", () => {
+  const evicted = host({ phase: "Failed", conditions: [{ type: "PodScheduled", status: "True" }], container_state: "terminated", container_reason: "Error", events: [event("Scheduled"), event("Pulled"), event("Started"), event("Evicted", "Warning", 1, "The node was low on resource: ephemeral-storage. Threshold quantity: 5144404863, available: 4715384Ki.")] })
+  assert.equal(hostSummary(evicted).label, "Out of disk")
+  assert.match(diagnoseHost(evicted)!.hint, /Grow the boot disk/)
+  const pending = host({ phase: "Pending", events: [event("FailedScheduling", "Warning", 1, "0/1 nodes are available: 1 node(s) had untolerated taint(s).")] })
+  assert.match(diagnoseHost(pending)!.title, /tainted/)
+})

@@ -214,8 +214,19 @@ export function diagnoseHost(host: HostSnapshot): Diagnosis | null {
     }
   }
   const reason = host.container_reason ?? ""
+  // The kubelet evicts pods when the node's disk fills, then taints the node so nothing new
+  // schedules until space is freed. Model images and weights are large, so this is common.
+  const diskPressure = host.events.some((event) => /low on resource: ephemeral-storage|DiskPressure|disk-pressure/i.test(event.message) || (event.reason === "Evicted" && /ephemeral-storage/i.test(event.message)))
+  if (diskPressure) {
+    return {
+      label: "Out of disk",
+      title: "The machine ran out of disk, so Kubernetes evicted the model server",
+      hint: "The model image, its weights and (on Neuron) the compiled model all live on the node's disk. Grow the boot disk (200 GB or more for a model of this size), or free space with `sudo k3s crictl rmi --prune`. The node stays tainted, and new replicas unschedulable, until space is free.",
+    }
+  }
   if (failed === "scheduled") {
     const message = [...host.events].reverse().find((event) => event.reason === "FailedScheduling")?.message ?? ""
+    if (/untolerated taint/i.test(message)) return { title: "The node is tainted, so the model host cannot be scheduled", hint: "Kubernetes taints a node under pressure, most often node.kubernetes.io/disk-pressure after its disk fills. Free disk space or grow the disk; the taint clears on its own a minute later. `sudo kubectl describe node` shows the taint." }
     if (/nvidia\.com\/gpu/i.test(message)) return { title: "No free GPU on this stamp", hint: "Every GPU is taken, or the device plugin advertises none. Free a GPU by deleting another deployment, or check the stamp's GPU runtime in its Activity log." }
     return { title: "The model host could not be scheduled", hint: message || "No node matched the host's requirements." }
   }
