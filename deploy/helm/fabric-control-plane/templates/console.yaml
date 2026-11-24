@@ -27,6 +27,19 @@
 {{- if and $port (or (lt (int $port) 1) (gt (int $port) 65535)) }}
 {{- fail "console.baseUrl port must be between 1 and 65535" -}}
 {{- end }}
+{{- $consoleIstio := $console.istio | default dict -}}
+{{- $istioSelector := $consoleIstio.gatewaySelector | default .Values.istio.gatewaySelector -}}
+{{- if $consoleIstio.enabled }}
+{{- if $port }}
+{{- fail "console.baseUrl must use a DNS hostname without a port when console.istio.enabled=true" -}}
+{{- end }}
+{{- if not $consoleIstio.tls.credentialName }}
+{{- fail "console.istio.tls.credentialName is required: the console carries session cookies and is served over HTTPS only" -}}
+{{- end }}
+{{- if not $istioSelector }}
+{{- fail "console.istio.gatewaySelector (or istio.gatewaySelector) is required when console.istio.enabled is set" -}}
+{{- end }}
+{{- end }}
 {{- if and $console.ingress.enabled $port }}
 {{- fail "console.baseUrl must use a DNS hostname without a port when console.ingress.enabled=true" -}}
 {{- end }}
@@ -202,5 +215,58 @@ spec:
                 name: {{ $name }}
                 port:
                   number: {{ $console.service.port }}
+{{- end }}
+{{- if $consoleIstio.enabled }}
+{{- $host := trimPrefix "https://" $baseUrl }}
+---
+# Exposed through an existing Istio ingress gateway: a cluster running the Istio addon has
+# no IngressClass to serve an Ingress.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  selector:
+    {{- toYaml $istioSelector | nindent 4 }}
+  servers:
+    # Port names are release-scoped: Istio merges servers from every Gateway bound to the
+    # shared ingress workload, and identical names collide.
+    - port:
+        number: 443
+        name: {{ $name }}-https
+        protocol: HTTPS
+      hosts: [{{ $host | quote }}]
+      tls:
+        mode: SIMPLE
+        credentialName: {{ $consoleIstio.tls.credentialName }}
+    - port:
+        number: 80
+        name: {{ $name }}-http
+        protocol: HTTP
+      hosts: [{{ $host | quote }}]
+      tls:
+        httpsRedirect: true
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fabric-control-plane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  hosts: [{{ $host | quote }}]
+  gateways:
+    - {{ $name }}
+  http:
+    - route:
+        - destination:
+            host: {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: {{ $console.service.port }}
+      timeout: {{ $consoleIstio.timeout | default "120s" }}
 {{- end }}
 {{- end }}

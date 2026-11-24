@@ -234,6 +234,16 @@ console:
     tls:
       enabled: false
       secretName: ""
+  # Expose the console through an existing Istio ingress gateway instead of an Ingress, like
+  # the control plane and edge istio options. The host is taken from baseUrl.
+  istio:
+    enabled: false
+    # Defaults to the top-level istio.gatewaySelector.
+    gatewaySelector: {}
+    tls:
+      # A TLS Secret in the ingress gateway's namespace, e.g. issued by cert-manager.
+      credentialName: ""
+    timeout: 120s
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 1, memory: 1Gi}
