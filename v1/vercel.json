@@ -2,6 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["bom1"],
   "env": {
+    "FABRIC_CONTROL_PLANE_PUBLIC_URL": "https://api.nscale.host",
+    "FABRIC_CONTROL_PLANE_JWT_ISSUER": "https://api.nscale.host",
     "FABRIC_EDGE_INFERENCE_URL": "https://inference.nscale.host",
     "FABRIC_INFERENCE_ALLOWED_ORIGINS": "https://inference.nscale.host,https://inference.hexelstudio.com"
   }
