@@ -98,7 +98,6 @@
   --chart-5: oklch(0.6 0.18 30);
   /* Small corners: controls 4px, the base radius 6px, cards 8px. */
   --radius: 0.375rem;
-  --grid-line: color-mix(in oklab, var(--foreground) 5%, transparent);
   --bracket: color-mix(in oklab, var(--foreground) 55%, transparent);
   --sidebar: oklch(0.975 0.003 95);
   --sidebar-foreground: oklch(0.2 0.005 90);
@@ -123,18 +122,14 @@
   }
 }
 
-/* The console shell: a paper sidebar beside the page canvas, whose content scrolls on its
-   own so the sidebar stays put. The canvas carries a faint engineering grid. */
+/* The console shell: a paper sidebar beside a plain page canvas, whose content scrolls on
+   its own so the sidebar stays put. */
 .fabric-layout { height: 100svh; min-height: 0; overflow: hidden; }
 [data-slot="sidebar-wrapper"].fabric-layout { min-height: 0; }
 .fabric-inset { min-width: 0; min-height: 0; overflow: hidden; background: var(--background); }
 .fabric-page-content {
   scrollbar-gutter: stable;
   background-color: var(--background);
-  background-image:
-    linear-gradient(var(--grid-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-  background-size: 32px 32px;
 }
 
 /* Corner brackets: the console's one decorative mark, on headline tiles and hero panels. */
@@ -302,7 +297,6 @@
   --chart-3: oklch(0.74 0.14 150);
   --chart-4: oklch(0.82 0.14 95);
   --chart-5: oklch(0.7 0.17 30);
-  --grid-line: oklch(1 0 0 / 4%);
   --bracket: oklch(1 0 0 / 50%);
   --sidebar: oklch(0.185 0.004 90);
   --sidebar-foreground: oklch(0.95 0.003 95);
