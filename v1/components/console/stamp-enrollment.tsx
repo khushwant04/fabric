@@ -1,7 +1,8 @@
 "use client"
 
 import { useActionState, useId, useState, type FormEvent, type RefObject } from "react"
-import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, ChevronRightIcon, CopyIcon, ExternalLinkIcon, KeyRoundIcon, Maximize2Icon, Minimize2Icon, PlusIcon, ServerIcon, Settings2Icon, ShieldCheckIcon, TerminalIcon } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CopyIcon, ExternalLinkIcon, KeyRoundIcon, Maximize2Icon, Minimize2Icon, PlusIcon, ServerIcon, Settings2Icon, ShieldCheckIcon, TerminalIcon } from "lucide-react"
 
 import { createEnrollmentToken, type ActionState } from "@/app/(console)/actions"
 import { DrawerPanel, DrawerTriggerButton, FormDrawerBody, FormDrawerFooter, useFormDrawer, useGuardedClose } from "@/components/console/form-drawer"
@@ -91,15 +92,17 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
   const commandError = state.enrollmentToken ? stampSetupError(effectiveSetup) : null
   const selectedPanel = panels.find((item) => item.id === panel)!
   const PanelIcon = selectedPanel.icon
-  // A generated token is lost on close (it is single-use and never stored), so closing
-  // then asks for confirmation, as it does for edited settings.
+  const router = useRouter()
+  // Generating the command finishes the console's part: the stamp joins on its own once the
+  // command runs. Closing then is completion, not a discard, so it never asks to confirm;
+  // only unsaved settings before a token exists do.
+  const finished = !!state.enrollmentToken
   const { request, confirm } = useGuardedClose({
     pending,
-    dirty: dirty || !!state.enrollmentToken,
-    close: () => setOpen(false),
-    copy: state.enrollmentToken
-      ? { title: "Close enrollment?", description: "The enrollment command and its single-use token are cleared when this drawer closes. Copy the command first if you still need it." }
-      : { title: "Discard stamp setup?", description: "The settings you entered for this stamp will be lost." },
+    dirty,
+    succeeded: finished,
+    close: () => { setOpen(false); if (finished) router.refresh() },
+    copy: { title: "Discard stamp setup?", description: "The settings you entered for this stamp will be lost." },
   })
 
   // A newly issued token is shown on the enrollment panel. Adjusting state during render
@@ -176,10 +179,11 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
             <div className="rounded-md border border-border px-4 py-3 text-xs"><p className="font-medium">Release</p><p className="mt-1 font-mono text-[11px] text-muted-foreground">{STAMP_RELEASE.slice(0, 12)} · chart, agent, gateway and model host</p></div>
             {k3s ? <p className="text-xs leading-5 text-muted-foreground">{setup.gatewayHost ? <>Public endpoint: <code>https://{setup.gatewayHost}</code> with a Let&apos;s Encrypt certificate.</> : <>No public hostname yet: the stamp enrolls, but the edge gateway cannot route to it. Add one in Runtime &amp; gateway.</>}</p> : null}
             {state.enrollmentToken ? <>
-              <Alert><KeyRoundIcon /><AlertTitle>{k3s ? "Setup command ready" : "Enrollment command ready"}</AlertTitle><AlertDescription>Includes your single-use token, valid until {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "its expiry"}. Closing this drawer clears it.</AlertDescription></Alert>
+              <Alert><KeyRoundIcon /><AlertTitle>{k3s ? "Setup command ready" : "Enrollment command ready"}</AlertTitle><AlertDescription>Copy it and run it {k3s ? "on the VM" : "against your cluster"}. It carries a single-use token, valid until {state.expiresAt ? new Date(state.expiresAt).toLocaleString() : "its expiry"}, and is not shown again after you finish.</AlertDescription></Alert>
               {commandError ? <FieldError>{commandError}</FieldError> : null}
               {command ? <CopyCommand command={command} label={k3s ? "Run on the VM" : "Helm enrollment command"} /> : null}
               <p className="text-xs leading-5 text-muted-foreground">{k3s ? "Takes a few minutes and finishes when the stamp has enrolled. The first model you deploy also pulls the model-host image once." : "Run once for a new stamp. Helm stores the token in its release and enrollment Secret; the agent retains its identity on persistent storage."}</p>
+              <ol className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/30 px-4 py-3 text-xs leading-5"><li className="font-medium">What happens next</li><li className="text-muted-foreground">1. Run the command. {k3s ? "It installs k3s, the GPU runtime and the stamp." : "Helm installs the stamp operator."}</li><li className="text-muted-foreground">2. The stamp appears under Inference stamps and turns Active within a few minutes.</li><li className="text-muted-foreground">3. Deploy a model; Fabric places it on the stamp.</li></ol>
               {setup.gatewayHost ? <p className="text-xs leading-5 text-muted-foreground">Ready placements report <code>https://{setup.gatewayHost}</code>. Approve this origin in the console gateway configuration so the console can reach it.</p> : <p className="text-xs leading-5 text-muted-foreground">Public inference also needs a gateway hostname and TLS. You can configure these in Runtime &amp; gateway.</p>}
             </> : <>
               <Field><FieldLabel htmlFor={`${id}-expiry`}>Token lifetime (minutes)</FieldLabel><Input id={`${id}-expiry`} type="number" min={5} max={1440} value={expiresInMinutes} onChange={(event) => { setDirty(true); setExpiresInMinutes(event.target.value) }} disabled={pending} /><FieldDescription>Generate after your cluster is ready. Valid for 5 minutes to 24 hours.</FieldDescription></Field>
@@ -224,12 +228,12 @@ function EnrollmentSession({ config, open, setOpen, triggerRef, onOpenChangeComp
         <FormDrawerFooter>
           <div className="mr-auto flex min-w-0 items-center gap-2">
             <Button type="button" variant="ghost" size="icon-sm" className="hidden md:inline-flex" aria-label={expanded ? "Restore drawer width" : "Widen drawer"} aria-pressed={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? <Minimize2Icon /> : <Maximize2Icon />}</Button>
-            <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{panel === "cluster" ? "Prepare your infrastructure" : panel === "runtime" ? (k3s ? "Settings apply to the setup command" : "Settings apply to the Helm command") : state.enrollmentToken ? "Keep your enrollment token private" : "Enroll when your cluster is ready"}</span>
+            <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{panel === "cluster" ? "Prepare your infrastructure" : panel === "runtime" ? (k3s ? "Settings apply to the setup command" : "Settings apply to the Helm command") : state.enrollmentToken ? "Run the command, then finish" : "Enroll when your cluster is ready"}</span>
           </div>
-          <Button type="button" variant="outline" disabled={pending} onClick={() => request()}>Close</Button>
+          {finished ? null : <Button type="button" variant="outline" disabled={pending} onClick={() => request()}>Cancel</Button>}
           {/* Distinct keys keep each step button its own DOM node: reusing one node would let
               the click that switches to the enrollment step also submit the form. */}
-          {panel === "cluster" ? <Button key="continue" type="button" disabled={pending} onClick={() => setPanel("enrollment")}>Continue<ArrowRightIcon /></Button> : panel === "runtime" ? <Button key="back" type="button" disabled={pending} onClick={() => setPanel("enrollment")}><ArrowLeftIcon />Enrollment</Button> : state.enrollmentToken ? <Button key="settings" type="button" disabled={pending} onClick={() => setPanel("runtime")}>Settings<ChevronRightIcon /></Button> : <Button key="generate" type="submit" disabled={pending || !!generationError}>{pending ? <Spinner /> : <KeyRoundIcon />}{pending ? "Generating…" : "Generate token"}</Button>}
+          {panel === "cluster" ? <Button key="continue" type="button" disabled={pending} onClick={() => setPanel("enrollment")}>Continue<ArrowRightIcon /></Button> : panel === "runtime" ? <Button key="back" type="button" disabled={pending} onClick={() => setPanel("enrollment")}><ArrowLeftIcon />Enrollment</Button> : finished ? <Button key="done" type="button" onClick={() => request()}><CheckIcon />Done</Button> : <Button key="generate" type="submit" disabled={pending || !!generationError}>{pending ? <Spinner /> : <KeyRoundIcon />}{pending ? "Generating…" : "Generate token"}</Button>}
         </FormDrawerFooter>
       </form>
     </DrawerPanel>
