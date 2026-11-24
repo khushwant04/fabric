@@ -9,42 +9,42 @@ description = "Fabric inference ingress: local token verification, routing, and 
 requires-python = ">=3.12"
 
 dependencies = [
-  "fastapi==0.162.0",
+  "fastapi==0.165.0",
   "uvicorn[standard]==0.54.0",
   "httpx==0.28.1",
-  "pydantic==2.14.2",
-  "pydantic-settings==2.16.2",
+  "pydantic==2.14.4",
+  "pydantic-settings==2.16.3",
   "pyjwt[crypto]==2.15.1",
   "cryptography==50.0.2",
   "python-json-logger==4.2.0",
   # Starlette parses multipart bodies only when this is installed, and the audio
   # endpoints are multipart. Without it those routes raise at request time rather
   # than at import, so the gap would not show until a caller sent audio.
-  "python-multipart==0.0.33",
+  "python-multipart==0.0.34",
 ]
 
 [project.optional-dependencies]
 # PDF text extraction for file search (docs/file-search.md). Pure Python, no dependencies;
 # opt-in because it parses untrusted documents in the gateway process. Without it a PDF
 # upload is refused with a clear error.
-pdf = ["pypdf==7.1.0"]
+pdf = ["pypdf==7.1.1"]
 # code_interpreter's e2b backend (docs/hosted-tools.md). Imported lazily, only when
 # FABRIC_DP_CODE_INTERPRETER_BACKEND=e2b; the default image installs it.
 e2b = ["e2b-code-interpreter==2.11.10"]
 dev = [
   "pytest==9.2.0",
-  "pytest-asyncio==1.4.1.post1",
-  "ruff==0.17.3",
+  "pytest-asyncio==1.5.0",
+  "ruff==0.17.6",
   # End-to-end test of /v1/messages with the official client; skipped when absent.
-  "anthropic==2.8.0",
+  "anthropic==2.12.0",
   # Compatibility test running the OpenAI Agents SDK against the gateway; skipped when absent.
-  "openai-agents==0.24.0",
+  "openai-agents==0.25.0",
   # Also the OpenAI SDK compatibility test of /v1/files and /v1/vector_stores.
-  "openai==3.16.2",
+  "openai==3.57.0",
   # Interop of the MCP connector client with the reference server; skipped when absent.
   "mcp==2.3.0",
   # PDF extraction test for file search.
-  "pypdf==7.1.0",
+  "pypdf==7.1.1",
 ]
 
 [tool.hatch.build.targets.wheel]
