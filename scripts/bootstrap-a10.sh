@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Bootstrap an Azure A10 GPU VM for Fabric research runs, from a bare
-# Ubuntu 22.04 LTS server image with no NVIDIA driver installed.
+# Ubuntu 22.04 or 24.04 LTS server image with no NVIDIA driver installed.
 #
 # Target host: Standard_NV72ads_A10_v5 (2 x A10-24Q vGPU, 24 GiB each).
 # For a k3s serving node, use prepare-a10-host.sh and install-k3s-gpu.sh instead.
@@ -53,6 +53,11 @@ CUDA_HOME="/usr/local/cuda-${CUDA_VERSION}"
 CUDA_APT_PACKAGE="cuda-toolkit-12-8"
 CUDA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
 
+# The newest kernel the pinned GRID driver builds against. Azure's Ubuntu 24.04 image
+# tracks a rolling kernel (7.0 at the time of writing) that the 570 GRID driver's module
+# does not compile for; such hosts are moved to Ubuntu's LTS Azure kernel (6.8) first.
+GRID_MAX_KERNEL="${FABRIC_GRID_MAX_KERNEL:-6.14}"
+
 # The two A10s present as "NVIDIA A10-24Q" under vGPU. A mismatch is a warning:
 # the benchmark harness itself refuses to record a run under the wrong target.
 EXPECTED_GPU_FRAGMENT="A10"
@@ -98,7 +103,8 @@ if [ -r /etc/os-release ]; then
     info "distribution: ${PRETTY_NAME:-unknown}"
     case "${VERSION_ID:-}" in
         22.04) ;;
-        *) warn "this script targets Ubuntu 22.04 LTS; found ${VERSION_ID:-unknown}. The CUDA repository and driver pin are chosen for 22.04." ;;
+        24.04) CUDA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb" ;;
+        *) warn "this script targets Ubuntu 22.04 or 24.04 LTS; found ${VERSION_ID:-unknown}." ;;
     esac
 fi
 info "kernel:       $(uname -r)"
@@ -157,6 +163,37 @@ info "installed build tooling, dkms, and headers for $(uname -r)"
 log "Phase 2: NVIDIA driver"
 # --------------------------------------------------------------------------
 
+# kernel_too_new: the running kernel is newer than the GRID driver supports.
+kernel_too_new() {
+    local running
+    running="$(uname -r | cut -d- -f1 | cut -d. -f1,2)"
+    [ "$(printf '%s\n%s\n' "$GRID_MAX_KERNEL" "$running" | sort -V | tail -1)" != "$GRID_MAX_KERNEL" ]
+}
+
+# use_lts_kernel: install Ubuntu's LTS Azure kernel and make it the default boot entry.
+use_lts_kernel() {
+    local flavour="azure" lts_kernel
+    [ "${VERSION_ID:-}" = "24.04" ] || die "kernel $(uname -r) is newer than GRID $DRIVER_VERSION supports ($GRID_MAX_KERNEL); boot a $GRID_MAX_KERNEL or older kernel and re-run"
+    info "kernel $(uname -r) is newer than GRID $DRIVER_VERSION supports; installing the LTS $flavour kernel"
+    $SUDO apt-get install -y -qq "linux-image-${flavour}-lts-24.04" "linux-headers-${flavour}-lts-24.04" "linux-modules-extra-${flavour}-lts-24.04" 2>/dev/null \
+        || $SUDO apt-get install -y -qq "linux-image-${flavour}-lts-24.04" "linux-headers-${flavour}-lts-24.04"
+    lts_kernel="$(find /boot -maxdepth 1 -name "vmlinuz-6.8.*-${flavour}" -printf '%f\n' | sed 's/^vmlinuz-//' | sort -V | tail -1)"
+    [ -n "$lts_kernel" ] || die "the LTS kernel did not install; check the apt output above"
+    # Sourced after the cloud image's own grub.d settings, so it wins.
+    printf 'GRUB_DEFAULT="Advanced options for Ubuntu>Ubuntu, with Linux %s"\n' "$lts_kernel" | $SUDO tee /etc/default/grub.d/99-fabric-kernel.cfg >/dev/null
+    $SUDO update-grub >/dev/null 2>&1
+    cat <<EOF
+
+Kernel $lts_kernel is installed and set as the default boot entry, because GRID
+$DRIVER_VERSION cannot build its module for $(uname -r).
+
+  1. sudo reboot
+  2. re-run this script; it installs the driver on the LTS kernel and continues
+
+EOF
+    exit 0
+}
+
 if [ "$SKIP_DRIVER" -eq 1 ]; then
     info "skipped by request"
     driver_works || die "--skip-driver was passed but nvidia-smi does not work"
@@ -166,6 +203,7 @@ elif driver_works; then
     [ "$INSTALLED_DRIVER" = "$DRIVER_VERSION" ] || \
         warn "installed driver $INSTALLED_DRIVER differs from the pinned $DRIVER_VERSION; artifacts will record what is actually present"
 else
+    kernel_too_new && use_lts_kernel
     info "no working driver; installing the Azure GRID driver $DRIVER_VERSION"
     mkdir -p "$DRIVER_DOWNLOAD_DIR"
     cd "$DRIVER_DOWNLOAD_DIR"
@@ -192,7 +230,11 @@ else
         --silent \
         --dkms \
         --no-install-compat32-libs \
-        || die "driver installation failed; inspect /var/log/nvidia-installer.log"
+        || {
+            echo "   last build errors from /var/log/nvidia-installer.log:" >&2
+            $SUDO grep -iE "error:|fatal|unsupported|not supported" /var/log/nvidia-installer.log 2>/dev/null | tail -8 | sed 's/^/   /' >&2
+            die "driver installation failed on kernel $(uname -r); inspect /var/log/nvidia-installer.log"
+        }
 
     cd "$REPO_ROOT"
     $SUDO modprobe nvidia 2>/dev/null || true
