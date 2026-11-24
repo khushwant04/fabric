@@ -66,10 +66,10 @@ function StatTile({
       className={cn("flex min-w-0 flex-col gap-3 bg-card p-4", className)}
       {...props}
     >
-      <div className="text-[13px] text-muted-foreground">{label}</div>
+      <div className="font-mono text-[11px] font-medium tracking-[0.06em] text-muted-foreground uppercase">{label}</div>
       <div className="flex items-end justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-1">
-          <span className="text-2xl leading-none font-semibold tracking-[-0.02em] whitespace-nowrap">
+          <span className="text-2xl leading-none font-medium tracking-[-0.02em] whitespace-nowrap">
             {value}
           </span>
           {unit && (

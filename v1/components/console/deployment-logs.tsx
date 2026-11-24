@@ -283,7 +283,7 @@ function LogViewer({ host }: { host: HostSnapshot }) {
       <h4 className="flex shrink-0 items-center gap-2 text-sm font-medium"><TerminalIcon className="size-4 text-muted-foreground" aria-hidden="true" />Server log</h4>
       {host.log_previous ? <span className="rounded-md bg-status-critical/8 px-2 py-0.5 text-xs text-status-critical">Previous instance, before the last restart</span> : null}
     </div>
-    <div className="overflow-hidden rounded-xl border border-border bg-muted/30">
+    <div className="overflow-hidden rounded-md border border-border bg-muted/30">
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-2.5 py-2">
         <div className="relative min-w-40 flex-1">
           <SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />

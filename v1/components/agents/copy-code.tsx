@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 
 export function CopyCode({ code, label, className }: { code: string; label: string; className?: string }) {
   const { copied, copy } = useCopyFeedback()
-  return <div className={cn("overflow-hidden rounded-xl border bg-muted/30", className)}>
+  return <div className={cn("overflow-hidden rounded-md border bg-muted/30", className)}>
     <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
       <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
       <Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => { void copy(code) }} aria-label={`Copy ${label}`}>

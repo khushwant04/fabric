@@ -65,16 +65,16 @@ const toneFill: Record<string, string> = {
 /** Serving phases as one segmented bar, so the mix reads at a glance. */
 function PhaseBar({ phases }: { phases: Array<[string, number]> }) {
   const total = phases.reduce((sum, [, count]) => sum + count, 0)
-  if (!total) return <div className="h-1.5 rounded-full bg-muted" />
-  return <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" role="img" aria-label={phases.map(([phase, count]) => `${count} ${phase.replaceAll("_", " ")}`).join(", ")}>
+  if (!total) return <div className="h-1.5 rounded-xs bg-muted" />
+  return <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-xs" role="img" aria-label={phases.map(([phase, count]) => `${count} ${phase.replaceAll("_", " ")}`).join(", ")}>
     {phases.map(([phase, count]) => <span key={phase} className={toneFill[statusTone(phase)] ?? toneFill.neutral} style={{ width: `${(count / total) * 100}%` }} />)}
   </div>
 }
 
 function UsageBar({ used, total }: { used: number; total: number }) {
   const percent = total ? Math.min(100, Math.round((used / total) * 100)) : 0
-  return <div className="h-1.5 overflow-hidden rounded-full bg-muted" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={used} aria-label="GPUs requested">
-    <div className="h-full rounded-full bg-foreground" style={{ width: `${percent}%` }} />
+  return <div className="h-1.5 overflow-hidden rounded-xs bg-muted" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={used} aria-label="GPUs requested">
+    <div className="h-full bg-foreground" style={{ width: `${percent}%` }} />
   </div>
 }
 
@@ -84,7 +84,7 @@ function stampGpus(stamp: Stamp): string | null {
 
 /** Something that needs the operator: a tinted icon, one sentence and a link. */
 function AttentionCard({ tone, icon, children, href, link }: { tone: "brand" | "warning" | "good" | "neutral"; icon: ReactNode; children: ReactNode; href: string; link: string }) {
-  return <div className="flex min-w-0 items-start gap-4 rounded-2xl border border-border bg-card p-5 shadow-[0_1px_2px_rgb(0_0_0/0.025)]">
+  return <div className="flex min-w-0 items-start gap-4 rounded-lg border border-border bg-card p-5">
     <IconTile tone={tone}>{icon}</IconTile>
     <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
       <p className="text-[15px] leading-6">{children}</p>
@@ -94,8 +94,8 @@ function AttentionCard({ tone, icon, children, href, link }: { tone: "brand" | "
 }
 
 function QuickStart({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action: ReactNode }) {
-  return <div className="flex min-w-0 flex-col gap-3 rounded-2xl border border-border bg-card p-6 shadow-[0_1px_2px_rgb(0_0_0/0.025)]">
-    <div className="flex items-center gap-3"><IconTile tone="neutral">{icon}</IconTile><h3 className="text-base font-medium">{title}</h3></div>
+  return <div className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-5">
+    <div className="flex items-center gap-3"><IconTile tone="neutral">{icon}</IconTile><h3 className="text-[15px] font-medium">{title}</h3></div>
     <p className="line-clamp-2 min-h-10 text-sm text-muted-foreground">{description}</p>
     <div className="mt-auto flex justify-end pt-1">{action}</div>
   </div>
@@ -138,7 +138,8 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
   const noStamps = stamps !== null && activeStamps === 0
 
   return <PageContainer>
-    <div className="flex flex-col gap-1 pt-2">
+    <div className="flex flex-col gap-1.5 pt-2">
+      <span className={labelClass}>Operator console</span>
       <Greeting firstName={firstName} />
       <p className="text-[15px] text-muted-foreground">Deployments, GPU capacity and inference traffic for this account.</p>
     </div>
@@ -166,7 +167,7 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
           <PhaseBar phases={phases} />
         </Metric>
         <Metric label="GPUs requested" value={capacity ? <>{capacity.used}<span className="text-muted-foreground">/{capacity.total}</span></> : unavailable} detail={capacity ? `${capacity.total ? Math.round(capacity.used / capacity.total * 100) : 0}% of account-owned capacity` : "Not every active stamp has reported GPUs"}>
-          {capacity ? <UsageBar used={capacity.used} total={capacity.total} /> : <div className="h-1.5 rounded-full bg-muted" />}
+          {capacity ? <UsageBar used={capacity.used} total={capacity.total} /> : <div className="h-1.5 rounded-xs bg-muted" />}
         </Metric>
         <AccountMetricsProvider enabled={deployments !== null}>
           <Metric label="Requests" value={usage ? formatNumber(usage.events) : unavailable} detail={usage ? usage.last_occurred_at ? `Last request ${formatRelative(usage.last_occurred_at)}` : "No usage reported yet" : "Could not be checked"}>
@@ -177,8 +178,8 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
           </Metric>
         </AccountMetricsProvider>
       </MetricGrid>
-      {edge ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-border bg-card px-5 py-3.5 shadow-[0_1px_2px_rgb(0_0_0/0.025)]">
-        <span className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground"><WaypointsIcon className="size-4" />Inference endpoint</span>
+      {edge ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-card px-5 py-3.5">
+        <span className={`flex shrink-0 items-center gap-2 ${labelClass}`}><WaypointsIcon className="size-3.5" />Inference endpoint</span>
         <div className="min-w-0 basis-full sm:flex-1 sm:basis-0"><GatewayUrl url={edge.url} compact /></div>
       </div> : null}
     </section>
@@ -200,7 +201,7 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
         {stampRows.length ? <ul className="border-t border-border">
           {stampRows.map(({ stamp, state }) => {
             const gpus = stampGpus(stamp)
-            return <li key={stamp.id} className="flex items-start gap-3 border-b border-border px-6 py-4 last:border-b-0">
+            return <li key={stamp.id} className="flex items-start gap-3 border-b border-border px-5 py-3.5 last:border-b-0">
               <IconTile tone="neutral" className="size-8 rounded-lg [&_svg]:size-4"><ServerIcon /></IconTile>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{stamp.name}</span><StatusBadge status={state.status} /></span>
@@ -215,9 +216,9 @@ export function DashboardOverview({ checkedAt, error, firstName = null, canCreat
 
     <section className="flex flex-col gap-3" aria-labelledby="learn">
       <h2 id="learn" className={labelClass}>Learn</h2>
-      <ul className="grid grid-cols-1 gap-x-6 gap-y-1 rounded-2xl border border-border bg-card p-3 shadow-[0_1px_2px_rgb(0_0_0/0.025)] md:grid-cols-2">
+      <ul className="grid grid-cols-1 gap-x-6 gap-y-1 rounded-lg border border-border bg-card p-3 md:grid-cols-2">
         {learn.map((item) => <li key={item.href} className="min-w-0">
-          <a href={item.href} target="_blank" rel="noreferrer" className="group flex items-center gap-3.5 rounded-xl p-3 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring">
+          <a href={item.href} target="_blank" rel="noreferrer" className="group flex items-center gap-3.5 rounded-md p-3 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring">
             <IconTile>{item.icon}</IconTile>
             <span className="min-w-0">
               <span className="block text-sm font-medium group-hover:underline group-hover:underline-offset-4">{item.title}</span>

@@ -18,5 +18,5 @@ function subscribe(onChange: () => void) {
 export function Greeting({ firstName }: { firstName: string | null }) {
   const hour = useSyncExternalStore(subscribe, () => new Date().getHours(), () => null)
   const greeting = hour === null ? "Welcome back" : partOfDay(hour)
-  return <h1 className="text-[28px] leading-9 font-medium tracking-[-0.025em]">{firstName ? `${greeting}, ${firstName}` : greeting}</h1>
+  return <h1 className="text-[30px] leading-10 font-medium tracking-[-0.03em]">{firstName ? <>{greeting}, <span className="fabric-highlight">{firstName}</span></> : greeting}</h1>
 }

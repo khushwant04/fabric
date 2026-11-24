@@ -56,16 +56,16 @@ function Meter({
         aria-valuemax={max}
         aria-valuenow={value}
         className={cn(
-          "w-full overflow-hidden rounded-full",
+          "w-full overflow-hidden rounded-xs",
           size === "sm" ? "h-1" : "h-1.5"
         )}
         style={{ background: `color-mix(in oklab, ${fill} 16%, var(--card))` }}
       >
         <div
-          className="h-full rounded-full transition-[width] duration-(--motion-slow) ease-sharp"
+          className="h-full rounded-xs"
           style={{
             width: `${ratio * 100}%`,
-            background: `linear-gradient(90deg, color-mix(in oklab, ${fill} 70%, var(--card)), ${fill})`,
+            background: fill,
           }}
         />
       </div>

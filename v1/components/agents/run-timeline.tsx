@@ -51,7 +51,7 @@ export function RunStepTimeline({ steps, dropped }: { steps: RunStep[]; dropped:
       return <li key={`${step.index}-${position}`} className="relative pb-6 pl-8 last:pb-0">
         {position < steps.length - 1 ? <span aria-hidden="true" className="absolute top-5 bottom-0 left-[7px] w-px bg-border" /> : null}
         <span aria-hidden="true" className="absolute top-1.5 left-0 grid size-[15px] place-items-center rounded-full border bg-card"><span className={cn("size-1.5 rounded-full", dots[tone], tone === "info" && "animate-pulse")} /></span>
-        <div className="rounded-xl border bg-card">
+        <div className="rounded-md border bg-card">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5">
             <span className="text-[13px] font-medium">Step {step.index}</span>
             <span className="font-mono text-[13px]">{step.model ?? "unknown model"}</span>

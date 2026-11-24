@@ -15,7 +15,7 @@ export function GatewayUrl({ url, compact = false }: { url: string; compact?: bo
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
   return <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-    {compact ? null : <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-brand-foreground"><WaypointsIcon className="size-4" /></span>}
+    {compact ? null : <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-tint text-brand-foreground"><WaypointsIcon className="size-4" /></span>}
     <code className={compact ? "min-w-0 flex-1 truncate font-mono text-xs" : "min-w-0 flex-1 text-sm break-all"}>{url}</code>
     <Button variant="outline" size={compact ? "xs" : "sm"} type="button" onClick={async () => {
       try { await navigator.clipboard.writeText(url); setCopied(true); setFailed(false); window.setTimeout(() => setCopied(false), 1500) }

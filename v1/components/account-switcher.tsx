@@ -50,7 +50,7 @@ export function AccountMenu({ context }: { context: ConsoleContext }) {
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
-          <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Open account menu" className="h-14 gap-3 rounded-xl px-2.5 hover:bg-sidebar-accent/70 data-open:bg-sidebar-accent group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:p-0!" />}>
+          <DropdownMenuTrigger render={<SidebarMenuButton size="lg" aria-label="Open account menu" className="h-14 gap-3 rounded-md px-2.5 hover:bg-sidebar-accent/70 data-open:bg-sidebar-accent group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:p-0!" />}>
             <Avatar className="size-8 shrink-0">
               <AvatarFallback className="bg-primary text-[13px] font-medium text-primary-foreground">{name.slice(0, 1).toUpperCase()}</AvatarFallback>
             </Avatar>

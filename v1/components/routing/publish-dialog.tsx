@@ -46,7 +46,7 @@ export function PublishDialog({
       </DialogHeader>
       <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
         <div className="text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">{live ? `Changes from live v${liveVersion}` : "First version"}</div>
-        {diff.length ? <ul className="flex flex-col divide-y divide-border rounded-xl border border-border">{diff.map((entry, index) => <li key={index} className="flex gap-3 px-3 py-2 text-sm">
+        {diff.length ? <ul className="flex flex-col divide-y divide-border rounded-md border border-border">{diff.map((entry, index) => <li key={index} className="flex gap-3 px-3 py-2 text-sm">
           <span className={cn("w-20 shrink-0 text-xs font-medium", entry.kind === "removed" ? "text-destructive" : entry.kind === "added" ? "text-status-good" : "text-muted-foreground")}>{kinds[entry.kind]}</span>
           <span className="min-w-0"><span className="font-medium">{entry.rule}</span><span className="block break-words text-xs text-muted-foreground">{entry.detail}</span></span>
         </li>)}</ul> : <p className="text-sm text-muted-foreground">The draft is identical to the live version.</p>}

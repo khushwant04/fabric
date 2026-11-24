@@ -38,7 +38,7 @@ export default async function AgentRunsPage({ searchParams }: PageProps<"/agents
     {!error || partial ? <Section title="Agent runs" description="Runs live in gateway memory and expire after an hour without activity." action={
         <nav aria-label="Filter runs by status" className="flex flex-wrap gap-0.5 rounded-lg bg-muted p-1">
           {filters.map((filter) => <Link key={filter.value} href={filter.value === "all" ? "/agents/runs" : `/agents/runs?status=${filter.value}`} aria-current={status === filter.value ? "page" : undefined}
-            className={cn("rounded-md px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", status === filter.value && "bg-card font-medium text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)]")}>
+            className={cn("rounded-md px-3 py-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", status === filter.value && "bg-card font-medium text-foreground ring-1 ring-border")}>
             {filter.label}<span className="ml-1.5 tabular-nums text-muted-foreground">{counts[filter.value]}</span>
           </Link>)}
         </nav>}>

@@ -38,7 +38,7 @@ function BarList({
             <span className="relative flex h-7 min-w-0 flex-1 items-center">
               <span
                 aria-hidden="true"
-                className="absolute inset-y-0 left-0 rounded-md bg-[linear-gradient(90deg,color-mix(in_oklab,var(--foreground)_4%,transparent),color-mix(in_oklab,var(--foreground)_11%,transparent))] transition-[width] duration-(--motion-slow) ease-sharp"
+                className="absolute inset-y-0 left-0 rounded-xs bg-[color-mix(in_oklab,var(--foreground)_8%,transparent)]"
                 style={{ width: `${Math.max((item.value / max) * 100, 1.5)}%` }}
               />
               <span className="relative flex min-w-0 items-baseline gap-2 px-2">
@@ -63,7 +63,7 @@ function BarList({
                 href={item.href}
                 className={cn(
                   row,
-                  "rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring hover:[&>span:first-child>span:first-child]:bg-[linear-gradient(90deg,color-mix(in_oklab,var(--foreground)_7%,transparent),color-mix(in_oklab,var(--foreground)_16%,transparent))]"
+                  "rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring hover:[&>span:first-child>span:first-child]:bg-[color-mix(in_oklab,var(--foreground)_14%,transparent)]"
                 )}
               >
                 {body}

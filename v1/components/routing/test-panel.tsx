@@ -118,7 +118,7 @@ export function TestPanel({
 
     <div className="min-w-0" aria-live="polite">
       {result ? <div className="flex flex-col gap-4">
-        <div className="rounded-xl border border-border px-4 py-3">
+        <div className="rounded-md border border-border px-4 py-3">
           <div className="text-xs text-muted-foreground">Matched {result.source === "live" ? `live v${result.version}` : "draft"}</div>
           <div className="mt-0.5 text-base font-medium">{result.is_default ? "Default rule" : `Rule ${result.matched_rule_index}: ${result.matched_rule_name}`}</div>
           <ol className="mt-2 flex flex-wrap gap-1.5">{result.trace.map((step) => {
@@ -143,7 +143,7 @@ export function TestPanel({
           {result.fallback_chain.length ? <p className="mt-1.5 text-xs text-muted-foreground">On {result.fallback_on.map((item) => FALLBACK_LABELS[item as FallbackCondition] ?? item).join(", ") || "no condition"}</p> : null}
           {result.strategy || result.timeout_seconds ? <p className="mt-1.5 text-xs text-muted-foreground">{result.strategy ? `Strategy ${result.strategy.replaceAll("_", " ")}. ` : ""}{result.timeout_seconds ? `Timeout ${result.timeout_seconds}s.` : ""}</p> : null}
         </div>
-      </div> : <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 text-center text-sm text-muted-foreground">
+      </div> : <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border px-6 text-center text-sm text-muted-foreground">
         <FlaskConicalIcon className="size-5" />
         Describe a request and run the test. The answer comes from the same code the gateways enforce with.
       </div>}

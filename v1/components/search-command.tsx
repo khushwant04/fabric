@@ -94,7 +94,7 @@ export function SearchCommand() {
           <Kbd>Ctrl</Kbd><Kbd>K</Kbd>
         </span>
       </Button>
-      <CommandDialog open={open} onOpenChange={setOpen} title="Search Fabric" description="Go to a console page or start an action" className="top-[16%] w-[calc(100%-2rem)] max-w-2xl! overflow-hidden rounded-2xl border border-border p-0 shadow-[0_24px_64px_rgb(0_0_0/0.14)]">
+      <CommandDialog open={open} onOpenChange={setOpen} title="Search Fabric" description="Go to a console page or start an action" className="top-[16%] w-[calc(100%-2rem)] max-w-2xl! overflow-hidden rounded-lg border border-border p-0 shadow-[0_24px_64px_rgb(0_0_0/0.14)]">
         <Command className="bg-popover">
           <div className="flex items-center gap-2 border-b border-border pr-3 [&_[data-slot=command-input-wrapper]]:flex-1 [&_[data-slot=command-input-wrapper]]:border-0 [&_[data-slot=input-group]]:h-14 [&_[data-slot=input-group]]:border-0 [&_[data-slot=input-group]]:bg-transparent [&_[data-slot=input-group]]:shadow-none [&_input]:text-[15px]">
             <CommandInput placeholder="Search pages and actions…" />

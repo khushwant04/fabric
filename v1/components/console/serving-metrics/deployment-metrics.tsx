@@ -42,7 +42,7 @@ export function DeploymentMetrics({ deploymentId }: { deploymentId: string }) {
       <WindowSelect value={window} onChange={setWindow} />
     </div>
 
-    {loading && !data ? <div className="grid gap-4 lg:grid-cols-2">{[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-64 rounded-2xl" />)}</div>
+    {loading && !data ? <div className="grid gap-4 lg:grid-cols-2">{[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-64 rounded-lg" />)}</div>
       : noData ? <Section title={empty!.title}><SectionEmpty>{empty!.detail}</SectionEmpty></Section>
       : data ? <>
         <MetricGrid className="sm:grid-cols-2 xl:grid-cols-5">
@@ -52,7 +52,7 @@ export function DeploymentMetrics({ deploymentId }: { deploymentId: string }) {
           <Headline label="Time to first token" value={`${formatMs(summary?.ttft_p50_ms)} / ${formatMs(summary?.ttft_p95_ms)}`} detail="p50 / p95, from vLLM" />
           <Headline label="Output tokens" value={formatRate(summary?.output_tokens_per_s, "tok/s")} detail={`${formatNumber(Math.round(summary?.output_tokens ?? 0))} generated`} />
         </MetricGrid>
-        {empty ? <p className="rounded-2xl border border-dashed border-border px-5 py-3.5 text-sm text-muted-foreground" role="status"><span className="font-medium text-foreground">{empty.title}.</span> {empty.detail}</p> : null}
+        {empty ? <p className="rounded-lg border border-dashed border-border px-5 py-3.5 text-sm text-muted-foreground" role="status"><span className="font-medium text-foreground">{empty.title}.</span> {empty.detail}</p> : null}
         <div className="grid gap-4 lg:grid-cols-2">
           <MetricChart title="Requests / min" window={window} rows={rows} kind="area" format={(value) => formatRate(value)}
             headline={formatRate(latestValue(points, (point) => point.requests_per_min))}

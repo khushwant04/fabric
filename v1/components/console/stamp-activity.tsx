@@ -59,7 +59,7 @@ export function StampActivity({ stampId, initial, initialError }: {
       {error ? <span className="text-xs text-destructive">{error} Showing the last read.</span> : <Status tone={data?.revoked_at ? "neutral" : "good"} pulse={!data?.revoked_at} className="text-xs text-muted-foreground">{data?.revoked_at ? "Stamp removed · log kept" : `Live · checking every ${Math.round(delay / 1000)}s`}</Status>}
       {events.length ? <span className="text-xs text-muted-foreground tabular-nums">{events.length} event{events.length === 1 ? "" : "s"} · newest first</span> : null}
     </div>
-    {headline ? <p className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6" data-testid="activity-headline">{headline}</p> : null}
+    {headline ? <p className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm leading-6" data-testid="activity-headline">{headline}</p> : null}
     {events.length ? <ol className="flex flex-col" aria-label="Stamp activity, newest first">
       {events.map((event, index) => <ActivityItem key={event.id} event={event} last={index === events.length - 1} />)}
     </ol> : <Alert><ActivityIcon /><AlertTitle>No activity yet</AlertTitle><AlertDescription>Events appear here as soon as the stamp&apos;s agent enrolls: the GPUs it found, whether the GPU runtime works, and when it is ready for deployments. Agents older than this console do not report activity.</AlertDescription></Alert>}
