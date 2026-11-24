@@ -15,7 +15,7 @@ edge gateway and prints the numbers that show each feature working:
 | `cascade` | `model: "cascade"` path and escalations (needs two or more chat deployments) |
 | `guard` | Tool-call guard verdict on a request with tools |
 
-Standard library only, Python 3.10+.
+Standard library only, Python 3.10+. `feature_demo.ipynb` runs the same demos one per cell in Jupyter (start Jupyter from this folder).
 
 ```bash
 export FABRIC_API_KEY='fab_key_...'          # an account API key; never printed

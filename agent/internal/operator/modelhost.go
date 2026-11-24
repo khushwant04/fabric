@@ -407,7 +407,27 @@ func (m ModelHost) hostArgs() []string {
 	if m.EnableAutoToolChoice && m.ToolCallParser != "" {
 		args = append(args, "--enable-auto-tool-choice", "--tool-call-parser="+m.ToolCallParser)
 	}
+	if m.IsNeuron() && !mentionsPrefixCaching(m.ExtraArgs) {
+		// vLLM 0.13 turns prefix caching on by default, and the Neuron plugin then refuses
+		// to start ("When prefix caching is enabled, block_size must be set"). Prefix
+		// caching on Neuron also needs a block KV layout compiled into the model, so it is
+		// off unless the deployment's extra args configure it (and a block size) itself.
+		args = append(args, "--no-enable-prefix-caching")
+	}
 	return append(args, m.ExtraArgs...)
+}
+
+// mentionsPrefixCaching reports whether extra args already decide prefix caching or the KV
+// block size, in which case the operator leaves both to them.
+func mentionsPrefixCaching(extra []string) bool {
+	for _, arg := range extra {
+		name, _, _ := strings.Cut(arg, "=")
+		switch name {
+		case "--enable-prefix-caching", "--no-enable-prefix-caching", "--block-size":
+			return true
+		}
+	}
+	return false
 }
 
 // clampedMemory lowers a memory fraction that would leave the smallest profiled device

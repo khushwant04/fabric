@@ -145,3 +145,21 @@ test("startup-probe misses while the server loads are expected, other probe fail
   assert.equal(isFailureEvent(liveness), true)
   assert.equal(isFailureEvent({ type: "Warning", reason: "BackOff", message: "Back-off restarting failed container", count: 1, at: "" }), true)
 })
+
+test("a Neuron host that rejects its settings is not reported as a missing GPU runtime", () => {
+  const log = [
+    "INFO [__init__.py:217] Platform plugin neuron is activated",
+    "WARN [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')",
+    "pydantic_core._pydantic_core.ValidationError: 1 validation error for VllmConfig",
+    "  Assertion failed, When prefix caching is enabled, block_size must be set. [type=assertion_error, input_value=ArgsKwargs((), {})]",
+  ].join("\n")
+  const neuron = host({ phase: "Running", conditions: [{ type: "PodScheduled", status: "True" }], events: [event("Scheduled"), event("Pulled"), event("Started")], container_state: "waiting", container_reason: "CrashLoopBackOff", restart_count: 3, log_tail: log })
+  const diagnosis = diagnoseHost(neuron)!
+  assert.match(diagnosis.title, /rejected its settings: When prefix caching is enabled, block_size must be set\./)
+  assert.equal(hostSummary(neuron).label, "Server rejected its settings")
+})
+
+test("a GPU host without libcuda is still reported as a missing GPU runtime", () => {
+  const gpu = host({ phase: "Running", conditions: [{ type: "PodScheduled", status: "True" }], events: [event("Scheduled"), event("Pulled"), event("Started")], container_state: "waiting", container_reason: "CrashLoopBackOff", log_tail: "RuntimeError: Failed to infer device type" })
+  assert.equal(diagnoseHost(gpu)!.title, "GPU runtime missing: the model server cannot see a GPU")
+})
