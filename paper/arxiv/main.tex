@@ -114,8 +114,10 @@ least-in-flight below saturation while keeping its tail. A deterministic check o
 policy code found no edge/stamp disagreement in 200{,}000 subset trials. Point-in-time live
 checks show a one-command bootstrap enrolling a 96\,GiB Blackwell stamp that served a 35B FP8
 mixture-of-experts model, and enrolling a Cloud TPU v6e-1 VM whose first bring-up surfaced two
-portability defects; once fixed, the TPU deployment served end to end. We make no hardware
-throughput claims.
+portability defects; once fixed, the TPU deployment served end to end. An AWS Trainium stamp
+served after three further fixes. Two client-side sweeps through the edge across four silicon types
+(T4, RTX PRO 6000, TPU v6e-1, Trainium), run twice, completed every request and shows where each
+deployment saturates; because each silicon serves a different model, it compares deployments, not chips.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -512,8 +514,8 @@ and was then evicted by the kubelet for low ephemeral storage, which also tainte
 the replacement replica could not schedule. The AMI's SDK environments already used 82\,GB of the
 96\,GB root filesystem; the image, the weights and the compiled artifacts crossed the eviction
 threshold. Growing the root volume to 200\,GiB cleared it, and the console now diagnoses
-disk-pressure evictions and tainted nodes. At the time of writing the deployment had passed
-configuration and weight download; we report Neuron serving only once observed.
+disk-pressure evictions and tainted nodes. The deployment then compiled, reached Ready and served
+requests through the edge; it served all 64 requests of the sweep in \cref{sec:eval-silicon}.
 
 \subsection{Compiled-artifact caches}
 \label{sec:compile-cache}
@@ -970,7 +972,7 @@ Class & Meaning and claims \\
 \Simulated{} & Production gateway, simulated hosts; compares strategies, not absolute latency. Routing study, 5~Nov 2026 \\
 \Computed{} & Deterministic run of shipped code on synthetic keys. Policy split, 17~Nov 2026 \\
 \Tested{} & Automated suites at \commit{}. Edge, policies, guard, runs, prefix routing, agent SDK, Go agent and operator, TPU and Neuron paths \\
-\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up, then end-to-end serving after the fix. 24~Nov: Trainium bring-up to weight download \\
+\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up, then end-to-end serving after the fix. 24~Nov: Trainium bring-up and serving; two four-silicon sweeps through the edge \\
 \Measured{} & Retained logs from a named run. 6~Oct: T4 cold-start stages \\
 \DevOnly{} & Kernel microbenchmarks; not in serving \\
 \Designed{} & Specified, not yet exercised on target: production edge failover, GPU sharing \\
@@ -1146,11 +1148,11 @@ the 40-minute TPU start-up budget: XLA compilation adds to, rather than replaces
 
 \paragraph*{AWS Trainium (\PointInTime{}, 24~Nov 2026)}
 As reported in \cref{sec:neuron-bringup}, the bootstrap detected a \code{trn1.2xlarge}, advertised
-its device and placed a Qwen3-4B deployment; the host reached and completed the 8\,GB weight
-download after the prefix-caching default was fixed, and was then evicted for disk. We record no
-Neuron compilation time or serving figures yet.
+its device and placed a Qwen3-4B deployment; after the prefix-caching default was fixed and the
+root volume grown, the host completed its 8\,GB weight download, compiled and served. We record no
+Neuron compilation time.
 
-\subsection{RQ5: Comparing silicon across regions \normalfont(method; \Tested{} harness)}
+\subsection{RQ5: Comparing silicon across regions \normalfont(method; \PointInTime{} sweep)}
 \label{sec:eval-silicon}
 Stamps of different silicon sit in different regions, so a client-side measurement of a model on
 one stamp mixes accelerator time with the client-to-edge and edge-to-stamp paths. We separate the
@@ -1170,9 +1172,63 @@ the edge and to each stamp's public endpoint are reported beside the floor as pu
 references, and the prefix-cache effect is measured as the ratio of compute TTFT with a unique and
 with a repeated 3{,}000-token prefix, keeping all calls on one stamp with a session key. The
 harness (\code{scripts/demo/}) also exercises streaming, run budgets, \code{auto}, cascade and the
-guard; it is tested against a stub gateway, and its live results across the T4, RTX PRO 6000,
-TPU v6e and Trainium stamps are the first item of the evaluation plan
-(\cref{sec:limits}). We report no cross-silicon numbers here.
+guard; it is tested against a stub gateway.
+
+\paragraph*{Two sweeps across four silicon types (\PointInTime{}, 24~Nov 2026)}
+From a notebook client, 16 streamed requests (128 output tokens, temperature~0) were sent per
+concurrency level to one deployment on each stamp, all through the edge, twice
+(\cref{tab:silicon,fig:silicon}). All 512 requests completed, and the two sweeps' peak throughput
+agreed within 6\% for every deployment. The second sweep measured the network floor: 0.78--0.90\,s
+per deployment, of which the client-to-edge TLS handshake alone was 0.47\,s. Unsaturated TTFT
+(0.76--1.0\,s, and 1.3\,s on Trainium) is therefore almost entirely the network path; compute TTFT
+at concurrency~1 was below the floor's resolution for the T4 and TPU deployments, 70\,ms on the RTX
+PRO 6000 and 0.39\,s on Trainium. Each silicon serves a different model with its own concurrency
+limit, so the sweeps compare \emph{deployments}; they do not rank chips.
+
+\begin{table}[t]
+\centering
+\caption{Two sweeps through the edge (\PointInTime{}, 24~Nov 2026; 16 requests per level). Peak is the
+highest client-observed output rate over concurrency 1--16 in sweeps 1/2; floor and decode (per
+stream, concurrency~1) are from sweep~2.}
+\label{tab:silicon}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}X l r r r@{}}
+\toprule
+Silicon & Model & Peak tok/s & Floor & Decode \\
+\midrule
+TPU v6e-1 & Qwen3.5-4B & 820 / 855 & 0.82\,s & 116 \\
+RTX PRO 6000 & Qwen3.6-35B-A3B & 287 / 283 & 0.79\,s & 22 \\
+T4 & Qwen3.5-2B & 215 / 227 & 0.78\,s & 34 \\
+Trainium & Qwen3-4B & 142 / 143 & 0.90\,s & 39 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/silicon_sweep.pdf}
+\caption{First client-side sweep through the edge across four stamps (\PointInTime{}, 24~Nov 2026);
+the second sweep is within 6\% at every peak. Left: aggregate output throughput. Middle: TTFT p50,
+including the network path. Right: decode rate per stream. Each line is a different model on a
+different silicon.}
+\label{fig:silicon}
+\end{figure*}
+
+Three behaviours are visible. The TPU deployment scaled almost linearly to 16 concurrent requests
+(64 to 820--855 tokens/s) with TTFT flat and per-stream decode falling only from 116 to 96
+tokens/s. The RTX PRO 6000 deployment, serving a model nearly ten times larger, also scaled linearly
+(19 to about 285 tokens/s) with flat TTFT, at a lower per-stream rate. The T4 and Trainium
+deployments plateaued, at about 210--225 and 142 tokens/s, as soon as concurrency exceeded the number
+of sequences their hosts admit; beyond that, extra requests queued at the host, which is the TTFT
+growth to about 5 and 7.7\,s at concurrency~16. The plateau is a configured limit
+(\code{max\_num\_seqs}), not necessarily the device's ceiling. Subtracting the floor raises the
+TPU's peak to an estimated 1{,}300 tokens/s and the others by 10--20\%, an approximation that is
+largest where requests are shortest. The prefix-cache comparison could not be taken: the test
+prompt exceeded three deployments' 4{,}096-token context, and on the RTX PRO 6000 deployment,
+whose hybrid-attention model limits prefix reuse in this engine release, repeated and unique
+prefixes were indistinguishable (1.40 vs.\ 1.40\,s). A matched-model, repeated run that includes a
+context-fitting prefix test is the first item of the evaluation plan.
 
 % ================================================================= lessons
 \section{Lessons}
@@ -1260,8 +1316,9 @@ invariants resemble NIST SP~800-207~\cite{nistzt}, with narrower, testable claim
 The routing results use simulated hosts. Live checks are single observations without
 repetition or confidence intervals, and the September, October and November observations
 differ in topology and software. The policy results establish mechanism, not production
-behaviour. TPU serving was observed end to end once, without timing; Neuron serving has not yet
-been observed end to end.
+behaviour. TPU and Neuron serving were observed end to end; the only throughput data across
+silicon are two client-side sweeps with different models per silicon and the network
+path included.
 
 \paragraph*{Known gaps}
 The stamp pod still mounts the agent's Kubernetes service-account token into the gateway and
@@ -1271,8 +1328,8 @@ gateway restart. The
 edge's routing-table credential, if leaked, exposes every account's deployment, placement and
 policy metadata (no prompts or secrets). Policy changes propagate at polling speed, prompt-length
 conditions use a four-characters-per-token estimate, and \code{timeout} fallbacks can execute a
-request twice. The guard checks only non-streaming chat completions. TPU and Neuron stamps export no accelerator-level metrics yet, and we report no throughput or
-latency for them here. GPU sharing (time-slicing with
+request twice. The guard checks only non-streaming chat completions. TPU and Neuron stamps export no
+accelerator-level metrics yet, so their throughput is client-observed only. GPU sharing (time-slicing with
 \sys{}-enforced memory shares, so a 96\,GiB card serving a 37.5\,GB model could also host a
 small one) is designed but not implemented.
 
@@ -1302,8 +1359,9 @@ A managed LLM service is easier to reason about as two clocks than as one contro
 extension of \sys{}---an edge tier, cache-aware routing, routing policies, agent governance and
 heterogeneous accelerators---added state, and the rule that state lives with the clock that
 reads it told us where each piece belonged and what affinity, retry and metering behaviour the
-routers in front of it must provide. The evidence is uneven and classified accordingly; hardware
-throughput on GPU, TPU and Neuron stamps and production edge failover remain stated future work.
+routers in front of it must provide. The evidence is uneven and classified accordingly: two
+sweeps show four silicon types serving behind one edge, and matched, repeated hardware throughput
+and production edge failover remain stated future work.
 
 % ================================================================= appendix
 \appendices
@@ -1312,8 +1370,8 @@ throughput on GPU, TPU and Neuron stamps and production edge failover remain sta
 {\raggedright
 Source code and records: \repourl, commit \commit. All plotted and quoted values are read from
 the repository: \code{paper/data/evidence.json} (evidence register: the 16~Nov live observations
-the 17~Nov TPU bring-up and the 24~Nov Trainium bring-up, all with scope ``point-in-time live
-check''; the 6~Oct cold-start
+the 17~Nov TPU bring-up, the 24~Nov Trainium bring-up and the 24~Nov four-silicon sweeps, all with
+scope ``point-in-time live check''; the 6~Oct cold-start
 timestamps; and the routing-policy split check), and the routing artifacts under
 \code{docs/benchmarks/routing-2026-11-05/} (schema \code{fabric.routing-benchmark/v1}; each records
 its command, commit, dirty flag, host model and per-seed summaries). Figures are regenerated
