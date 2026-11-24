@@ -152,11 +152,26 @@ export function queuedStages(state: "waiting" | "placed" | "removed"): Stage[] {
   }))
 }
 
-export type Diagnosis = { title: string; hint: string }
+export type Diagnosis = { title: string; hint: string; label?: string }
 
-const LOG_DIAGNOSES: ReadonlyArray<{ match: RegExp; title: string; hint: string }> = [
+// A host on AWS Neuron or Google TPU has no CUDA by design: vLLM still probes for libcuda and
+// warns, and that warning must not be read as a missing GPU runtime.
+const NON_CUDA_PLATFORM = /Platform plugin (neuron|tpu) is activated|vllm_neuron|neuronx|libtpu|TPU platform/i
+
+// vLLM refusing its own settings at startup: a pydantic validation error on its config, an
+// assertion in config validation, or an argument parser error.
+const CONFIG_ERROR = /validation errors? for (VllmConfig|\w+Config)|Assertion failed, |vllm serve: error:|unrecognized arguments:/i
+
+function configReason(log: string) {
+  const reason = log.match(/(?:Assertion failed|Value error), (.+?)(?: \[type=|$)/m)?.[1] ??
+    log.match(/(?:vllm serve: error|unrecognized arguments): ?(.+)$/m)?.[0]
+  return reason?.trim().slice(0, 240) ?? null
+}
+
+const LOG_DIAGNOSES: ReadonlyArray<{ match: RegExp; skip?: RegExp; title: string; hint: string }> = [
   {
     match: /failed to infer device type|no CUDA GPUs are available|Found no NVIDIA driver|libcuda\.so.*(cannot open|not found)/i,
+    skip: NON_CUDA_PLATFORM,
     title: "GPU runtime missing: the model server cannot see a GPU",
     hint: "The pod is not running under the NVIDIA runtime. On a k3s stamp, re-run the bootstrap command, which installs the nvidia RuntimeClass and device plugin; elsewhere set gpu.runtimeClassName and check that the node advertises nvidia.com/gpu. The stamp's Activity log shows the same check.",
   },
@@ -186,7 +201,18 @@ const LOG_DIAGNOSES: ReadonlyArray<{ match: RegExp; title: string; hint: string 
 export function diagnoseHost(host: HostSnapshot): Diagnosis | null {
   const failed = failedStage(host)
   if (!failed) return null
-  for (const item of LOG_DIAGNOSES) if (item.match.test(host.log_tail ?? "")) return { title: item.title, hint: item.hint }
+  const log = host.log_tail ?? ""
+  for (const item of LOG_DIAGNOSES) {
+    if (item.match.test(log) && !(item.skip && item.skip.test(log))) return { title: item.title, hint: item.hint }
+  }
+  if (CONFIG_ERROR.test(log)) {
+    const reason = configReason(log)
+    return {
+      label: "Server rejected its settings",
+      title: reason ? `The model server rejected its settings: ${reason}` : "The model server rejected its settings",
+      hint: "vLLM stopped before downloading weights because a setting is invalid for this model or accelerator. Change the deployment's runtime settings or extra args and redeploy; the traceback below names the setting.",
+    }
+  }
   const reason = host.container_reason ?? ""
   if (failed === "scheduled") {
     const message = [...host.events].reverse().find((event) => event.reason === "FailedScheduling")?.message ?? ""
@@ -233,7 +259,7 @@ export function hostSummary(host: HostSnapshot): HostSummary {
   const failed = stages.find((stage) => stage.state === "failed")
   if (failed) {
     const diagnosis = diagnoseHost(host)
-    return { tone: "critical", label: FAILURE_LABELS[failed.key], detail: diagnosis?.title ?? (host.container_message || lastWarning(host)?.message || null) }
+    return { tone: "critical", label: diagnosis?.label ?? FAILURE_LABELS[failed.key], detail: diagnosis?.title ?? (host.container_message || lastWarning(host)?.message || null) }
   }
   if (host.ready) return { tone: "good", label: "Ready", detail: host.restart_count ? `Restarted ${host.restart_count} time${host.restart_count === 1 ? "" : "s"}` : null }
   const current = stages.find((stage) => stage.state === "current")

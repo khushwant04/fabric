@@ -198,3 +198,25 @@ func TestGPUAndTPUHostsIgnoreNeuronSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestNeuronTurnsOffPrefixCachingUnlessConfigured(t *testing.T) {
+	// vLLM 0.13 enables prefix caching by default and the Neuron plugin then refuses to start
+	// without a block size.
+	args := strings.Join(renderHost(t, neuronHost(), 1).Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "--no-enable-prefix-caching") {
+		t.Fatalf("a Neuron host must turn prefix caching off by default: %s", args)
+	}
+
+	configured := neuronHost()
+	configured.ExtraArgs = []string{"--enable-prefix-caching", "--block-size=32"}
+	args = strings.Join(renderHost(t, configured, 1).Template.Spec.Containers[0].Args, " ")
+	if strings.Contains(args, "--no-enable-prefix-caching") || !strings.Contains(args, "--block-size=32") {
+		t.Fatalf("explicit prefix-caching args must be left alone: %s", args)
+	}
+
+	gpu := testHost()
+	args = strings.Join(renderHost(t, gpu, 1).Template.Spec.Containers[0].Args, " ")
+	if strings.Contains(args, "prefix-caching") {
+		t.Fatalf("GPU hosts keep vLLM's default prefix caching: %s", args)
+	}
+}
