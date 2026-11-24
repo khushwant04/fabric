@@ -54,7 +54,7 @@ function ToggleGroup({
       multiple={multiple}
       style={{ "--gap": spacing } as React.CSSProperties}
       className={cn(
-        "group/toggle-group relative isolate flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-[min(var(--radius-md),10px)] data-vertical:flex-col data-vertical:items-stretch",
+        "group/toggle-group relative isolate flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-sm data-vertical:flex-col data-vertical:items-stretch",
         className
       )}
       {...props}
@@ -64,7 +64,7 @@ function ToggleGroup({
       >
         {children}
       </ToggleGroupContext.Provider>
-      <GlidingHighlight ref={highlightRef} className="rounded-full bg-accent" />
+      <GlidingHighlight ref={highlightRef} className="rounded-sm bg-accent" />
     </ToggleGroupPrimitive>
   )
 }

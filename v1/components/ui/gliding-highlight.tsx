@@ -262,7 +262,7 @@ function GlidingHighlight({ as = "div", ref, className, style, ...props }: Glidi
   const shared = {
     "data-slot": "gliding-highlight",
     "aria-hidden": true as const,
-    className: cn("pointer-events-none absolute top-0 left-0 z-0 rounded-[12px] opacity-0 will-change-[transform,width,height,opacity]", className),
+    className: cn("pointer-events-none absolute top-0 left-0 z-0 rounded-sm opacity-0 will-change-[transform,width,height,opacity]", className),
     style: { width: 0, height: 0, opacity: 0, ...style },
     ...props,
   }
