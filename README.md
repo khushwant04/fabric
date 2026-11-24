@@ -8,13 +8,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/khushwant04/fabric/commits/main"><img alt="CI" src="https://img.shields.io/github/check-runs/khushwant04/fabric/main?label=CI&amp;logo=github"></a>
+  <img alt="vLLM" src="https://img.shields.io/badge/serving-vLLM-0B5FFF">
   <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&amp;logoColor=white">
-  <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/khushwant04/fabric?filename=agent%2Fgo.mod&amp;logo=go&amp;logoColor=white">
+  <img alt="Go 1.22" src="https://img.shields.io/badge/go-1.22-00ADD8?logo=go&amp;logoColor=white">
   <img alt="Node 22" src="https://img.shields.io/badge/node-22-339933?logo=nodedotjs&amp;logoColor=white">
   <img alt="Kubernetes" src="https://img.shields.io/badge/kubernetes-Helm-326CE5?logo=kubernetes&amp;logoColor=white">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="https://github.com/khushwant04/fabric/releases/tag/v0.1.0"><img alt="Release" src="https://img.shields.io/github/v/tag/khushwant04/fabric?label=release&amp;filter=v*&amp;sort=semver&amp;color=orange"></a>
+  <img alt="Version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-orange">
 </p>
 
 <p align="center">
