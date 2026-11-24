@@ -1,0 +1,9 @@
+# Terraform state, plans and local variables can hold project details and secrets.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform.tfvars
+*.auto.tfvars
+.terraform.lock.hcl

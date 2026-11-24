@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (git-ignored) and fill in your values.
+project_id            = "your-gcp-project-id"
+service_account_email = "PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+
+# Optional overrides (defaults shown)
+# region            = "us-east5"
+# zone              = "us-east5-b"
+# name              = "blackwell-rtx-pro-6000"
+# machine_type      = "g4-standard-48"
+# boot_disk_size_gb = 300
+# spot              = true
