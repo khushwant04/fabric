@@ -66,6 +66,8 @@ MAX_REQUEST_JSON_DEPTH = 128
 RUN_ID_HEADER = "x-fabric-run-id"
 REGION_HEADER = "x-fabric-region"
 EDGE_STAMP_HEADER = "X-Fabric-Edge-Stamp"
+#: Sent to a stamp asked again by the target alias after it did not know a routing policy.
+POLICY_DEGRADED_HEADER = "x-fabric-policy-degraded"
 SESSION_HEADERS = ("x-fabric-session", "x-session-id", "x-conversation-id")
 
 #: Connection-scoped headers (RFC 9110 section 7.6.1) never forwarded in either direction.
@@ -343,11 +345,16 @@ async def forward(
     started: float,
     ordered_candidates: list[Placement] | None = None,
     route_headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    policy_aliases: dict[str, str] | None = None,
 ) -> Response:
     """Send the request to the first reachable candidate and stream its answer back.
 
     ``ordered_candidates`` are already in the order to try them (a routing policy ordered
-    them); ``route_headers`` are added to the request sent to the stamp.
+    them); ``route_headers`` are added to the request sent to the stamp. ``policy_aliases``
+    maps a stamp to the target alias the policy chose for it: a stamp that does not know the
+    policy (an older release) answers ``model_not_found`` without running anything, and is
+    asked once more with that alias in ``model``.
     """
     if ordered_candidates is not None:
         ordered = ordered_candidates[: edge.settings.max_attempts]
@@ -401,6 +408,13 @@ async def forward(
             ) from exc
 
         edge.health.record_success(stamp.stamp_id)
+        alias = (policy_aliases or {}).get(stamp.stamp_id)
+        if upstream.status_code == 404 and alias and payload is not None:
+            upstream = await _retry_with_target_alias(
+                edge, request, upstream, stamp_url=url, extra_headers=extra_headers,
+                extensions=extensions, route_headers=route_headers, payload=payload,
+                alias=alias, stamp_name=stamp.name,
+            )
         return _stream_back(edge, upstream, stamp_id=stamp.stamp_id, stamp_name=stamp.name,
                             started=started)
 
@@ -410,6 +424,44 @@ async def forward(
         attempts=len(ordered),
         last_error=last_error,
     )
+
+
+async def _retry_with_target_alias(
+    edge: EdgeGateway,
+    request: Request,
+    upstream: httpx.Response,
+    *,
+    stamp_url: str,
+    extra_headers: dict[str, str],
+    extensions: dict[str, Any] | None,
+    route_headers: dict[str, str] | None,
+    payload: dict[str, Any],
+    alias: str,
+    stamp_name: str,
+) -> httpx.Response:
+    """Ask a stamp that did not know a routing policy again, by the chosen target's alias.
+
+    Only a ``model_not_found`` answer qualifies: the stamp refused before running anything,
+    so asking again cannot execute the request twice. Any other 404 is returned unchanged.
+    """
+    raw = await upstream.aread()
+    await upstream.aclose()
+    try:
+        code = (json.loads(raw).get("error") or {}).get("code")
+    except (ValueError, AttributeError):
+        code = None
+    if code != "model_not_found":
+        return httpx.Response(upstream.status_code, headers=upstream.headers, content=raw,
+                              request=upstream.request)
+    logger.info("stamp %s does not know the routing policy; sending target alias %s",
+                stamp_name, alias)
+    edge.metrics.request(stamp=stamp_name, outcome="policy_degraded")
+    body = json.dumps({**payload, "model": alias}).encode()
+    headers = forward_headers(request, {**extra_headers, **(route_headers or {}),
+                                        POLICY_DEGRADED_HEADER: "edge-only"})
+    outgoing = edge.stamp_client.build_request(request.method, stamp_url, headers=headers,
+                                               content=body, extensions=extensions or None)
+    return await edge.stamp_client.send(outgoing, stream=True)
 
 
 def _stream_back(
@@ -532,6 +584,8 @@ async def handle_model_request(
                 started=started,
                 ordered_candidates=ordered,
                 route_headers=policy_route.headers,
+                payload=payload,
+                policy_aliases=policy_route.aliases,
             )
         candidates = table.candidates(principal.account_id, model)
         if not candidates:

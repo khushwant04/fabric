@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Any
 
+import httpx
 import pytest
 
 from fabric_data_plane import routing_policy as rp
@@ -190,3 +191,43 @@ async def test_policies_keep_routing_with_the_control_plane_down(
         response = await chat(client, signer, "chat-default")
     assert response.json() == {"served_by": "stamp-b"}
     assert not [call for call in control.calls if "routing-table" in call]
+
+
+async def test_a_stamp_without_policy_support_gets_the_target_alias(
+    control, stamps, signer
+) -> None:
+    """A stamp on a release older than routing policies answers the policy name with
+    model_not_found; the edge asks it once more by the alias of the target it chose."""
+    with_policy(control, policy_document(targets=targets((DEP_ONLY_B, 100))))
+    original = stamps.handler
+
+    def old_stamp(request):
+        model = json.loads(request.content)["model"]
+        if request.headers.get("host", "").startswith("stamp-b") and model == "chat-default":
+            stamps.seen.append(
+                {"host": "stamp-b", "body": request.content, "headers": dict(request.headers)}
+            )
+            error = {"code": "model_not_found", "message": "No such model is served by this stamp"}
+            return httpx.Response(404, json={"error": error})
+        return original(request)
+
+    stamps.handler = old_stamp
+    edge = build_edge(control, stamps)
+    async with client_for(edge) as client:
+        response = await chat(client, signer, "chat-default")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"served_by": "stamp-b"}
+    first, second = stamps.seen[-2], stamps.seen[-1]
+    assert json.loads(first["body"])["model"] == "chat-default"
+    assert json.loads(second["body"])["model"] == "b-only-model"
+    assert second["headers"]["x-fabric-policy-degraded"] == "edge-only"
+
+
+async def test_other_not_found_answers_are_not_retried(control, stamps, signer) -> None:
+    with_policy(control, policy_document(targets=targets((DEP_ONLY_B, 100))))
+    stamps.status = {"stamp-b": 404}
+    edge = build_edge(control, stamps)
+    async with client_for(edge) as client:
+        response = await chat(client, signer, "chat-default")
+    assert response.status_code == 404
+    assert stamps.count("stamp-b") == 1
