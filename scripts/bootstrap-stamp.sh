@@ -682,12 +682,13 @@ if [ -n "$CONSOLE_URL" ]; then
 else
     STAMP_PAGE="console → Inference stamps → $NAME (/stamps/$STAMP_ID)"
 fi
+if [ -n "$HOST" ]; then ENDPOINT_LINE="https://$HOST"; else ENDPOINT_LINE="none (add --host for edge routing)"; fi
 if [ "$GPU" = tpu ]; then
     cat <<EOF
 
   Stamp page:  $STAMP_PAGE
                Its Activity log shows: Enrolled → TPU measured → TPU runtime → Ready for deployments.
-  Endpoint:    ${HOST:+https://$HOST}${HOST:-none (add --host for edge routing)}
+  Endpoint:    $ENDPOINT_LINE
   Next:        Deployments → Create, pick a model marked for Cloud TPU (bf16; FP8 models need a GPU),
                and choose infrastructure "$NAME". The first deployment downloads the vLLM TPU image
                once (several GB) and the weights, then compiles the model with XLA for several
@@ -703,7 +704,7 @@ if [ "$GPU" = neuron ]; then
 
   Stamp page:  $STAMP_PAGE
                Its Activity log shows: Enrolled → Neuron measured → Neuron runtime → Ready for deployments.
-  Endpoint:    ${HOST:+https://$HOST}${HOST:-none (add --host for edge routing)}
+  Endpoint:    $ENDPOINT_LINE
   Next:        Deployments → Create, pick a model marked for AWS Neuron (bf16; FP8 models need a GPU),
                and choose infrastructure "$NAME". The first deployment downloads the vLLM Neuron
                image once (over 10 GB) and the weights, then compiles the model with the Neuron
@@ -719,7 +720,7 @@ cat <<EOF
 
   Stamp page:  $STAMP_PAGE
                Its Activity log shows: Enrolled → GPUs found → GPU runtime → Ready for deployments.
-  Endpoint:    ${HOST:+https://$HOST}${HOST:-none (add --host for edge routing)}
+  Endpoint:    $ENDPOINT_LINE
   Next:        Deployments → Create, and choose infrastructure "$NAME". The console opens the
                deployment's Logs tab: the first deployment on this machine downloads the model
                runtime image once (several GB), then the model's weights.
