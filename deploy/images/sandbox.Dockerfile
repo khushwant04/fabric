@@ -8,7 +8,7 @@
 # started with `python -I -S` and the kernel's site directories, so it does not import the
 # service's packages by accident (it is not a security boundary: both are readable).
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.15-slim-bookworm AS build
 
 WORKDIR /src
 COPY sandbox/pyproject.toml ./
@@ -22,7 +22,7 @@ RUN python -m venv /opt/service && \
     /opt/kernel/bin/pip install --no-cache-dir numpy==2.1.3 pandas==2.2.3 matplotlib==3.9.2 && \
     /opt/kernel/bin/pip uninstall --yes pip
 
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 # Unprivileged, and a different uid from the gateway (65532): the sandbox never shares an
 # identity with anything that holds a credential other than its own shared secret.
