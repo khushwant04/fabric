@@ -569,6 +569,31 @@ def cold_start() -> None:
         save(fig, "cold_start")
 
 
+def silicon_sweep() -> None:
+    """Client-observed throughput, TTFT and decode rate per deployment and silicon (24 Nov run)."""
+    bench = DATA["silicon_benchmark_2026_11_24"]
+    colors = [GREEN, NAVY, ORANGE, PURPLE]
+    with plt.rc_context(_small_rc()):
+        fig, axes = plt.subplots(1, 3, figsize=(7.1, 2.1))
+        for color, dep in zip(colors, bench["deployments"]):
+            levels = dep["levels"]
+            c = [lv["concurrency"] for lv in levels]
+            label = f"{dep['silicon'].split(' (')[0]} · {dep['model']}"
+            axes[0].plot(c, [lv["output_tok_per_s"] for lv in levels], marker="o", ms=3, color=color, label=label)
+            axes[1].plot(c, [lv["ttft_p50_ms"] / 1000 for lv in levels], marker="o", ms=3, color=color)
+            axes[2].plot(c, [lv["decode_tok_per_s_per_req"] for lv in levels], marker="o", ms=3, color=color)
+        for ax, title, unit in zip(axes, ["Aggregate output throughput", "TTFT p50 (client, incl. network)",
+                                          "Decode rate per stream"], ["tokens/s", "seconds", "tokens/s"]):
+            ax.set_title(title, fontsize=8)
+            ax.set_xlabel("concurrent requests")
+            ax.set_ylabel(unit)
+            ax.set_xticks([1, 4, 8, 16])
+            ax.grid(alpha=0.2)
+        axes[0].legend(frameon=False, fontsize=5.6, loc="upper left")
+        fig.tight_layout()
+        save(fig, "silicon_sweep")
+
+
 def _raster(source: Path, name: str, box_xyxy: tuple[int, int, int, int], width: int,
             erase: tuple[tuple[int, int, int, int, tuple[int, int, int]], ...] = ()) -> None:
     """Crop a checked-in image, optionally blank regions, resize, and write a PNG.
@@ -617,9 +642,10 @@ def main() -> None:
     routing_sweep()
     routing_bound()
     cold_start()
+    silicon_sweep()
     architecture_diagram()
     console_screenshots()
-    print(f"Generated 9 PDF and 12 PNG figures in {OUT}")
+    print(f"Generated 10 PDF and 13 PNG figures in {OUT}")
 
 
 if __name__ == "__main__":

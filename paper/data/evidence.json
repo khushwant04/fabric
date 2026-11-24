@@ -214,7 +214,348 @@
         "fix": "root volume grown to 200 GiB; the console diagnoses disk-pressure evictions and tainted nodes"
       }
     ],
-    "end_to_end_serving": "not yet observed at the time of writing: the host passed configuration and the weight download before the disk-pressure eviction",
-    "not_measured": "throughput, latency, Neuron compilation time"
+    "end_to_end_serving": "observed after the root volume was grown to 200 GiB: the Qwen3-4B deployment served 64 of 64 streamed requests through the edge in the 24 Nov benchmark (silicon_benchmark_2026_11_24)",
+    "not_measured": "Neuron compilation time"
+  },
+  "silicon_benchmark_2026_11_24": {
+    "date": "2026-11-24",
+    "scope": "single client run through the edge gateway; one sweep, no repetition",
+    "client": "Google Colab notebook, region not recorded; all requests through https://<edge>/v1 with streaming",
+    "method": "16 streamed chat completions per concurrency level (1, 4, 8, 16), max_tokens 128, temperature 0, one warm-up request per model; TTFT is client-observed and includes the network path; decode rate is (output tokens - 1) / (end - first token) per request",
+    "caveats": "each silicon serves a different model (2B, 4B, 35B-A3B FP8) with its own max_num_seqs, so the run compares deployments, not chips; the network floor was not subtracted",
+    "deployments": [
+      {
+        "model": "qwen3.5-2b",
+        "silicon": "NVIDIA T4",
+        "stamp": "cin-t4-01",
+        "levels": [
+          {
+            "concurrency": 1,
+            "req_per_s": 0.22,
+            "output_tok_per_s": 28.1,
+            "ttft_p50_ms": 800,
+            "ttft_p95_ms": 828,
+            "latency_p50_s": 4.55,
+            "latency_p95_s": 4.61,
+            "decode_tok_per_s_per_req": 33.9
+          },
+          {
+            "concurrency": 4,
+            "req_per_s": 0.82,
+            "output_tok_per_s": 105.4,
+            "ttft_p50_ms": 840,
+            "ttft_p95_ms": 848,
+            "latency_p50_s": 4.84,
+            "latency_p95_s": 4.94,
+            "decode_tok_per_s_per_req": 31.8
+          },
+          {
+            "concurrency": 8,
+            "req_per_s": 1.62,
+            "output_tok_per_s": 207.0,
+            "ttft_p50_ms": 870,
+            "ttft_p95_ms": 901,
+            "latency_p50_s": 4.94,
+            "latency_p95_s": 4.98,
+            "decode_tok_per_s_per_req": 31.1
+          },
+          {
+            "concurrency": 16,
+            "req_per_s": 1.68,
+            "output_tok_per_s": 215.0,
+            "ttft_p50_ms": 4980,
+            "ttft_p95_ms": 5074,
+            "latency_p50_s": 9.05,
+            "latency_p95_s": 9.51,
+            "decode_tok_per_s_per_req": 31.2
+          }
+        ]
+      },
+      {
+        "model": "qwen3.6-35b",
+        "silicon": "NVIDIA RTX PRO 6000 (Blackwell)",
+        "stamp": "rtx-pro-6000",
+        "levels": [
+          {
+            "concurrency": 1,
+            "req_per_s": 0.15,
+            "output_tok_per_s": 19.0,
+            "ttft_p50_ms": 1003,
+            "ttft_p95_ms": 1033,
+            "latency_p50_s": 6.76,
+            "latency_p95_s": 6.84,
+            "decode_tok_per_s_per_req": 22.0
+          },
+          {
+            "concurrency": 4,
+            "req_per_s": 0.57,
+            "output_tok_per_s": 72.8,
+            "ttft_p50_ms": 910,
+            "ttft_p95_ms": 1095,
+            "latency_p50_s": 7.01,
+            "latency_p95_s": 7.14,
+            "decode_tok_per_s_per_req": 20.8
+          },
+          {
+            "concurrency": 8,
+            "req_per_s": 1.13,
+            "output_tok_per_s": 144.4,
+            "ttft_p50_ms": 947,
+            "ttft_p95_ms": 1060,
+            "latency_p50_s": 7.06,
+            "latency_p95_s": 7.12,
+            "decode_tok_per_s_per_req": 20.9
+          },
+          {
+            "concurrency": 16,
+            "req_per_s": 2.24,
+            "output_tok_per_s": 286.9,
+            "ttft_p50_ms": 1042,
+            "ttft_p95_ms": 1062,
+            "latency_p50_s": 7.11,
+            "latency_p95_s": 7.13,
+            "decode_tok_per_s_per_req": 20.8
+          }
+        ]
+      },
+      {
+        "model": "qwen3.5-4b-tpu",
+        "silicon": "Google Cloud TPU v6e-1",
+        "stamp": "tpu",
+        "levels": [
+          {
+            "concurrency": 1,
+            "req_per_s": 0.5,
+            "output_tok_per_s": 64.1,
+            "ttft_p50_ms": 861,
+            "ttft_p95_ms": 1157,
+            "latency_p50_s": 1.96,
+            "latency_p95_s": 2.26,
+            "decode_tok_per_s_per_req": 115.8
+          },
+          {
+            "concurrency": 4,
+            "req_per_s": 1.86,
+            "output_tok_per_s": 238.2,
+            "ttft_p50_ms": 866,
+            "ttft_p95_ms": 1261,
+            "latency_p50_s": 1.99,
+            "latency_p95_s": 2.38,
+            "decode_tok_per_s_per_req": 113.0
+          },
+          {
+            "concurrency": 8,
+            "req_per_s": 3.42,
+            "output_tok_per_s": 437.1,
+            "ttft_p50_ms": 867,
+            "ttft_p95_ms": 1231,
+            "latency_p50_s": 2.05,
+            "latency_p95_s": 2.39,
+            "decode_tok_per_s_per_req": 109.4
+          },
+          {
+            "concurrency": 16,
+            "req_per_s": 6.4,
+            "output_tok_per_s": 819.7,
+            "ttft_p50_ms": 1004,
+            "ttft_p95_ms": 1245,
+            "latency_p50_s": 2.32,
+            "latency_p95_s": 2.48,
+            "decode_tok_per_s_per_req": 95.8
+          }
+        ]
+      },
+      {
+        "model": "qwen3-4b-neuron",
+        "silicon": "AWS Trainium (trn1.2xlarge)",
+        "stamp": "trainium",
+        "levels": [
+          {
+            "concurrency": 1,
+            "req_per_s": 0.22,
+            "output_tok_per_s": 28.7,
+            "ttft_p50_ms": 1342,
+            "ttft_p95_ms": 1452,
+            "latency_p50_s": 4.63,
+            "latency_p95_s": 4.69,
+            "decode_tok_per_s_per_req": 38.9
+          },
+          {
+            "concurrency": 4,
+            "req_per_s": 0.9,
+            "output_tok_per_s": 114.8,
+            "ttft_p50_ms": 969,
+            "ttft_p95_ms": 1413,
+            "latency_p50_s": 4.28,
+            "latency_p95_s": 4.68,
+            "decode_tok_per_s_per_req": 38.2
+          },
+          {
+            "concurrency": 8,
+            "req_per_s": 1.1,
+            "output_tok_per_s": 140.3,
+            "ttft_p50_ms": 3494,
+            "ttft_p95_ms": 4483,
+            "latency_p50_s": 6.82,
+            "latency_p95_s": 7.77,
+            "decode_tok_per_s_per_req": 37.9
+          },
+          {
+            "concurrency": 16,
+            "req_per_s": 1.11,
+            "output_tok_per_s": 141.8,
+            "ttft_p50_ms": 7728,
+            "ttft_p95_ms": 11162,
+            "latency_p50_s": 11.04,
+            "latency_p95_s": 14.43,
+            "decode_tok_per_s_per_req": 38.3
+          }
+        ]
+      }
+    ]
+  },
+  "silicon_benchmark_2026_11_24_run2": {
+    "date": "2026-11-24",
+    "scope": "second client sweep through the edge, same method as the first, with a measured network floor; no further repetition",
+    "client_to_edge_tls_rtt_ms": 471,
+    "network_floor_method": "median TTFT of 6 one-token requests ('hi', max_tokens 1) per deployment after one warm-up",
+    "adjustment": "network-adjusted throughput = output tokens / max(wall - ceil(N/c) * floor, 0.2 * wall); an approximation",
+    "deployments": [
+      {
+        "model": "qwen3-4b-neuron",
+        "stamp": "trainium",
+        "floor_ms": 899,
+        "decode_tok_per_s_c1": 38.9,
+        "levels": [
+          [
+            1,
+            29.2,
+            36.7,
+            1287
+          ],
+          [
+            4,
+            115.8,
+            145.3,
+            937
+          ],
+          [
+            8,
+            142.9,
+            163.5,
+            3437
+          ],
+          [
+            16,
+            142.8,
+            152.3,
+            7618
+          ]
+        ]
+      },
+      {
+        "model": "qwen3.5-2b",
+        "stamp": "cin-t4-01",
+        "floor_ms": 776,
+        "decode_tok_per_s_c1": 33.5,
+        "levels": [
+          [
+            1,
+            28.2,
+            34.0,
+            760
+          ],
+          [
+            4,
+            107.0,
+            127.8,
+            798
+          ],
+          [
+            8,
+            211.0,
+            251.2,
+            812
+          ],
+          [
+            16,
+            227.2,
+            248.6,
+            4911
+          ]
+        ]
+      },
+      {
+        "model": "qwen3.5-4b-tpu",
+        "stamp": "tpu",
+        "floor_ms": 824,
+        "decode_tok_per_s_c1": 115.6,
+        "levels": [
+          [
+            1,
+            65.4,
+            113.1,
+            811
+          ],
+          [
+            4,
+            243.0,
+            399.0,
+            830
+          ],
+          [
+            8,
+            475.7,
+            770.7,
+            832
+          ],
+          [
+            16,
+            854.5,
+            1302.2,
+            1078
+          ]
+        ]
+      },
+      {
+        "model": "qwen3.6-35b",
+        "stamp": "rtx-pro-6000",
+        "floor_ms": 786,
+        "decode_tok_per_s_c1": 21.8,
+        "levels": [
+          [
+            1,
+            18.7,
+            21.1,
+            856
+          ],
+          [
+            4,
+            72.9,
+            82.1,
+            871
+          ],
+          [
+            8,
+            145.0,
+            163.2,
+            887
+          ],
+          [
+            16,
+            282.5,
+            316.9,
+            998
+          ]
+        ]
+      }
+    ],
+    "level_fields": [
+      "concurrency",
+      "output_tok_per_s",
+      "output_tok_per_s_network_adjusted",
+      "ttft_p50_ms"
+    ],
+    "prefix_cache": "not measured: the Colab test prompt (about 12,000 tokens) exceeded the 4,096-token context of three deployments (requests rejected); on the RTX PRO 6000 deployment repeated and unique prefixes gave 1399 and 1398 ms"
   }
 }

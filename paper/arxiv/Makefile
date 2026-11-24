@@ -7,7 +7,7 @@
 #   make clean      remove intermediate files
 
 TEX        := pdflatex -interaction=nonstopmode -halt-on-error
-PDF_FIGS   := routing_sweep cold_start
+PDF_FIGS   := routing_sweep cold_start silicon_sweep
 PNG_FIGS   := fabric_architecture console_routing console_logs
 FIG_FILES  := $(PDF_FIGS:%=figures/%.pdf) $(PNG_FIGS:%=figures/%.png)
 
