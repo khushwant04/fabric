@@ -6,13 +6,19 @@ variable "project_id" {
 variable "region" {
   description = "Region of the subnetwork. G4 (RTX PRO 6000) capacity is limited to a few regions."
   type        = string
-  default     = "us-east5"
+  default     = "asia-southeast1"
 }
 
 variable "zone" {
   description = "Zone for the VM; it must offer g4-standard machines."
   type        = string
-  default     = "us-east5-b"
+  default     = "asia-southeast1-a"
+}
+
+variable "enable_ops_agent" {
+  description = "Install the Google Cloud Ops Agent (logs and metrics in Cloud Monitoring) through an OS policy."
+  type        = bool
+  default     = true
 }
 
 variable "name" {

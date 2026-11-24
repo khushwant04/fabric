@@ -9,6 +9,9 @@ resource "google_compute_instance" "rtx_pro_6000" {
   zone         = var.zone
   tags         = var.network_tags
 
+  # Selects this VM for the Ops Agent policy below.
+  labels = var.enable_ops_agent ? { goog-ops-agent-policy = "v2-template-1-7-0" } : {}
+
   boot_disk {
     device_name = var.name
 
@@ -62,5 +65,30 @@ resource "google_compute_instance" "rtx_pro_6000" {
       "https://www.googleapis.com/auth/servicecontrol",
       "https://www.googleapis.com/auth/trace.append",
     ]
+  }
+}
+
+# Google Cloud Ops Agent on every VM in the zone carrying the label above, as the
+# console's "Install Ops Agent" option sets up.
+module "ops_agent_policy" {
+  count = var.enable_ops_agent ? 1 : 0
+
+  source        = "github.com/terraform-google-modules/terraform-google-cloud-operations/modules/ops-agent-policy"
+  project       = var.project_id
+  zone          = var.zone
+  assignment_id = "goog-ops-agent-v2-template-1-7-0-${var.zone}"
+
+  agents_rule = {
+    package_state = "installed"
+    version       = "latest"
+  }
+
+  instance_filter = {
+    all = false
+    inclusion_labels = [{
+      labels = {
+        goog-ops-agent-policy = "v2-template-1-7-0"
+      }
+    }]
   }
 }

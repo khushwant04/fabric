@@ -27,5 +27,9 @@ Spot VMs are much cheaper but Google can stop them at any time; set `spot = fals
 demo that must not be interrupted. Stop the VM when you are not using it
 (`gcloud compute instances stop <name> --zone <zone>`), or remove it with `terraform destroy`.
 
+The VM defaults to `asia-southeast1-a`. With `enable_ops_agent = true` (the default), the VM is
+labelled and an OS policy installs the Google Cloud Ops Agent on it, so its logs and metrics
+show up in Cloud Monitoring. The policy needs the OS Config API enabled on the project.
+
 The project needs G4 quota in the chosen region (`NVIDIA_RTX_PRO_6000_GPUS` or the Spot
 equivalent). `terraform.tfvars` and state files are git-ignored: they hold project details.
