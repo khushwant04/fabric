@@ -1255,6 +1255,17 @@ All were invisible to the control plane and to CI. This argues for gateway valid
 turns silent errors into bounded, metered retries, and for treating first bring-up on each
 accelerator as part of the test plan.
 
+\paragraph*{Evaluating a decision twice needs both sides to know it}
+Policies are decided at the edge and again at the stamp so that both reach the same target
+(\cref{sec:policies}). That property silently assumes every stamp runs a release that carries
+policies. In the live system a stamp enrolled before policies shipped received a forwarded request
+for a policy name, did not know the policy, resolved the name as a plain model alias and answered
+\code{model\_not\_found}; because that answer is not a fallback condition, the client saw a 404 for
+two-thirds of its traffic. Re-running the bootstrap upgrades such a stamp; the planned remedy in
+the design is for the edge to forward the chosen target's alias to a stamp that cannot evaluate
+policies, so the decision degrades to edge-only rather than failing. Mixed releases are the normal
+state of independently operated stamps, so every decision taken twice needs such a degraded path.
+
 \paragraph*{Charge for corrections; observe outbound}
 A guard or fallback that re-runs a request hides cost unless it bills it; recording discarded
 attempts as usage and debiting them from limits and run budgets kept both mechanisms honest.
@@ -1328,7 +1339,8 @@ gateway restart. The
 edge's routing-table credential, if leaked, exposes every account's deployment, placement and
 policy metadata (no prompts or secrets). Policy changes propagate at polling speed, prompt-length
 conditions use a four-characters-per-token estimate, and \code{timeout} fallbacks can execute a
-request twice. The guard checks only non-streaming chat completions. TPU and Neuron stamps export no
+request twice. Stamps on a release older than policy support answer a policy name with
+\code{model\_not\_found} instead of degrading to the edge's decision. The guard checks only non-streaming chat completions. TPU and Neuron stamps export no
 accelerator-level metrics yet, so their throughput is client-observed only. GPU sharing (time-slicing with
 \sys{}-enforced memory shares, so a 96\,GiB card serving a 37.5\,GB model could also host a
 small one) is designed but not implemented.
