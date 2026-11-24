@@ -81,14 +81,14 @@ export function AppSidebar({
       <SidebarHeader className="gap-3 px-4 pt-4 pb-2 group-data-[collapsible=icon]/sidebar:items-center group-data-[collapsible=icon]/sidebar:px-2">
         {/* Collapsed, the rail keeps the mark on top and stacks the toggle under it. */}
         <div className="flex h-9 items-center justify-between gap-2 group-data-[collapsible=icon]/sidebar:h-auto group-data-[collapsible=icon]/sidebar:flex-col group-data-[collapsible=icon]/sidebar:gap-3">
-          <Link href="/dashboard" aria-label="Fabric home" className="flex min-w-0 items-center gap-2.5 rounded-lg text-[18px] font-semibold tracking-[-0.03em] outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Link href="/dashboard" aria-label="Fabric home" className="flex min-w-0 items-center gap-2.5 rounded-sm text-[18px] font-semibold tracking-[-0.03em] outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <FabricMark /><span className="group-data-[collapsible=icon]/sidebar:hidden">Fabric</span>
           </Link>
           <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
         </div>
         <SearchCommand />
       </SidebarHeader>
-      <SidebarContent className="gap-0 px-2 pt-2 pb-4 group-data-[collapsible=icon]/sidebar:px-2">
+      <SidebarContent className="gap-0 px-2 pt-3 pb-4 group-data-[collapsible=icon]/sidebar:px-2">
         <NavMain sections={sections} scopes={context.identity.scopes} />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border p-3 group-data-[collapsible=icon]/sidebar:items-center group-data-[collapsible=icon]/sidebar:px-2 group-data-[collapsible=icon]/sidebar:py-3">

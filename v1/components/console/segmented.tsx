@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 /** The muted track and raised selected segment shared by every console segmented control. */
 export const segmentedTrackClass = "inline-flex max-w-full flex-wrap gap-0.5 rounded-lg bg-muted p-0.5"
 export const segmentClass = "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] whitespace-nowrap text-muted-foreground transition-colors duration-(--motion-fast) outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-export const segmentSelectedClass = "bg-card font-medium text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-background"
+export const segmentSelectedClass = "bg-card font-medium text-foreground ring-1 ring-border dark:bg-background"
 
 export type SegmentOption<T extends string> = { value: T; label: ReactNode; ariaLabel?: string; count?: number }
 

@@ -41,7 +41,7 @@ export function ConsoleBreadcrumbs() {
 
   return (
     <nav aria-label="Breadcrumb">
-      <ol className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+      <ol className="flex flex-wrap items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
         {segments.map((segment, index) => {
           const href = `/${segments.slice(0, index + 1).join("/")}`
           const isLast = index === segments.length - 1

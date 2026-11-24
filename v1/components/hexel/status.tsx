@@ -44,7 +44,7 @@ function Status({
         {pulse && (
           <span
             className={cn(
-              "absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping-soft",
+              "absolute -inset-0.5 rounded-full opacity-25",
               dot[tone]
             )}
           />

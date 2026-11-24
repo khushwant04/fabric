@@ -61,7 +61,7 @@ export function AgentImage({ file }: { file: AgentFile }) {
     return <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs text-muted-foreground"><FileImageIcon className="size-3.5" />{file.name} · {file.bytes.toLocaleString("en")} bytes{file.omitted ? ` · not included (${file.omitted.replaceAll("_", " ")})` : ""}</div>
   }
   // eslint-disable-next-line @next/next/no-img-element -- a data URL produced by the run, not an optimisable asset
-  return <figure className="overflow-hidden rounded-xl border bg-white"><img src={file.dataUrl} alt={`Produced by the run: ${file.name}`} className="max-h-96 w-full object-contain" /><figcaption className="border-t bg-card px-3 py-1.5 text-[11px] text-muted-foreground">{file.name} · {file.bytes.toLocaleString("en")} bytes</figcaption></figure>
+  return <figure className="overflow-hidden rounded-md border bg-white"><img src={file.dataUrl} alt={`Produced by the run: ${file.name}`} className="max-h-96 w-full object-contain" /><figcaption className="border-t bg-card px-3 py-1.5 text-[11px] text-muted-foreground">{file.name} · {file.bytes.toLocaleString("en")} bytes</figcaption></figure>
 }
 
 export function CitationList({ citations, className }: { citations: Citation[]; className?: string }) {

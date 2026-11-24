@@ -47,7 +47,7 @@ export function StampMetricsView({ stampId, deploymentNames = {} }: { stampId: s
       <WindowSelect value={window} onChange={setWindow} />
     </div>
 
-    {loading && !data ? <div className="grid gap-4 lg:grid-cols-2">{[0, 1].map((item) => <Skeleton key={item} className="h-64 rounded-2xl" />)}</div>
+    {loading && !data ? <div className="grid gap-4 lg:grid-cols-2">{[0, 1].map((item) => <Skeleton key={item} className="h-64 rounded-lg" />)}</div>
       : data && !data.reported_at ? <Section title="No metrics reported in this window"><SectionEmpty>The stamp&apos;s agent reports GPU and traffic metrics every 30 seconds when agent.reportMetrics is on. GPU devices need a DCGM exporter (gpuMetrics in the stamp chart).</SectionEmpty></Section>
       : data ? <>
         <MetricGrid className="sm:grid-cols-2 xl:grid-cols-4">

@@ -118,7 +118,7 @@ function TableHead({
     <th
       data-slot="table-head"
       className={cn(
-        "h-9 border-b px-3 align-middle text-xs font-medium whitespace-nowrap text-muted-foreground first:pl-4 last:pr-4",
+        "h-9 border-b bg-muted/40 px-3 align-middle font-mono text-[11px] font-medium tracking-[0.05em] whitespace-nowrap text-muted-foreground uppercase first:pl-4 last:pr-4",
         "group-data-[density=comfortable]/table:h-10 group-data-[density=compact]/table:h-8",
         a === "right" && "tabular-nums",
         align(a),

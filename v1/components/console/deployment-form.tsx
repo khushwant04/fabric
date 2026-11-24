@@ -43,7 +43,7 @@ export function DeploySubmit({ disabled = false, className }: { disabled?: boole
 }
 
 function Disclosure({ title, section, children }: { title: string; section?: string; children: ReactNode }) {
-  return <details className="group overflow-hidden rounded-xl border border-border" data-section={section}>
+  return <details className="group overflow-hidden rounded-md border border-border" data-section={section}>
     <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium outline-none select-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden"><ChevronRightIcon aria-hidden="true" className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />{title}</summary>
     {children}
   </details>
@@ -87,7 +87,7 @@ export function DeploymentFields({ stamps, disabled = false, onSelectChange, pre
       <Disclosure title="Routing" section="routing"><div className="grid gap-5 border-t border-border p-4">
         <input type="hidden" name="routing" value="1" />
         <Field><FieldLabel htmlFor="strategy">Balancing strategy</FieldLabel><Select name="strategy" value={strategy} items={balancingStrategies.map(({ value, label }) => ({ value, label }))} disabled={disabled} onValueChange={(value) => { setStrategy(String(value)); onSelectChange?.() }}><SelectTrigger id="strategy" className="w-full @lg:w-1/2"><SelectValue /></SelectTrigger><SelectContent>{balancingStrategies.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><FieldDescription>How the gateway spreads requests across this deployment’s replicas. {balancingStrategies.find((option) => option.value === strategy)?.description}</FieldDescription></Field>
-        <Field><FieldLabel id="capabilities-label">Capabilities</FieldLabel><div role="group" aria-labelledby="capabilities-label" className="grid gap-3 rounded-xl border border-border p-3 @md:grid-cols-2 @lg:grid-cols-4">{capabilityFlags.map((flag) => <label key={flag.value} className="flex items-start gap-2 text-sm" title={flag.description}><Checkbox name="capabilities" value={flag.value} defaultChecked={defaultCapabilities.includes(flag.value)} disabled={disabled} onCheckedChange={onSelectChange} className="mt-0.5" /><span className="min-w-0"><span className="block leading-5">{flag.label}</span><span className="block text-xs text-muted-foreground">{flag.description}</span></span></label>)}</div><FieldDescription>What this model can serve. With <code className="font-mono text-xs">model: &quot;auto&quot;</code>, the gateway picks among the account’s deployments whose capabilities fit the request.</FieldDescription></Field>
+        <Field><FieldLabel id="capabilities-label">Capabilities</FieldLabel><div role="group" aria-labelledby="capabilities-label" className="grid gap-3 rounded-md border border-border p-3 @md:grid-cols-2 @lg:grid-cols-4">{capabilityFlags.map((flag) => <label key={flag.value} className="flex items-start gap-2 text-sm" title={flag.description}><Checkbox name="capabilities" value={flag.value} defaultChecked={defaultCapabilities.includes(flag.value)} disabled={disabled} onCheckedChange={onSelectChange} className="mt-0.5" /><span className="min-w-0"><span className="block leading-5">{flag.label}</span><span className="block text-xs text-muted-foreground">{flag.description}</span></span></label>)}</div><FieldDescription>What this model can serve. With <code className="font-mono text-xs">model: &quot;auto&quot;</code>, the gateway picks among the account’s deployments whose capabilities fit the request.</FieldDescription></Field>
         <label className="flex items-start gap-2 text-sm"><Checkbox name="autoEnabled" defaultChecked disabled={disabled} onCheckedChange={onSelectChange} className="mt-0.5" /><span><span className="block leading-5">Eligible for automatic routing</span><span className="block text-xs text-muted-foreground">Clear to serve this deployment only by its API model name.</span></span></label>
         <div className="grid gap-5 @lg:grid-cols-2">
           <Field><FieldLabel htmlFor="priority">Priority</FieldLabel><Input id="priority" name="priority" type="number" min={priorityRange.min} max={priorityRange.max} step={1} defaultValue={0} disabled={disabled} /><FieldDescription>Breaks ties between deployments that fit an automatic request equally well; higher wins. From {priorityRange.min} to {priorityRange.max}.</FieldDescription></Field>
@@ -102,7 +102,7 @@ function Chip({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground [&_svg]:size-3.5">{icon}{children}</span>
 }
 
-const cardClass = "group flex h-full min-w-0 flex-col gap-3 rounded-2xl border border-border bg-card p-5 text-left outline-none transition-[border-color,background-color,box-shadow] duration-(--motion-fast) hover:border-foreground/25 hover:shadow-[0_2px_8px_rgb(0_0_0/0.04)] focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+const cardClass = "group flex h-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-5 text-left outline-none transition-[border-color,background-color,box-shadow] duration-(--motion-fast) hover:border-foreground/25 hover:shadow-[0_2px_8px_rgb(0_0_0/0.04)] focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 
 function ModelCardBody({ model }: { model: CatalogModel }) {
   return <>
@@ -180,7 +180,7 @@ export function NewDeploymentFlow({ stamps, selection, onSelect, linkBase, disab
 }
 
 function SelectedModel({ title, detail, chips, selectHref, onSelect, disabled }: { title: string; detail: string; chips?: ReactNode; selectHref?: (selection: ModelSelection) => string; onSelect?: (selection: ModelSelection) => void; disabled: boolean }) {
-  return <div className="flex items-start gap-4 rounded-2xl border border-border bg-muted/40 p-4">
+  return <div className="flex items-start gap-4 rounded-lg border border-border bg-muted/40 p-4">
     <IconTile><BoxIcon /></IconTile>
     <div className="min-w-0 flex-1">
       <div className="text-base font-medium">{title}</div>

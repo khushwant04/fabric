@@ -47,7 +47,7 @@ export function DrawerPanel({ open, onRequestClose, onOpenChangeComplete, size =
   const Title = mobile ? DrawerTitle : SheetTitle
   const Description = mobile ? DrawerDescription : SheetDescription
   const header = <div data-slot="form-drawer-header" className="flex min-w-0 shrink-0 items-start gap-3.5 border-b border-border px-5 pt-5 pb-5 sm:px-7 sm:pt-6">
-    {Icon ? <span aria-hidden="true" className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-brand-foreground"><Icon className="size-4" /></span> : null}
+    {Icon ? <span aria-hidden="true" className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-brand-tint text-brand-foreground"><Icon className="size-4" /></span> : null}
     <div className="min-w-0 flex-1">
       <Title className="text-lg leading-7 font-medium tracking-[-0.01em]">{title}</Title>
       {description ? <Description className="mt-0.5 text-sm leading-5 text-pretty text-muted-foreground">{description}</Description> : null}
@@ -69,7 +69,7 @@ export function DrawerPanel({ open, onRequestClose, onOpenChangeComplete, size =
       showCloseButton={false}
       finalFocus={finalFocus}
       data-form-drawer={size}
-      className={cn("w-full gap-0 border-border bg-popover p-0 shadow-[0_0_48px_rgb(0_0_0/0.12)] outline-none data-[side=right]:w-full sm:m-2 sm:h-[calc(100%-1rem)] sm:rounded-2xl sm:border motion-reduce:transition-none", FORM_DRAWER_WIDTHS[size])}
+      className={cn("w-full gap-0 border-border bg-popover p-0 shadow-[0_0_48px_rgb(0_0_0/0.12)] outline-none data-[side=right]:w-full sm:m-2 sm:h-[calc(100%-1rem)] sm:rounded-lg sm:border motion-reduce:transition-none", FORM_DRAWER_WIDTHS[size])}
     >
       {header}
       {children}

@@ -4,7 +4,6 @@ import type { ReactNode } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 
-import { GlidingHighlight, useGlidingHighlight } from "@/components/ui/gliding-highlight"
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -36,16 +35,11 @@ export function NavMain({
   const pathname = usePathname()
   const router = useRouter()
   const { isMobile, setOpenMobile } = useSidebar()
-  // One highlight for the whole nav, so hover glides continuously between items and
-  // across section labels instead of fading out and back in at each section edge.
-  const { containerRef, highlightRef } = useGlidingHighlight<HTMLElement>({
-    itemSelector: "[data-sidebar=menu-button]",
-    hoverMode: "nearest",
-  })
 
   return (
-    <nav ref={containerRef} className="relative isolate flex flex-col gap-3" aria-label="Fabric navigation">
-      <GlidingHighlight ref={highlightRef} className="rounded-lg bg-sidebar-accent/70" />
+    // Plain hover and active states, no gliding highlight. The active page carries an ink
+    // bar on its left edge.
+    <nav className="flex flex-col gap-4" aria-label="Fabric navigation">
       {sections.map((section, sectionIndex) => {
         const items = section.items.filter(
           (item) => !item.scope || scopes.includes(item.scope)
@@ -55,7 +49,7 @@ export function NavMain({
         return (
           <SidebarGroup key={section.label ?? sectionIndex} className={section.label ? "gap-0.5 p-0 group-data-[collapsible=icon]/sidebar:border-t group-data-[collapsible=icon]/sidebar:border-sidebar-border group-data-[collapsible=icon]/sidebar:pt-3" : "gap-0.5 p-0"}>
             {section.label ? (
-              <SidebarGroupLabel className="h-8 px-3 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+              <SidebarGroupLabel className="h-7 px-3 font-mono text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                 {section.label}
               </SidebarGroupLabel>
             ) : null}
@@ -73,7 +67,7 @@ export function NavMain({
                         render={<Link href={item.url} prefetch={false} />}
                         isActive={isActive}
                         tooltip={item.title}
-                        className="h-9 gap-3 rounded-lg px-3 text-[15px] font-normal text-sidebar-foreground/85 transition-colors duration-100 ease-out hover:bg-transparent hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0!"
+                        className="h-8 gap-2.5 rounded-sm px-3 text-[14px] font-normal text-sidebar-foreground/80 transition-none hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground data-active:shadow-[inset_2px_0_0_var(--sidebar-foreground)] [&_svg]:size-4 [&_svg]:text-muted-foreground data-active:[&_svg]:text-sidebar-foreground group-data-[collapsible=icon]/sidebar:mx-auto group-data-[collapsible=icon]/sidebar:size-10! group-data-[collapsible=icon]/sidebar:justify-center group-data-[collapsible=icon]/sidebar:px-0!"
                         onClick={() => { if (isMobile) setOpenMobile(false) }}
                         // Warm only the destination the user is about to open.
                         onMouseEnter={() => { if (!isActive) router.prefetch(item.url) }}
@@ -82,7 +76,7 @@ export function NavMain({
                       >
                         {item.icon}
                         <span className="truncate">{item.title}</span>
-                        {item.badge ? <span className="ml-auto rounded-full group-data-[collapsible=icon]/sidebar:hidden bg-brand-tint px-1.5 py-px text-[10px] font-semibold tracking-wide text-brand-foreground uppercase">{item.badge}</span> : null}
+                        {item.badge ? <span className="ml-auto rounded-xs group-data-[collapsible=icon]/sidebar:hidden bg-brand px-1.5 py-px font-mono text-[10px] font-semibold tracking-wide text-foreground uppercase">{item.badge}</span> : null}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   )

@@ -4,9 +4,9 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-const MOVEMENT = "160ms cubic-bezier(0.16, 1, 0.3, 1)"
-const FADE = "opacity 100ms ease-out"
-const TRANSITION = `transform ${MOVEMENT}, width ${MOVEMENT}, height ${MOVEMENT}, ${FADE}`
+// The highlight snaps to the hovered item: the console avoids decorative motion.
+const FADE = "none"
+const TRANSITION = "none"
 
 type GlidingHighlightOptions = {
   itemSelector: string

@@ -32,7 +32,7 @@ type Data = { node: FlowNode; selected: boolean; color?: string }
 
 function AliasNode({ data }: NodeProps<Node<Data>>) {
   const node = data.node as Extract<FlowNode, { kind: "alias" }>
-  return <div className="flex w-[220px] items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.04)]">
+  return <div className="flex w-[220px] items-center gap-3 rounded-md border border-border bg-card px-4 py-3">
     <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground"><RouteIcon className="size-4" /></span>
     <div className="min-w-0">
       <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Model name</div>
@@ -46,7 +46,7 @@ function AliasNode({ data }: NodeProps<Node<Data>>) {
 function RuleNode({ data }: NodeProps<Node<Data>>) {
   const node = data.node as Extract<FlowNode, { kind: "rule" }>
   return <div className={cn(
-    "w-[300px] cursor-pointer rounded-xl border bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-colors",
+    "w-[300px] cursor-pointer rounded-md border bg-card px-4 py-3 transition-colors",
     data.selected ? "border-foreground ring-2 ring-ring/30" : "border-border hover:border-foreground/40"
   )}>
     <Handle type="target" position={Position.Left} className="!size-2 !border-0 !bg-muted-foreground/60" />
@@ -66,7 +66,7 @@ function RuleNode({ data }: NodeProps<Node<Data>>) {
 
 function TargetNode({ data }: NodeProps<Node<Data>>) {
   const node = data.node as Extract<FlowNode, { kind: "target" }>
-  return <div className={cn("w-[240px] rounded-xl border bg-card px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.04)]", node.known ? "border-border" : "border-destructive/60")}>
+  return <div className={cn("w-[240px] rounded-md border bg-card px-4 py-3", node.known ? "border-border" : "border-destructive/60")}>
     <Handle type="target" position={Position.Left} className="!size-2 !border-0 !bg-muted-foreground/60" />
     <div className="flex items-center gap-2">
       <span className="size-2.5 shrink-0 rounded-full" style={{ background: data.color }} aria-hidden="true" />
@@ -211,7 +211,7 @@ export function PolicyFlowList({
     {rules.map(({ rule, index, isDefault }) => {
       const node = layout.nodes.find((item) => item.id === `rule:${rule.id}`) as Extract<FlowNode, { kind: "rule" }>
       return <li key={rule.id}>
-        <button type="button" onClick={() => onSelect(rule.id)} className={cn("w-full rounded-xl border bg-card px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", selected === rule.id ? "border-foreground" : "border-border")}>
+        <button type="button" onClick={() => onSelect(rule.id)} className={cn("w-full rounded-md border bg-card px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", selected === rule.id ? "border-foreground" : "border-border")}>
           <div className="flex items-center gap-2 text-sm font-medium"><span className="flex h-5 min-w-5 items-center justify-center rounded-md bg-muted px-1 text-[11px] tabular-nums">{isDefault ? "∗" : index}</span><span className="truncate">{rule.name || rule.id}</span></div>
           <div className="mt-1 text-xs text-muted-foreground">{isDefault ? "Every request no rule above matched" : node.conditions.join(" · ") || "Every request"}</div>
           <div className="mt-2 flex flex-wrap gap-1.5">

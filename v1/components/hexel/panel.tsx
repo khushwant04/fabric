@@ -17,7 +17,7 @@ function Panel({ className, ...props }: React.ComponentProps<"section">) {
     <section
       data-slot="panel"
       className={cn(
-        "flex min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_1px_2px_rgb(0_0_0/0.025)]",
+        "flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card",
         className
       )}
       {...props}
