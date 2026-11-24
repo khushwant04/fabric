@@ -190,5 +190,31 @@
     "subset_disagreements": 0,
     "canary_10_to_20_moved_percent": 9.98,
     "canary_moves_not_onto_canary": 0
+  },
+  "live_observations_2026_11_24_trainium": {
+    "date": "2026-11-24",
+    "scope": "point-in-time live check",
+    "vm": "AWS trn1.2xlarge on the Neuron Deep Learning AMI: 1 Trainium device, 2 NeuronCores, 32 GiB HBM; 100 GiB root volume, later grown to 200 GiB",
+    "bootstrap": "one-command bootstrap detected the instance type from EC2 IMDSv2, installed the Neuron device plugin and advertised aws.amazon.com/neuron = 1",
+    "model": "Qwen/Qwen3-4B bf16, tensor parallel 2 (NeuronCores), max_model_len 4096, max_num_seqs 4, image pytorch-inference-vllm-neuronx 0.13.0 (SDK 2.28), 8925335190 bytes",
+    "defects": [
+      {
+        "symptom": "vLLM 0.13 refused to start: 'When prefix caching is enabled, block_size must be set' (pydantic validation of VllmConfig)",
+        "cause": "vLLM enables prefix caching by default; the Neuron plugin requires an explicit KV block size and a block layout compiled into the model",
+        "fix": "the operator passes --no-enable-prefix-caching on Neuron unless the deployment's extra args set prefix caching or --block-size (release c0c7149)"
+      },
+      {
+        "symptom": "the console reported 'GPU runtime missing' and 'Weight download failed'",
+        "cause": "vLLM probes for libcuda and logs a harmless ImportError on Neuron; the crash preceded the weight download",
+        "fix": "the GPU-runtime diagnosis skips Neuron and TPU hosts; configuration errors are reported as 'Server rejected its settings' with vLLM's reason"
+      },
+      {
+        "symptom": "after downloading 8.0 GB of weights the model host was evicted (node low on ephemeral-storage) and the next replica was unschedulable (untolerated taint)",
+        "cause": "the root volume held the AMI's SDK environments (82 GB of 96 GB used) plus the 8.9 GB image, the weights and compiled artifacts, crossing the kubelet eviction threshold",
+        "fix": "root volume grown to 200 GiB; the console diagnoses disk-pressure evictions and tainted nodes"
+      }
+    ],
+    "end_to_end_serving": "not yet observed at the time of writing: the host passed configuration and the weight download before the disk-pressure eviction",
+    "not_measured": "throughput, latency, Neuron compilation time"
   }
 }

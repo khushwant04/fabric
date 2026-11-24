@@ -50,7 +50,7 @@
 \newcommand{\Tested}{\ev{tested}}
 \newcommand{\Computed}{\ev{computed}}
 \newcommand{\repourl}{\texttt{[repository URL withheld; to be added]}}
-\newcommand{\commit}{\code{948e673}}
+\newcommand{\commit}{\code{f285f04}}
 \definecolor{cfg}{HTML}{7451A6}
 \definecolor{gen}{HTML}{2878B5}
 \definecolor{ink}{HTML}{17202A}
@@ -486,6 +486,48 @@ illustrates a recurring lesson (\cref{sec:lessons}): CI renders and unit tests v
 TPU manifest, yet the two defects concerned a fit between catalogue and slice and a network
 assumption of a vendor runtime, neither of which a test without the device could observe.
 
+\subsection{First Neuron bring-up: an experience report}
+\label{sec:neuron-bringup}
+On 24~Nov 2026 we enrolled an AWS \code{trn1.2xlarge} instance (one Trainium device, two
+NeuronCores, 32\,GiB HBM) on the Neuron Deep Learning AMI with the same one-command bootstrap
+(\PointInTime{}). It read the instance type from EC2 instance metadata, installed the Neuron
+device plugin, advertised \code{aws.amazon.com/neuron}~=~1, and the agent measured the device. A
+Qwen3-4B bf16 deployment was placed with tensor parallelism over both NeuronCores, served by the
+vLLM~0.13 Neuron container (an 8.9\,GB image). Three defects surfaced, again none visible to CI.
+
+\emph{An engine default the backend rejects.} vLLM~0.13 enables prefix caching by default, and
+the Neuron plugin refuses to start without an explicit KV block size
+(\code{When prefix caching is enabled, block\_size must be set}); prefix caching on Neuron also
+needs a block KV layout compiled into the model. The operator now starts Neuron hosts with prefix
+caching off unless the deployment's own arguments set it and a block size. GPU and TPU hosts keep
+the engine default.
+
+\emph{A misleading diagnosis.} vLLM probes for \code{libcuda} on every platform and logs a
+harmless import error on Neuron; the console read it as a missing GPU runtime and placed the
+crash at the weight download. Diagnoses are now platform-aware, and a configuration the engine
+rejects is reported as such, quoting the setting it names.
+
+\emph{Disk, not memory.} With the configuration fixed, the host downloaded all 8\,GB of weights
+and was then evicted by the kubelet for low ephemeral storage, which also tainted the node so that
+the replacement replica could not schedule. The AMI's SDK environments already used 82\,GB of the
+96\,GB root filesystem; the image, the weights and the compiled artifacts crossed the eviction
+threshold. Growing the root volume to 200\,GiB cleared it, and the console now diagnoses
+disk-pressure evictions and tainted nodes. At the time of writing the deployment had passed
+configuration and weight download; we report Neuron serving only once observed.
+
+\subsection{Compiled-artifact caches}
+\label{sec:compile-cache}
+TPU and Neuron hosts compile before they serve: XLA compiles one graph per batch and sequence
+bucket, and the Neuron compiler builds the whole model ahead of time. The operator therefore
+places both caches on the node's disk beside the weights: XLA's compilation cache
+(\code{VLLM\_XLA\_CACHE\_PATH}), and Neuron's graph cache with the serving plugin's compiled
+artifacts, keyed by model, release and compilation settings. A restart, or a stop and start of
+the VM, reuses the image, weights and compiled graphs; a new model, context length, batch limit,
+parallelism or engine release compiles afresh, while older artifacts stay for a switch back. The
+cost is moved, not removed: the first start of each configuration still pays it, which is why
+the startup budgets are per kind (40~minutes on TPU, 90 on Neuron) and why serving shapes should
+be sized to the workload.
+
 % ================================================================= generation clock
 \section{The Generation Clock}
 \label{sec:gen}
@@ -845,7 +887,11 @@ weights, loading weights, compiling or warming up, ready---from host snapshots a
 measured progress (image size and pull time, bytes of weights downloaded), and shows the
 sanitized server log with level parsing and search. Startup-probe misses while weights load are
 shown as expected rather than as failures; real failures appear at their stage with a diagnosis
-(e.g.\ a missing NVIDIA RuntimeClass, HBM exhaustion, or FP8 on TPU). A \textbf{Metrics} tab plots
+(e.g.\ a missing NVIDIA RuntimeClass, HBM exhaustion, FP8 on TPU, a setting the engine
+rejects, or a disk-pressure eviction). Diagnoses are platform-aware: a CUDA probe warning on a TPU
+or Neuron host is not read as a missing GPU runtime. Enrollment is a guided three-step drawer
+(prepare the machine, choose runtime, hostname and TLS, then generate the single-use command),
+so the token is created only once the command it belongs to is final. A \textbf{Metrics} tab plots
 request rate, tokens, TTFT and inter-token percentiles from the merged one-minute rows. The
 \textbf{Routing} editor draws a policy as a flow from the model name through its rules to the
 targets, with weights on edges and dashed fallback edges; \emph{Test a request} calls the
@@ -871,6 +917,13 @@ SQLAlchemy, Alembic); the agent, operator and collector are Go; the console is a
 application; Helm charts package the control plane (with the optional edge) and stamps.
 Kubernetes provides reconciliation; it does not provide \sys{}'s account semantics.
 
+The deployment used for this paper spans three clouds behind one edge: the control plane, edge,
+console back end and observability run on a managed Kubernetes cluster in one Azure region; stamps
+are an Azure T4 VM, a Google Cloud RTX PRO 6000 Spot VM created from the checked-in Terraform
+module (\code{infra/}), a Cloud TPU v6e-1 VM and an AWS Trainium instance, each enrolled with the
+same bootstrap. Releases are built by CI for every commit on the main branch and pinned by commit
+in the bootstrap and the console's enrollment command.
+
 \begin{table}[t]
 \centering
 \caption{Code base at commit \commit{} (non-test source lines by \code{wc -l}; test
@@ -881,10 +934,10 @@ functions counted by definition).}
 \toprule
 Component & Lines & Tests \\
 \midrule
-Control plane (Python) & 14.4k & 320 \\
+Control plane (Python) & 14.4k & 330 \\
 Stamp and edge gateways, hosted tools (Python) & 17.7k & 653 \\
-Agent, operator, collector (Go) & 11.4k & 272 \\
-Console (TypeScript) & 32.3k & --- \\
+Agent, operator, collector (Go) & 11.9k & 293 \\
+Console (TypeScript) & 33.0k & 153 \\
 Code sandbox service (Python) & 0.8k & --- \\
 \bottomrule
 \end{tabularx}
@@ -899,7 +952,8 @@ We ask: \textbf{RQ1} Does prefix-aware routing improve cache reuse without the t
 failure of session affinity? \textbf{RQ2} Do routing policies split, agree and fall back as
 designed? \textbf{RQ3} Do the agent-governance mechanisms work with real models and unmodified
 client SDKs? \textbf{RQ4} Can heterogeneous stamps, including Cloud TPU, be brought up, and where
-does configuration-clock time go? Every number below comes from a dated, checked-in record or
+does configuration-clock time go? \textbf{RQ5} How should serving performance be compared across
+silicon in different regions behind one edge? Every number below comes from a dated, checked-in record or
 the paper's evidence register (\cref{app:repro}); nothing is imputed. \Cref{tab:evidence}
 defines the evidence classes; each result carries its class as a small-caps tag.
 
@@ -916,7 +970,7 @@ Class & Meaning and claims \\
 \Simulated{} & Production gateway, simulated hosts; compares strategies, not absolute latency. Routing study, 5~Nov 2026 \\
 \Computed{} & Deterministic run of shipped code on synthetic keys. Policy split, 17~Nov 2026 \\
 \Tested{} & Automated suites at \commit{}. Edge, policies, guard, runs, prefix routing, agent SDK, Go agent and operator, TPU and Neuron paths \\
-\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up, then end-to-end serving after the fix \\
+\PointInTime{} & One live observation on a stated date. 16~Nov: Blackwell stamp, guard 3/3, SDK smoke 8/8, parser incident. 17~Nov: TPU v6e-1 bring-up, then end-to-end serving after the fix. 24~Nov: Trainium bring-up to weight download \\
 \Measured{} & Retained logs from a named run. 6~Oct: T4 cold-start stages \\
 \DevOnly{} & Kernel microbenchmarks; not in serving \\
 \Designed{} & Specified, not yet exercised on target: production edge failover, GPU sharing \\
@@ -1090,6 +1144,36 @@ because a recreate would expose roughly 15 minutes of downtime; and placement re
 stamp cannot hold, because a Pending pod's wait is the largest single stage. They also explain
 the 40-minute TPU start-up budget: XLA compilation adds to, rather than replaces, these stages.
 
+\paragraph*{AWS Trainium (\PointInTime{}, 24~Nov 2026)}
+As reported in \cref{sec:neuron-bringup}, the bootstrap detected a \code{trn1.2xlarge}, advertised
+its device and placed a Qwen3-4B deployment; the host reached and completed the 8\,GB weight
+download after the prefix-caching default was fixed, and was then evicted for disk. We record no
+Neuron compilation time or serving figures yet.
+
+\subsection{RQ5: Comparing silicon across regions \normalfont(method; \Tested{} harness)}
+\label{sec:eval-silicon}
+Stamps of different silicon sit in different regions, so a client-side measurement of a model on
+one stamp mixes accelerator time with the client-to-edge and edge-to-stamp paths. We separate the
+two with a per-deployment \emph{network floor}. Before a sweep, the harness sends $k$ minimal
+requests (a one-word prompt, one output token) to each deployment through the edge and takes the
+median time to first token as the floor $f_d$: a full round trip on the same path with negligible
+prefill and decode. For a deployment $d$ it then reports
+\begin{align}
+\mathrm{TTFT}^{\mathrm{compute}}_d &= \mathrm{TTFT}^{\mathrm{p50}}_d - f_d, \\
+\mathrm{tput}^{\mathrm{adj}}_d(c) &= \frac{\sum_i n^{\mathrm{out}}_i}{\max\!\big(W - \lceil N/c\rceil f_d,\; 0.2\,W\big)},
+\end{align}
+where $N$ requests run at concurrency $c$ in wall time $W$ and $n^{\mathrm{out}}_i$ are output
+tokens; the subtraction charges the floor once per round of requests and is an approximation.
+Per-request decode rate, $(n^{\mathrm{out}}-1)/(t_{\mathrm{end}}-t_{\mathrm{first}})$, excludes
+the network by construction and is the fairest single cross-silicon figure. TLS handshake times to
+the edge and to each stamp's public endpoint are reported beside the floor as pure network
+references, and the prefix-cache effect is measured as the ratio of compute TTFT with a unique and
+with a repeated 3{,}000-token prefix, keeping all calls on one stamp with a session key. The
+harness (\code{scripts/demo/}) also exercises streaming, run budgets, \code{auto}, cascade and the
+guard; it is tested against a stub gateway, and its live results across the T4, RTX PRO 6000,
+TPU v6e and Trainium stamps are the first item of the evaluation plan
+(\cref{sec:limits}). We report no cross-silicon numbers here.
+
 % ================================================================= lessons
 \section{Lessons}
 \label{sec:lessons}
@@ -1108,7 +1192,9 @@ and tested for identity, made ``what you test is what runs'' a property of the b
 \paragraph*{Configuration surfaces leak into generation correctness}
 Our agentic and TPU failures were configuration interactions, not model failures: a missing
 tool-call parser, an engine that ignores a requested output format while tools are offered, a
-catalogue preset larger than the smallest slice, and a vendor runtime that assumes IPv6 loopback.
+catalogue preset larger than the smallest slice, a vendor runtime that assumes IPv6 loopback, an
+engine default that one backend rejects, and a node disk that an accelerator SDK had already
+mostly filled.
 All were invisible to the control plane and to CI. This argues for gateway validation that
 turns silent errors into bounded, metered retries, and for treating first bring-up on each
 accelerator as part of the test plan.
@@ -1174,7 +1260,8 @@ invariants resemble NIST SP~800-207~\cite{nistzt}, with narrower, testable claim
 The routing results use simulated hosts. Live checks are single observations without
 repetition or confidence intervals, and the September, October and November observations
 differ in topology and software. The policy results establish mechanism, not production
-behaviour. TPU serving has not been observed end to end.
+behaviour. TPU serving was observed end to end once, without timing; Neuron serving has not yet
+been observed end to end.
 
 \paragraph*{Known gaps}
 The stamp pod still mounts the agent's Kubernetes service-account token into the gateway and
@@ -1203,8 +1290,10 @@ two production stamps and inject stamp and control-plane failures, recording fai
 the absence of duplicate execution; (3) exercise routing policies on live stamps, measuring
 propagation delay from publish to enforcement and verifying session stickiness under canary
 changes; (4) measure guard repair rates per model on a public tool-calling benchmark, separating
-repaired, failed and valid outcomes and their token cost; and (5) confirm TPU serving on v6e-1
-and v6e-4, recording XLA compilation time with a cold and a warm cache.
+repaired, failed and valid outcomes and their token cost; (5) confirm TPU serving on v6e-1
+and v6e-4 and Neuron serving on Trainium, recording compilation time with a cold and a warm
+cache; and (6) run the RQ5 harness across all four silicon types with repeated trials, reporting
+compute TTFT, decode rate, adjusted throughput and prefix-cache speed-up with their spread.
 
 % ================================================================= conclusion
 \section{Conclusion}
@@ -1223,7 +1312,8 @@ throughput on GPU, TPU and Neuron stamps and production edge failover remain sta
 {\raggedright
 Source code and records: \repourl, commit \commit. All plotted and quoted values are read from
 the repository: \code{paper/data/evidence.json} (evidence register: the 16~Nov live observations
-and the 17~Nov TPU bring-up, both with scope ``point-in-time live check''; the 6~Oct cold-start
+the 17~Nov TPU bring-up and the 24~Nov Trainium bring-up, all with scope ``point-in-time live
+check''; the 6~Oct cold-start
 timestamps; and the routing-policy split check), and the routing artifacts under
 \code{docs/benchmarks/routing-2026-11-05/} (schema \code{fabric.routing-benchmark/v1}; each records
 its command, commit, dirty flag, host model and per-seed summaries). Figures are regenerated
@@ -1231,7 +1321,9 @@ deterministically with \code{paper/generate\_figures.py} (which also crops the a
 diagram and console screenshots from checked-in images), the routing benchmark with
 \code{make bench-routing}, and the policy check with \code{paper/policy\_split\_check.py}.
 Edge, agent and cascade demonstrations run without an accelerator (\code{make demo-edge},
-\code{make demo-agent}, \code{make demo-cascade}). Operational identifiers (hostnames, cloud
+\code{make demo-agent}, \code{make demo-cascade}); the live feature demo and the cross-silicon
+harness of \cref{sec:eval-silicon} are \code{scripts/demo/feature\_demo.py} and its notebook, and
+the GPU VM is reproducible from \code{infra/gcp/rtx-pro-6000}. Operational identifiers (hostnames, cloud
 resource names, addresses, credentials) are omitted by design.\par}
 
 \section*{Acknowledgment}
