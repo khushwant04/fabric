@@ -107,6 +107,17 @@ export function deploymentState(
   return { ...baseObserved, status: readyReplicas > 0 ? "degraded" : "deploying", detail: reason ?? `${readyReplicas} of ${desiredReplicas} replicas reported ready; ${unavailable} unavailable.` }
 }
 
+/**
+ * Whether the deployment can take requests now: some placement reports a ready replica and
+ * nothing has failed. Weaker than status "ready", which needs every placement at the current
+ * generation; the edge routes to any ready replica, so routing views use this.
+ */
+export function servesTraffic(state: DeploymentState): boolean {
+  if (state.status === "ready") return true
+  if (["failed", "deleted", "terminating", STAMP_REMOVED].includes(state.status)) return false
+  return (state.readyReplicas ?? 0) > 0
+}
+
 export function stampState(stamp: Stamp, now = Date.now()) {
   if (stamp.revoked_at || stamp.status.toLowerCase() === "revoked") return { status: "revoked", detail: "Stamp credentials have been revoked." }
   if (stamp.status.toLowerCase() !== "active") return { status: stamp.status.toLowerCase(), detail: "The control plane has not marked this stamp active." }

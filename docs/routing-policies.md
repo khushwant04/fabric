@@ -88,6 +88,13 @@ Responses carry: `X-Fabric-Policy`, `X-Fabric-Policy-Version`, `X-Fabric-Policy-
 `X-Fabric-Policy-Target`, `X-Fabric-Policy-Fallbacks` and, after a fallback,
 `X-Fabric-Policy-Fallback-Reason` (for example `no_ready_host>server_error`).
 
+**Stamps on older releases.** A stamp on a release from before routing policies does not know
+the policy name and answers `model_not_found` without running anything. The edge then asks that
+stamp once more with the alias of the target deployment it chose, marked
+`X-Fabric-Policy-Degraded: edge-only`, so the request is served by the edge's decision alone:
+the weighted split still holds, but stamp-side rule evaluation and fallbacks do not apply on that
+stamp. Re-running the stamp's bootstrap upgrades it to a release that evaluates the policy itself.
+
 ## How a policy reaches the gateways
 
 Nothing on the request path asks the control plane.

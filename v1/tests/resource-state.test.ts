@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
-import { confirmsModelDeletion, deploymentStampOptions, deploymentState, gpuCapacity, isInactivePlacement, STAMP_LIVENESS_MS, stampState, statusReason } from "../lib/fabric/resource-state"
+import { confirmsModelDeletion, deploymentStampOptions, deploymentState, gpuCapacity, isInactivePlacement, servesTraffic, STAMP_LIVENESS_MS, stampState, statusReason } from "../lib/fabric/resource-state"
 import type { Deployment, DeploymentStatus, Placement, Stamp } from "../lib/fabric/types"
 
 const deployment: Deployment = { id: "d1", account_id: "a1", name: "test", model_alias: "model-a", generation: 3, status: "ready", created_at: "", updated_at: "", desired_spec: { replicas: 2, resources: { gpu_count: 1, gpu_class: "t4" }, runtime: { release: "test", kernel_mode: "auto", strategy: "least_in_flight" } } }
@@ -124,4 +124,13 @@ test("a deployment whose stamp was removed says so instead of claiming readiness
   assert.equal(deploymentState(deployment, [status], [removed, placement]).status, "ready")
   assert.equal(deploymentState({ ...deployment, status: "stamp_removed" }).status, "stamp_removed")
   assert.ok(isInactivePlacement("stamp_removed") && isInactivePlacement("terminating") && !isInactivePlacement("assigned"))
+})
+
+test("a deployment serving from some replicas counts as routable", () => {
+  assert.equal(servesTraffic({ status: "ready", readyReplicas: 1, desiredReplicas: 1, detail: "" }), true)
+  assert.equal(servesTraffic({ status: "degraded", readyReplicas: 1, desiredReplicas: 2, detail: "" }), true)
+  assert.equal(servesTraffic({ status: "updating", readyReplicas: 1, desiredReplicas: 2, detail: "" }), true)
+  assert.equal(servesTraffic({ status: "unverified", readyReplicas: null, desiredReplicas: 1, detail: "" }), false)
+  assert.equal(servesTraffic({ status: "deploying", readyReplicas: 0, desiredReplicas: 1, detail: "" }), false)
+  assert.equal(servesTraffic({ status: "failed", readyReplicas: 1, desiredReplicas: 1, detail: "" }), false)
 })
