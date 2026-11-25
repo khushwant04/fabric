@@ -612,7 +612,7 @@ def _raster(source: Path, name: str, box_xyxy: tuple[int, int, int, int], width:
 
 
 def architecture_diagram() -> None:
-    """The reference architecture diagram with accelerator node pools (docs/assets), cropped.
+    """The reference architecture diagram (docs/assets/fabric-architecture-v2.webp), cropped.
 
     The crop drops the outer margin and the numbered request-flow legend at the bottom; the
     paper's caption lists the same six steps. The rendered diagram labels the edge gateway
@@ -620,8 +620,8 @@ def architecture_diagram() -> None:
     (ADR 0021 rejects Envoy), so that one word is blanked with the box's own fill colour.
     Nothing else is changed.
     """
-    _raster(REPO / "docs" / "assets" / "fabric-architecture-accelerators.webp", "fabric_architecture",
-            (50, 48, 1950, 1035), 1900, erase=((680, 438, 713, 450, (242, 242, 242)),))
+    _raster(REPO / "docs" / "assets" / "fabric-architecture-v2.webp", "fabric_architecture",
+            (40, 55, 1950, 1115), 1900, erase=((639, 464, 678, 480, (242, 242, 242)),))
 
 
 def console_screenshots() -> None:

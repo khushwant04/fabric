@@ -38,6 +38,10 @@ class PolicyRoute:
     ordered: list[Placement]
     #: Extra headers for the stamp (the route key, when the edge drew one).
     headers: dict[str, str]
+    #: For each stamp in ``ordered``, the model alias of the deployment the edge chose it for.
+    #: A stamp on a release without routing policies answers the policy name with
+    #: ``model_not_found``; the edge then sends it this alias instead (an edge-only decision).
+    aliases: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def route(
@@ -95,7 +99,9 @@ def route(
             ordered.sort(key=lambda item: item.stamp.stamp_id not in rule.stamp_ids)
         return ordered
 
+    alias_of = {str(item.deployment_id): item.model_alias for item in owned}
     ordered: list[Placement] = []
+    aliases: dict[str, str] = {}
     seen: set[str] = set()
     groups = decision.chain[:1] if strict_affinity else decision.chain
     for deployment_id in groups:
@@ -104,4 +110,7 @@ def route(
             if placement.stamp.stamp_id not in seen:
                 seen.add(placement.stamp.stamp_id)
                 ordered.append(placement)
-    return PolicyRoute(policy=policy, decision=decision, ordered=ordered, headers=headers)
+                if str(deployment_id) in alias_of:
+                    aliases[placement.stamp.stamp_id] = alias_of[str(deployment_id)]
+    return PolicyRoute(policy=policy, decision=decision, ordered=ordered, headers=headers,
+                       aliases=aliases)
