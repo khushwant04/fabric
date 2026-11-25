@@ -317,8 +317,10 @@ tool logic and serves on vLLM; (5) stamp agents send enrollment, heartbeats and 
 outbound only; (6) administrators reach the console through OIDC sign-in. Dashed lines are
 configuration-clock exchanges (routing table, desired state). Each stamp's accelerator node pool
 shows the three accelerator families the abstraction of \cref{sec:accel} admits, not the hardware
-installed in that stamp. All three paths are implemented and covered by the automated suites;
-NVIDIA results are measured, and the Cloud TPU path has served end to end on a v6e-1 VM. Kernel labels refer to an optional model-host setting on which no result in this paper
+installed in that stamp. A key vault holds secrets and signing keys, and a public container
+registry serves the gateway and agent images. All three accelerator paths are implemented and
+covered by the automated suites, and each has served end to end: NVIDIA GPUs, a Cloud TPU v6e-1
+and an AWS Trainium instance (\cref{sec:eval-silicon}). Kernel labels refer to an optional model-host setting on which no result in this paper
 depends (\cref{sec:limits}).}
 \label{fig:arch}
 \end{figure*}
